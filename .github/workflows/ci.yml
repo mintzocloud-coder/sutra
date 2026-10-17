@@ -13,6 +13,19 @@ jobs:
       - name: Check SPDX headers
         run: bash scripts/check-headers.sh
 
+  openapi:
+    name: OpenAPI spec validates
+    runs-on: ubuntu-latest
+    # Gates C2: docs/openapi.yaml must lint clean (redocly.yaml documents
+    # the two deliberately-disabled rules) so the spec stays in sync.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Lint OpenAPI spec
+        run: npx --yes @redocly/cli@latest lint docs/openapi.yaml
+
   compose:
     name: docker-compose validates
     runs-on: ubuntu-latest

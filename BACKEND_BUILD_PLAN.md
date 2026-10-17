@@ -450,10 +450,25 @@ Signal for messaging; idiomatic production Go services for the API).
       run is CI-gated (no docker/Elixir on this VM) via the new smoke
       job. Pushed.
 
-- [ ] **C2. OpenAPI spec**
+- [x] **C2. OpenAPI spec**
       `docs/openapi.yaml` for the REST API; kept in sync (CI lint if cheap).
       Accept: spec validates (spectral or redocly lint if available; else
       manual review).
+      DONE 2026-10-18: hand-written `docs/openapi.yaml` (OpenAPI 3.1.0)
+      covering the full REST surface — /healthz (liveness, DB-free),
+      /readyz (DB-aware, 503 envelope when PG down), GET /v1/me (Bearer
+      RS256 JWT, just-in-time provisioning semantics), the 405 Allow path,
+      and the mux catch-all 404; component schemas for User and the
+      canonical error envelope, all 10 stable error codes, security scheme
+      (RS256, RS256-pinned, exp/iss/aud, AUTH_BYPASS dev hatch), global
+      conventions (X-Request-ID, security headers, per-IP rate limit +
+      Retry-After). New `redocly.yaml` disables two rules deliberately
+      (no-server-example.com: no prod host yet; no-unused-components:
+      NotFound documents the catch-all). New CI `openapi` job lints the
+      spec on every push.
+      VERIFIED: `npx @redocly/cli lint` → valid, 0 warnings (checked
+      twice: YAML parse + full semantic lint). Kept hand-written because
+      there is no codegen step — header comment in the file says so.
 
 - [ ] **C3. Production runbook**
       `docs/production.md`: env vars, secrets, migrations, backups,
@@ -490,3 +505,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-18 ~01:10 IST: B6 done — channel tests: SutraChatWeb.ChatChannelTest (13 tests, async:false, Phoenix.ChannelTest vs real Repo via Ecto sandbox + real Presence): join/auth (unauthorized socket refused, bad room ids rejected), presence_state/diff, send→persist→broadcast→sender-only msg:ack, client_msg_id dedupe (second ack deduped:true + original id, 1 row), history oldest-first + cursor pagination + invalid cursor, payload validation errors. New test infra: config/test.exs (sandbox Repo, DATABASE_URL in CI / local fallback, server:false, quiet logger), import_config per-env, test/support (DataCase, ChannelCase) via elixirc_paths(:test), test_helper sandbox manual mode. CI elixir-chat job now runs postgres:16 + mix ecto.create/migrate + mix test. Verified: syntax-checked all 7 files, SPDX headers present; full compile/test CI-gated (1.14 can't build phoenix_template 1.1.0). Pushed.
 - 2026-10-18 ~01:35 IST: B7 done — chat Dockerfile hardening: multi-stage `mix release` build (deps-first caching), alpine:3.21 runtime (libstdc++/libgcc/ncurses-libs/ca-certificates), non-root `app` user, foreground `bin/sutra_chat start`, HEALTHCHECK via release `pid` (websocket-only endpoint). New config/prod.exs (minimal — `mix release` needs it since config.exs imports per-env files); runtime.exs fails closed at boot without SECRET_KEY_BASE (dev key never ships) + PHX_HOST url override; new SutraChat.Release migrate/rollback module (no `mix` inside releases); compose docs (SECRET_KEY_BASE, migrate command, RELEASE_NODE/COOKIE functional); README dev/prod split; CI builds the chat image on every push. Verified: YAML valid, SPDX headers present; release assembly + boot CI-gated (no Elixir/docker on this VM). Pushed. **Phase B complete.**
 - 2026-10-18 ~02:10 IST: C1 done — full compose stack + `scripts/smoke.sh`: builds images, boots pg/valkey/seaweedfs, runs chat migrations via the release, boots api+chat; asserts /healthz 200 + X-Request-ID, /readyz 200, /v1/me 200 (bypass identity dev-user), websocket join→send→broadcast+msg:ack→reconnect-history round-trip (stdlib Python Phoenix-channels client), seaweedfs /cluster/status 200, valkey PONG. New CI `smoke` job runs it on every push. Fixed 3 real wiring bugs found: api/seaweedfs host-8080 port clash (api→8081), Go-vs-Ecto `schema_migrations` ledger collision (chat → `chat_schema_migrations`), SECRET_KEY_BASE empty-string bypass of the fail-closed check. Verified: shell/Python syntax, YAML parse, SPDX headers, ws client vs fake Phoenix server (happy + negative paths); real end-to-end run is CI-gated. Pushed.
+- 2026-10-18 ~02:40 IST: C2 done — `docs/openapi.yaml` (OpenAPI 3.1.0, hand-written with keep-in-sync note): /healthz, /readyz (incl. 503 envelope), GET /v1/me (Bearer RS256, JIT-provision semantics), 405 Allow path, catch-all 404; User + error-envelope schemas, all 10 stable codes, auth security scheme (RS256-pinned, exp/iss/aud, AUTH_BYPASS hatch), global conventions (X-Request-ID, security headers, per-IP rate limit + Retry-After). New `redocly.yaml` (2 rules deliberately disabled, commented) + CI `openapi` job linting the spec on every push. Verified: `npx @redocly/cli lint` → valid, 0 warnings (a missed unquoted colon was the only fix). Pushed.

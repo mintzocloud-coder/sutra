@@ -1,0 +1,10 @@
+# Redocly CLI config for docs/openapi.yaml.
+# Rules disabled here are deliberate (see comments), not silenced carelessness.
+apis: {}
+rules:
+  # No production host exists yet; the placeholder server URL shows the
+  # intended shape (set the real host in docs/openapi.yaml when deployed).
+  no-server-example.com: off
+  # components.responses.NotFound documents the mux catch-all (unknown
+  # paths -> 404 envelope), which no operation can reference.
+  no-unused-components: off
