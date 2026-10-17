@@ -38,6 +38,7 @@ services:
     ports: ["4000:4000"]
     environment:
       MIX_ENV: prod
+      DATABASE_URL: "postgres://sutra:sutra@postgres:5432/sutra?sslmode=disable"
     depends_on:
       - postgres
 

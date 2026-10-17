@@ -24,7 +24,9 @@ defmodule SutraChat.MixProject do
       {:phoenix, "~> 1.7.0"},
       {:phoenix_pubsub, "~> 2.1"},
       {:jason, "~> 1.4"},
-      {:bandit, "~> 1.5"}
+      {:bandit, "~> 1.5"},
+      {:ecto_sql, "~> 3.11"},
+      {:postgrex, "~> 0.19"}
     ]
   end
 end

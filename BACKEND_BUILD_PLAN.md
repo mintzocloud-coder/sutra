@@ -198,13 +198,40 @@ Signal for messaging; idiomatic production Go services for the API).
 
 ## Phase B — Chat service (Elixir) production
 
-- [ ] **B1. Message persistence (PostgreSQL)** *(GitHub issue #9)*
+- [x] **B1. Message persistence (PostgreSQL)** *(GitHub issue #9)*
       Ecto + `messages(id uuid, room_id text, sender_subject text,
       client_msg_id text unique per sender, body text, inserted_at)`;
       `client_msg_id` dedupe on insert (idempotent sends); history query
       for channel join (last N, cursor-based).
       Accept: restart server → history survives; duplicate `client_msg_id`
       → single row, returns existing.
+      DONE 2026-10-17: `SutraChat.Repo` (Ecto, supervised first in
+      application.ex), migration `20261017220000_create_messages` (uuid PK,
+      unique index on (sender_subject, client_msg_id), composite index on
+      (room_id, inserted_at, id)), `SutraChat.Chat.Message` schema
+      (microsecond inserted_at, no updated_at), `SutraChat.Chat` context:
+      `persist_message/1` = single INSERT ... ON CONFLICT (atomic,
+      race-safe, `returning: true` hands back the EXISTING row on retry),
+      `history/3` = cursor-paged on (inserted_at, id) — never OFFSET —
+      returns oldest-first pages + next_cursor. `ChatChannel`: persist
+      BEFORE broadcast (crash between broadcast and persist can't lose a
+      "sent" message), join replies with recent history (limit/cursor
+      params), invalid cursor → clean error. Config: dev defaults in
+      config.exs, prod from DATABASE_URL in new config/runtime.exs;
+      compose chat service now gets DATABASE_URL.
+      VERIFIED: apt Elixir 1.14 CANNOT compile phoenix 1.7.24's
+      phoenix_template or postgrex>=0.20 (needs Elixir>=1.15/1.16 syntax)
+      — full local compile stays CI-gated (Elixir 1.18), per plan. Locally
+      verified what 1.14 allows: `Code.string_to_quoted!` syntax on all 8
+      new/edited files; Message+Chat compiled against REAL ecto beams
+      (macro/query API misuse would fail); changeset validation live
+      (valid→true, missing body→invalid, non-string body rejected); the
+      exact upsert + history SQL run against real PG: duplicate send →
+      1 row, RETURNING yields the row; 2-page cursor pagination correct;
+      same client_msg_id from another sender → separate row. Deps kept at
+      latest (ecto_sql 3.14/postgrex 0.22.4 — zero hex advisories); an
+      attempted 1.14-compatible pin (postgrex 0.19.3) was REVERTED after
+      `mix hex.audit` showed HIGH/MEDIUM CVEs in the old pins. Pushed.
 
 - [ ] **B2. Socket authentication**
       `UserSocket.connect/3`: verify JWT (shared secret/JWKS with API —
@@ -278,3 +305,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-17 ~20:55 IST: A6 done — JSON error envelope consolidated across ALL error paths: ErrorCode map + WriteStatusError + NotFound/MethodNotAllowed handlers; hand-rolled duplicates removed (auth, users, Recover); main.go extracted newHandler() for tests; /v1/me explicit method guard (405+Allow); RequestID outermost so panics carry real request_id. Tests: 7 unit + cmd/api integration (gated parts skip cleanly); full suite green on throwaway local PG16. Live smoke: 404/405/401/429/503 all envelope-shaped with echoed X-Request-ID; readyz 503→200 across real PG kill/restart. Pushed.
 - 2026-10-17 ~21:30 IST: A7 done — middleware unit tests (request ID/Logger/Recover/Chain, 8 tests), claims-propagation auth test, /v1/me 200-path X-Request-ID + HTTP-level provision idempotency assertions; CI go-api job now runs `go test ./...` against a postgres:16 service (was build+vet only, gated tests skipped silently in CI). Suite green on throwaway local PG16 and green with 10 graceful skips (no DB). Pushed.
 - 2026-10-17 ~21:55 IST: A8 done — Dockerfile hardening (multi-stage, static stripped binary, non-root `app` user, HEALTHCHECK on /healthz, exec ENTRYPOINT) + CI `docker build` step for the API image. Verified: exact Dockerfile build flags → statically-linked stripped binary, `go vet` clean; ran as unprivileged uid 65534 with /healthz, /readyz, /v1/me all 200; SIGTERM → "api stopped", clean exit. Local `docker build` impossible on this VM (dockerd: no iptables kernel support) — CI build step is the durable gate. Pushed. **Phase A complete.**
+- 2026-10-17 ~22:35 IST: B1 done — Ecto message persistence (Repo, migration, Message schema, Chat context with atomic upsert dedupe + cursor-paged history, channel persist-before-broadcast + history on join, DATABASE_URL runtime config + compose wiring). Verified on real PG at SQL level (dedupe/pagination semantics) + Ecto-level (compile vs real ecto beams, changeset validation); full local `mix compile` impossible on apt Elixir 1.14 (phoenix_template/postgrex need ≥1.15/1.16) — CI (1.18) is the gate. Lesson: NEVER pin deps down just for local 1.14 compile — old postgrex/decimal pins carry HIGH/MEDIUM CVEs; keep latest and let CI gate. Pushed.

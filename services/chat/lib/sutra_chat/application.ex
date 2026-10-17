@@ -6,6 +6,7 @@ defmodule SutraChat.Application do
   @impl true
   def start(_type, _args) do
     children = [
+      SutraChat.Repo,
       {Phoenix.PubSub, name: SutraChat.PubSub},
       SutraChat.Presence,
       SutraChatWeb.Endpoint
