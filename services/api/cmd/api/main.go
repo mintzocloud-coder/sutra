@@ -83,12 +83,24 @@ func main() {
 	v1.Handle("GET /v1/me", users.MeHandler(pool, log))
 	mux.Handle("/v1/", auth(v1))
 
-	// Middleware order (outermost first): Recover → RequestID → Logger.
+	// Middleware order (outermost first): Recover → RequestID →
+	// SecurityHeaders → CORS → RateLimit → Logger.
 	// Recover must be outermost so it also catches panics in the other
 	// middleware; RequestID must precede Logger so the ID is in the context.
+	// SecurityHeaders is outside everything that can produce a response
+	// (including 429s) so all replies carry the baseline headers; CORS runs
+	// before RateLimit so preflights aren't counted against the budget.
+	limiter := middleware.NewRateLimiter(cfg.RateLimitRPS, cfg.RateLimitBurst)
+	cors := middleware.CORS(middleware.CORSConfig{
+		Origins: cfg.CORSOrigins,
+		MaxAge:  cfg.CORSMaxAge,
+	})
 	handler := middleware.Chain(mux,
 		middleware.Recover(log),
 		middleware.RequestID,
+		middleware.SecurityHeaders(),
+		cors,
+		middleware.RateLimit(limiter, log),
 		middleware.Logger(log),
 	)
 

@@ -104,12 +104,32 @@ Signal for messaging; idiomatic production Go services for the API).
       method-pattern routing. GOTCHA: pkill -f with the binary name in the
       same command line self-matches — use `pkill -x` instead.
 
-- [ ] **A5. Rate limiting + CORS + security headers**
+- [x] **A5. Rate limiting + CORS + security headers**
       Add: per-IP token-bucket rate limiter (in-memory, configurable),
       CORS middleware (env-configured origins), security headers
       (nosniff, frame-deny, referrer-policy).
       Accept: 100 rapid requests → 429s after limit; preflight works for
       configured origin; headers present.
+      DONE 2026-10-17: new `internal/middleware/ratelimit.go` — stdlib-only
+      token bucket keyed on TCP peer IP (NOT X-Forwarded-For; documented why),
+      configurable RATE_LIMIT_RPS (default 100, <=0 disables) + RATE_LIMIT_BURST
+      (default 200), idle-bucket sweeper (10m TTL) + 100k-bucket emergency
+      eviction backstop; 429 JSON envelope + Retry-After + X-RateLimit-Limit;
+      new `cors.go` — CORS_ORIGINS allowlist (exact match, "*" wildcard, empty
+      = disabled), preflight 204 with echo of Allow-Headers, Vary: Origin,
+      no Allow-Credentials (Bearer auth, no cookies); new `security.go` —
+      nosniff / DENY / strict-origin-when-cross-origin / CSP
+      `default-src 'none'; frame-ancestors 'none'`; new `error_envelope.go`
+      shared WriteJSONError (A6 will consolidate onto it). Chain order:
+      Recover → RequestID → SecurityHeaders → CORS → RateLimit → Logger
+      (preflights bypass the limiter; 429s still carry security headers).
+      Verified: `go build`+`go vet`+`go test ./...` green (12 new tests);
+      live smoke on real PG (RATE_LIMIT_RPS=20,BURST=10): 100 rapid reqs →
+      73×429; preflight allowed origin → 204 + ACAO/Allow-Methods/Headers/
+      Max-Age; disallowed origin → no ACAO; all 4 security headers on
+      200/429; /readyz 200, /v1/me works. GOTCHA: `pkill -f` with the binary
+      path in the same command line SIGTERMs your own shell — `pkill -x`
+      only for stopping test servers.
 
 - [ ] **A6. JSON error envelope**
       Standard `{"error":{"code","message","request_id"}}` for all errors;
@@ -206,3 +226,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-17 18:56 IST: CI red root cause = `scripts/check-headers.sh` failing on itself + `.gitignore` (both lacked the SPDX header it enforces; other 3 CI jobs green on all 3 runs). Fix: added `# SPDX-License-Identifier: AGPL-3.0-or-later` to both files (2 lines); checker verified passing locally. Rides the next scheduled push.
 - 2026-10-17 19:25 IST: A3 done — pgx pool + embedded advisory-locked migrations + DB-aware /readyz. Verified end-to-end on real PG16 (kill/restart PG: readyz 503→200, healthz 200 throughout). Tests green. Pushed.
 - 2026-10-17 ~20:05 IST: A4 done — users table (migration 0002) + real GET /v1/me with just-in-time provisioning (race-safe ON CONFLICT, claim-seeded display name, NULL handle until claimed). Verified `go build`+`go vet`+`go test ./...` green against real PG16 incl. 8-racer concurrency test; live smoke: first call creates row, second returns same id, no-token → 401 JSON envelope. Pushed.
+- 2026-10-17 ~20:25 IST: A5 done — per-IP token-bucket rate limiter (stdlib-only, RATE_LIMIT_RPS/BURST env, Retry-After + X-RateLimit-Limit), CORS middleware (CORS_ORIGINS allowlist/wildcard/disabled, preflight 204), security headers (nosniff/DENY/referrer-policy/CSP). 12 new middleware tests green; live smoke: 100 rapid reqs → 73×429 JSON envelope, preflight 204 + ACAO for configured origin, all headers on 200/429. Pushed.
