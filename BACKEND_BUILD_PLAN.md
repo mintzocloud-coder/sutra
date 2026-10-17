@@ -61,12 +61,27 @@ Signal for messaging; idiomatic production Go services for the API).
       green; live smoke: 401 JSON without token, 200+bypass subject with
       AUTH_BYPASS=1.
 
-- [ ] **A3. PostgreSQL connection + migrations**
+- [x] **A3. PostgreSQL connection + migrations**
       Add: `database/sql` + pgx pool, env-configured DSN, versioned SQL
       migrations (`migrations/0001_init.sql` …) run at startup (advisory-locked),
       `/readyz` fails when DB unreachable.
       Accept: fresh `docker compose up` → migrations applied; killing PG →
       `/readyz` 503, `/healthz` 200.
+      DONE 2026-10-17: new `internal/db` package — pgx/v5 pgxpool (v5.7.4,
+      go-1.22-compatible pin; GOTOOLCHAIN=local guard), `Open` with pool
+      tuning + fail-fast ping, embedded migrations
+      (`internal/db/migrations/0001_extensions.sql` — pgcrypto for future
+      UUID PKs), advisory-locked forward-only runner (`schema_migrations`
+      ledger, per-migration transactions, idempotent). Config: `DB_MAX_CONNS`.
+      `/readyz` now pings DB (503 "not ready: database unreachable" on drop),
+      `/healthz` stays DB-independent. Verified END-TO-END on real PG16:
+      fresh boot → migration 0001 applied; PG killed → healthz 200/readyz
+      503; PG restarted → readyz 200 (pool recovers); X-Request-ID intact.
+      Tests: discovery-ordering unit test + real-DB integration test
+      (TEST_DATABASE_URL-gated, skips cleanly) — `go build`+`go vet`+
+      `go test ./...` green. GOTCHA: `go get` with GOTOOLCHAIN=auto tried to
+      pull go1.25 toolchain via pgx v5.11; pinned v5.7.4 + exported
+      GOTOOLCHAIN=local during tidy.
 
 - [ ] **A4. Users table + real `/v1/me`**
       Migration: `users(id uuid pk, subject text unique, handle text unique,
@@ -175,3 +190,5 @@ Then report to founder: production-ready backend live on main.
 
 - 2026-10-17: Plan created. Starting Phase A.
 - 2026-10-17 18:38 IST: A2 done — real JWT verification (RS256, JWKS cache+rotation, exp/iss/aud), RequireAuth middleware, AUTH_BYPASS dev mode. Verified `go build`+`go vet`+`go test ./...` green, live smoke 401/200 paths. Pushed.
+- 2026-10-17 18:56 IST: CI red root cause = `scripts/check-headers.sh` failing on itself + `.gitignore` (both lacked the SPDX header it enforces; other 3 CI jobs green on all 3 runs). Fix: added `# SPDX-License-Identifier: AGPL-3.0-or-later` to both files (2 lines); checker verified passing locally. Rides the next scheduled push.
+- 2026-10-17 19:25 IST: A3 done — pgx pool + embedded advisory-locked migrations + DB-aware /readyz. Verified end-to-end on real PG16 (kill/restart PG: readyz 503→200, healthz 200 throughout). Tests green. Pushed.

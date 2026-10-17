@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mintzocloud-coder/sutra/services/api/internal/config"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/db"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/middleware"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/oidc"
 )
@@ -34,15 +35,41 @@ func main() {
 		BypassSubject: cfg.BypassSubject,
 	})
 
+	// Database: connect (fail fast if unreachable) then apply pending
+	// migrations before serving any traffic.
+	startupCtx, startupCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	pool, err := db.Open(startupCtx, cfg.DatabaseURL, int32(cfg.DBMaxConns), log)
+	if err != nil {
+		startupCancel()
+		log.Error("database unavailable at startup", "err", err)
+		os.Exit(1)
+	}
+	if err := db.Migrate(startupCtx, pool); err != nil {
+		startupCancel()
+		log.Error("migrations failed", "err", err)
+		os.Exit(1)
+	}
+	startupCancel()
+	defer pool.Close()
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		// Liveness: the process is alive. Never depends on the DB.
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		// TODO(A3): check database + Valkey reachability.
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		// Readiness: fail when the database is unreachable so the
+		// orchestrator stops routing traffic until it recovers.
+		if err := pool.Ping(r.Context()); err != nil {
+			log.Warn("readyz: database unreachable", "err", err,
+				"request_id", middleware.FromContext(r.Context()))
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("not ready: database unreachable"))
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})

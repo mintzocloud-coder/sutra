@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Fail if any source file lacks the AGPLv3 SPDX header.
 # Skips: LICENSE, NOTICE, .md docs, configs, vendored dirs, .git.
 set -euo pipefail
