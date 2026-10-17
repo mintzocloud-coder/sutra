@@ -534,6 +534,71 @@ Signal for messaging; idiomatic production Go services for the API).
       is CI-gated (no Go on this VM — apt lists locked by provisioning,
       per plan). Pushed. **Phase C complete — backend production build complete.**
 
+## Phase D — Wave 1 product modules (epic #10: identity / social / video)
+
+D-tasks build the first real product modules on the A/B/C foundation,
+per ARCHITECTURE.md, docs/adr and the Wave-1 research (ADR-005). Same
+rules as A/B/C: no placeholders, no TODOs, CI-gated verification, push
+every run. Gated items stay gated: real SMS/DLT stays post-incorporation
+(documented, fail-closed); E2E encryption is Wave 2 (never promise it).
+
+- [ ] **D1. Identity: Ory Kratos + Hydra in compose**
+      Real Ory Kratos (self-service identity) + Ory Hydra (OAuth2/OIDC)
+      services in docker-compose.yml; the Go API verifies Hydra-issued
+      RS256 tokens through the existing A2 JWKS path — no new auth code,
+      just a real issuer. Phone-OTP login ships as an adapter INTERFACE
+      with a stub implementation; real SMS/DLT wiring is explicitly
+      post-incorporation (documented in docs/identity.md, env-gated and
+      fail-closed). First-boot documented.
+      Accept: smoke.sh extended — dev token from Hydra → GET /v1/me 200;
+      docs/identity.md describes the DLT-gated path.
+
+- [ ] **D2. Profiles + follow graph**
+      Migration 0003: profiles (user_id PK, handle UNIQUE, display_name,
+      bio, avatar_url, timestamps); follows (follower_id, followee_id,
+      created_at; composite PK; no-self-follow CHECK). Go API:
+      PATCH /v1/me/profile, GET /v1/users/{id}, POST+DELETE
+      /v1/users/{id}/follow, GET followers/following (cursor-paged).
+      Handle claim: first-come, lowercase [a-z0-9_]{3,20}.
+      Accept: endpoints + tests green, OpenAPI updated, smoke covers a
+      follow round-trip.
+
+- [ ] **D3. Feed timelines (hybrid fan-out)**
+      Valkey sorted-set timelines: fan-out-on-write to followers' home
+      timelines, except high-follower authors (FANOUT_THRESHOLD env,
+      default 10k) whose posts merge on read. Go API: POST /v1/posts,
+      GET /v1/feed/home (score+id cursor), GET /v1/users/{id}/posts,
+      DELETE /v1/posts/{id} (author only). posts table (id, author_id,
+      text ≤500 chars, media_ids, created_at). Per-user post velocity
+      cap.
+      Accept: docs/feeds.md documents the hybrid model; tests cover
+      push path, pull path, merge ordering, delete propagation.
+
+- [ ] **D4. Video upload pipeline**
+      Presigned SeaweedFS upload (POST /v1/media/upload → upload URL +
+      media_id); background Go transcode worker (FFmpeg 8.1 → HLS
+      multi-rendition + poster frame); GET /v1/media/{id} status
+      (pending/processing/ready/failed); posts reference media_ids only
+      when ready. Worker consumes a Valkey stream, backoff retries,
+      dead-letter after N attempts.
+      Accept: docs/video-pipeline.md; smoke uploads a sample clip and
+      polls to ready; worker unit tests in CI.
+
+- [ ] **D5. Realtime post events**
+      API publishes post/follower events to the chat service over an
+      internal signed endpoint (service-to-service token); fanned out
+      on Phoenix `user:<id>` topics: post:new, follower:new.
+      Presence-aware; no notification persistence in Wave 1 (documented
+      — Wave 2 adds the inbox).
+      Accept: docs/realtime-events.md contract; channel tests cover
+      topic auth (users get only their own) + event shape.
+
+- [ ] **D6. Wave-1 hardening pass**
+      Rate limits + abuse guards for D2–D5 (post/follow velocity caps),
+      OpenAPI regenerated for all new routes, production.md and
+      benchmarks.md updated, full smoke.sh green on the new flows.
+      Accept: CI green, smoke green, docs complete. **Phase D complete.**
+
 ## Done when
 
 All boxes ticked, CI green, `scripts/smoke.sh` passes, docs complete.
