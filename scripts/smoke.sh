@@ -7,6 +7,8 @@
 #   - API:  /healthz 200 (+ X-Request-ID), /readyz 200, /v1/me 200
 #   - Chat: websocket connect → join → send → broadcast + msg:ack →
 #           reconnect → history contains the message (persistence)
+#   - Chat load probe: short scripts/bench_ws.py run (C4) for
+#           joins/sec + server-confirmed msgs/sec + ack-latency percentiles
 #   - SeaweedFS: /cluster/status 200; Valkey: PING → PONG
 #
 # Identity is exercised through AUTH_BYPASS=1 — the services' documented
@@ -105,6 +107,18 @@ pass "api /v1/me 200 (bypass identity '$subject', auto-provisioned)"
 wait_for 90 "chat websocket listener" \
   python3 -c "import socket; socket.create_connection(('$CHAT_HOST', $CHAT_PORT), timeout=3).close()"
 python3 scripts/smoke_ws.py "$CHAT_HOST" "$CHAT_PORT" || fail "chat websocket round-trip"
+
+# --- Chat load probe (short, C4) --------------------------------------------
+# Exercises the bench_ws.py harness against the real stack on every run so
+# CI proves it works; prints a JSON summary. Full benchmark numbers go to
+# docs/benchmarks.md. Override with SMOKE_BENCH_ARGS, skip with
+# SMOKE_SKIP_BENCH=1.
+if [ "${SMOKE_SKIP_BENCH:-0}" != "1" ]; then
+  # shellcheck disable=SC2086
+  python3 scripts/bench_ws.py "$CHAT_HOST" "$CHAT_PORT" --fail-on-errors ${SMOKE_BENCH_ARGS:---conns 20 --msgs 10} \
+    || fail "chat websocket load probe"
+  pass "chat websocket load probe (JSON summary above)"
+fi
 
 # --- Remaining services -----------------------------------------------------
 curl -sf http://localhost:9333/cluster/status >/dev/null \
