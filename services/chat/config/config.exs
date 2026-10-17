@@ -18,7 +18,13 @@ config :sutra_chat, SutraChat.Repo,
   username: "postgres",
   password: "postgres",
   hostname: "localhost",
-  pool_size: 10
+  pool_size: 10,
+  # The Go API service runs its own migration ledger on the shared
+  # database (`schema_migrations`, integer versions). Ecto's default
+  # ledger table has the same name but a different shape, so the chat
+  # service keeps its versions in a separate table — otherwise whichever
+  # service migrates second would corrupt the first's ledger.
+  migration_source: "chat_schema_migrations"
 
 # Shared identity contract with the Go API service: websocket tokens are
 # verified against the same OIDC issuer's JWKS, configured with the same

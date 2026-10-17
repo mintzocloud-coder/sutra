@@ -16,10 +16,17 @@ if config_env() == :prod do
   # config.exs bakes a DEV-ONLY secret_key_base into the release — a real
   # deployment must never run with it. Fail closed at boot (not at build,
   # so one image serves every environment) when the operator hasn't
-  # provided one. Generate with `mix phx.gen.secret`.
+  # provided one. Generate with `mix phx.gen.secret`. Empty counts as
+  # missing: compose maps an unset SECRET_KEY_BASE to an empty string,
+  # and Elixir treats "" as truthy, so `||` alone would not catch it.
   secret_key_base =
-    System.get_env("SECRET_KEY_BASE") ||
-      raise "SECRET_KEY_BASE is not set (required in prod)"
+    case System.get_env("SECRET_KEY_BASE") do
+      key when is_binary(key) and byte_size(key) > 0 ->
+        key
+
+      _ ->
+        raise "SECRET_KEY_BASE is not set (required in prod)"
+    end
 
   config :sutra_chat, SutraChatWeb.Endpoint,
     secret_key_base: secret_key_base,

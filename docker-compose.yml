@@ -44,6 +44,9 @@ services:
       # is never used). Generate one and keep it out of git:
       #   mix phx.gen.secret
       # SECRET_KEY_BASE: "paste-generated-value-here"
+      # (scripts/smoke.sh generates an ephemeral one automatically.)
+      AUTH_BYPASS: ${AUTH_BYPASS:-}
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE:-}
       # First boot of a fresh database (migrations live in the release,
       # `mix` does not — see SutraChat.Release):
       #   docker compose run --rm chat /app/bin/sutra_chat eval "SutraChat.Release.migrate()"
@@ -61,18 +64,26 @@ services:
       # CLUSTER_SECRET: "change-me-in-prod"
       # RELEASE_COOKIE: "change-me-in-prod"
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
 
   api:
     build: ./services/api
-    ports: ["8080:8080"]
+    # NOTE: the container listens on 8080 internally (PORT env); the host
+    # port is 8081 because SeaweedFS's filer already owns host 8080 above.
+    ports: ["8081:8080"]
     environment:
       PORT: "8080"
       DATABASE_URL: "postgres://sutra:sutra@postgres:5432/sutra?sslmode=disable"
       VALKEY_ADDR: "valkey:6379"
+      # Dev-only auth bypass for scripts/smoke.sh (the API logs a loud
+      # WARN when this is set; never enable in production).
+      AUTH_BYPASS: ${AUTH_BYPASS:-}
     depends_on:
-      - postgres
-      - valkey
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
 
 volumes:
   pgdata:

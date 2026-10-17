@@ -28,6 +28,19 @@ jobs:
         # (`mix release` runs inside; full local compile is CI-gated).
         run: docker build -f services/chat/Dockerfile services/chat
 
+  smoke:
+    name: Full-stack smoke test
+    runs-on: ubuntu-latest
+    # Gates C1: boots the whole compose stack (postgres, valkey, seaweedfs,
+    # api, chat), runs chat migrations, then exercises the API (/healthz,
+    # /readyz, /v1/me) and a real websocket send/receive round-trip with
+    # reconnect-history verification. The script tears the stack down
+    # afterwards; identity runs through AUTH_BYPASS=1 (dev-only hatch).
+    steps:
+      - uses: actions/checkout@v4
+      - name: Boot stack and run smoke tests
+        run: bash scripts/smoke.sh
+
   go-api:
     name: Go API builds and tests
     runs-on: ubuntu-latest
