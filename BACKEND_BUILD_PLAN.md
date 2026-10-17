@@ -288,10 +288,36 @@ Signal for messaging; idiomatic production Go services for the API).
       4096 character(s)", 129-char client_msg_id rejected). Syntax-checked
       all touched files; full `mix compile` still CI-gated (1.14). Pushed.
 
-- [ ] **B4. Delivery receipts**
+- [x] **B4. Delivery receipts**
       `msg:ack` event: sender gets confirmation when message persisted +
       broadcast; document at-least-once semantics.
       Accept: send → ack received by sender; persisted before broadcast.
+      DONE 2026-10-17: send path is now persist → broadcast → `msg:ack`
+      push to the sender only (pushed event, not the push reply — exactly
+      one confirmation path, and it can never precede durability).
+      `Chat.persist_message/1` now returns `{:ok, message, deduped}`: the
+      single-statement upsert detects fresh-vs-retry inside RETURNING via
+      the `xmax` system column (`xmax = 0` = fresh insert; the
+      `ON CONFLICT DO UPDATE` path always stamps a new tuple version) —
+      no follow-up SELECT, no race. Ack payload (`Chat.ack_payload/2`,
+      pure + unit-tested): server id, room_id, echoed client_msg_id,
+      `deduped` flag (true = this send was a retry of an already-stored
+      message — a distinction WhatsApp/Telegram acks don't make),
+      `sent_at` server ms. New doc `docs/delivery-semantics.md`:
+      at-least-once contract, client retry rules (same client_msg_id,
+      10s timeout, deduped:true = success), crash-window table,
+      broadcast-duplicate warning (clients dedupe on id), ordering,
+      multi-device client_msg_id scoping, what the ack does NOT mean
+      (not a read/delivery receipt — Wave 2).
+      VERIFIED: syntax-checked all touched files; chat.ex + message.ex
+      compile against real ecto beams; 3 new ExUnit tests green
+      (ack_payload fields/deduped true-false/boolean guard); the exact
+      @upsert_sql verified at the parameterized-protocol level on real
+      PG16 (PREPARE/EXECUTE with bound args): fresh → inserted_new=t,
+      retry → same original id + inserted_new=f, other sender →
+      new row + t, 2 rows total. Full `mix compile` still CI-gated
+      (1.14 can't build ecto_sql 3.14/postgrex 0.22 — they need ≥1.15).
+      Pushed.
 
 - [ ] **B5. Presence hardening**
       Keep Phoenix.Presence (CRDT); add `presence_diff` broadcast already
@@ -351,3 +377,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-17 ~22:35 IST: B1 done — Ecto message persistence (Repo, migration, Message schema, Chat context with atomic upsert dedupe + cursor-paged history, channel persist-before-broadcast + history on join, DATABASE_URL runtime config + compose wiring). Verified on real PG at SQL level (dedupe/pagination semantics) + Ecto-level (compile vs real ecto beams, changeset validation); full local `mix compile` impossible on apt Elixir 1.14 (phoenix_template/postgrex need ≥1.15/1.16) — CI (1.18) is the gate. Lesson: NEVER pin deps down just for local 1.14 compile — old postgrex/decimal pins carry HIGH/MEDIUM CVEs; keep latest and let CI gate. Pushed.
 - 2026-10-17 ~23:05 IST: B2 done — socket authentication: pure RS256 verifier (Token, stdlib :public_key + Jason, mirrors Go internal/oidc claim-for-claim) + TokenVerifier GenServer (JWKS cache 15m TTL, lazy fetch, rotation refresh) + UserSocket.connect requires token param, refuses without/invalid, assigns subject. Contract in docs/auth-contract.md; compose chat gets HYDRA_ISSUER/JWT_AUDIENCE. Verified: 34-check local harness green (all error paths, GenServer vs stub JWKS incl. rotation + issuer-down, bypass) + socket glue via stub; ExUnit suite (18 tests) shipped for CI/B6. Lesson: :crypto.sign/verify(:rsa,...) rejects key tuples on OTP 25 crypto 5.1 — use :public_key.sign/3 + :public_key.verify/4. Pushed.
 - 2026-10-17 ~23:35 IST: B3 done — channel authorization: pure `SutraChat.Chat.RoomPolicy` (join auth check + room-id charset/length + send size caps), wired into `ChatChannel.join/3` and `handle_in("message:new")` with clean error replies; `Message.changeset` mirrors caps as defense-in-depth; `docs/room-membership.md` documents Wave 1 open-rooms-by-ID + Wave 2 membership-list roadmap. Verified: 10 ExUnit tests green, changeset caps confirmed against real ecto beams (4096 ok / 4097 rejected), SPDX header check green. Full `mix compile` CI-gated. Pushed.
+- 2026-10-17 ~23:55 IST: B4 done — delivery receipts: send path persist → broadcast → `msg:ack` push (sender only, pushed event not reply, never precedes durability); `persist_message/1` returns `{:ok, message, deduped}` via single-statement upsert with `xmax`-probe fresh-vs-retry detection (no extra SELECT, race-free); pure `Chat.ack_payload/2` (id/room_id/echoed client_msg_id/deduped/sent_at); `docs/delivery-semantics.md` documents the at-least-once contract + client retry rules + crash windows. Verified: 3 ExUnit tests green, modules compile vs real ecto beams, exact upsert SQL proven at parameterized-protocol level on PG16 (fresh=t / retry→same row f / other sender→new t). Pushed.

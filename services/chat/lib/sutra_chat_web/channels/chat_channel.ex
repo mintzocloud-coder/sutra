@@ -3,10 +3,17 @@ defmodule SutraChatWeb.ChatChannel do
   @moduledoc """
   Realtime chat channel with PostgreSQL-backed persistence.
 
-  Send path is persist-then-broadcast: a message is durably stored (with
-  `client_msg_id` idempotency) before any subscriber sees it, so a crash
-  between broadcast and persist cannot lose a message that clients believe
-  was sent. Joins return recent history, cursor-paged.
+  Send path is persist-then-broadcast-then-ack: a message is durably stored
+  (with `client_msg_id` idempotency) before any subscriber sees it, so a
+  crash between broadcast and persist cannot lose a message that clients
+  believe was sent. After both persist and broadcast complete, the sender —
+  and only the sender — receives a `msg:ack` push event carrying the
+  server-assigned id, the echoed `client_msg_id`, a `deduped` flag (true when
+  this send was a retry of an already-stored message), and the server
+  timestamp. The ack is a pushed event rather than the push reply, so there
+  is exactly one confirmation path and it can never precede durability.
+  Delivery semantics are at-least-once; see `docs/delivery-semantics.md`.
+  Joins return recent history, cursor-paged.
 
   Authorization: only authenticated sockets may join (enforced first at
   `UserSocket.connect/3`, checked again here via
@@ -90,11 +97,15 @@ defmodule SutraChatWeb.ChatChannel do
     }
 
     case Chat.persist_message(attrs) do
-      {:ok, message} ->
+      {:ok, message, deduped} ->
         # Broadcast only after the write is durable: what clients see as
         # "sent" always survives a restart.
         broadcast!(socket, "message:new", render_message(message))
-        {:reply, {:ok, %{id: message.id, client_msg_id: message.client_msg_id}}, socket}
+        # The ack is a pushed event (not the push reply) so there is exactly
+        # one confirmation path, and it fires only after BOTH persist and
+        # broadcast completed — no ack ever precedes durability.
+        push(socket, "msg:ack", Chat.ack_payload(message, deduped))
+        {:noreply, socket}
 
       {:error, changeset} ->
         {:reply, {:error, %{reason: "invalid message", errors: errors_on(changeset)}}, socket}
