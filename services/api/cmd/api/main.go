@@ -17,8 +17,23 @@ import (
 	"github.com/mintzocloud-coder/sutra/services/api/internal/middleware"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/oidc"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/otp"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/social"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/users"
 )
+
+// methodGuard wraps h so only the listed methods reach it; anything else
+// gets the standard 405 envelope with an Allow header.
+func methodGuard(allowed []string, h http.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		for _, m := range allowed {
+			if r.Method == m {
+				h.ServeHTTP(w, r)
+				return
+			}
+		}
+		middleware.MethodNotAllowedHandler(allowed...)(w, r)
+	}
+}
 
 // newHandler builds the full HTTP serving stack (routes + middleware) so
 // integration tests can exercise the exact same wiring as production.
@@ -68,6 +83,21 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, log *
 		}
 		meHandler(w, r)
 	}))
+
+	// Social graph (D2): profiles + follows. Path-segment wildcards need
+	// Go 1.22+ mux (see go.mod); method discipline stays explicit so
+	// wrong methods get the standard 405 envelope.
+	v1.Handle("/v1/me/profile", methodGuard([]string{http.MethodPatch},
+		social.ProfileHandler(pool, log)))
+	v1.Handle("/v1/users/{id}", methodGuard([]string{http.MethodGet},
+		social.UserHandler(pool, log)))
+	// FollowHandler dispatches POST/DELETE itself (405 + Allow inside).
+	v1.Handle("/v1/users/{id}/follow", social.FollowHandler(pool, log))
+	v1.Handle("/v1/users/{id}/followers", methodGuard([]string{http.MethodGet},
+		social.FollowersHandler(pool, log)))
+	v1.Handle("/v1/users/{id}/following", methodGuard([]string{http.MethodGet},
+		social.FollowingHandler(pool, log)))
+
 	v1.Handle("/", middleware.NotFoundHandler())
 	mux.Handle("/v1/", auth(v1))
 

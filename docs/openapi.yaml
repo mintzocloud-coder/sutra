@@ -113,7 +113,8 @@ paths:
         race-safe), so a valid token never 404s here — it gets its own
         record. `display_name` is seeded from the OIDC `name` /
         `preferred_username` claims on first sight and never overwritten;
-        `handle` stays null until the user claims one (not yet implemented).
+        the public handle lives on the profile (PATCH /v1/me/profile),
+        not on this record.
       operationId: getMe
       security:
         - bearerAuth: []
@@ -155,7 +156,434 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /v1/me/profile:
+    patch:
+      tags: [social]
+      summary: Update caller profile
+      description: |
+        Partial update of the caller's public profile; the profiles row is
+        created on first use (lazy — reads of users without a profile fall
+        back to the identity record). Only the keys present in the body
+        change; a present-but-null key clears that field. Unknown keys are
+        rejected with 400 (strict API). Handle claims are first-come:
+        grammar `[a-z0-9_]{3,20}`; a taken handle is 409 `handle_taken`.
+      operationId: patchMyProfile
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfilePatch'
+            example:
+              handle: dhanasvi
+              display_name: Dhanasvi
+              bio: Building Sutra.
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Profile'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed JSON body or unknown field.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '405':
+          description: Wrong method — this route only supports PATCH.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Allow:
+              description: Supported methods for this route
+              schema:
+                type: string
+                example: PATCH
+        '409':
+          description: |
+            Handle already claimed by another user (error code "handle_taken").
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                error:
+                  code: handle_taken
+                  message: handle is already taken
+                  request_id: 01J9X0ABCD...
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '422':
+          description: |
+            Validation failure — `invalid_handle` (grammar), `field_too_long`,
+            or `invalid_avatar_url` (must be http(s)).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/users/{id}:
+    get:
+      tags: [social]
+      summary: Get public profile
+      description: |
+        Public profile for any user. Users without a profiles row still
+        resolve (handle null, display name falls back to the OIDC seed).
+        The OIDC subject is never exposed here — the handle is the public
+        identifier. Follower/following counts are computed live.
+      operationId: getUser
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: Public profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Profile'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed user id (not a UUID).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                error:
+                  code: invalid_user_id
+                  message: user id must be a UUID
+                  request_id: 01J9X0ABCD...
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No such user (error code "user_not_found").
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/users/{id}/follow:
+    post:
+      tags: [social]
+      summary: Follow a user
+      description: |
+        Creates the follow edge caller → user. Idempotent: the first call
+        is 201, repeats are 200 — retries never error. Following yourself
+        is 422 `cannot_follow_self`; an unknown user is 404.
+      operationId: followUser
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: Already following (idempotent retry)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [following, user_id]
+                properties:
+                  following:
+                    type: boolean
+                    example: true
+                  user_id:
+                    type: string
+                    format: uuid
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '201':
+          description: Follow edge created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [following, user_id]
+                properties:
+                  following:
+                    type: boolean
+                    example: true
+                  user_id:
+                    type: string
+                    format: uuid
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed user id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No such user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '405':
+          description: Wrong method — this route supports POST and DELETE.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Allow:
+              description: Supported methods for this route
+              schema:
+                type: string
+                example: POST, DELETE
+        '422':
+          description: Cannot follow yourself (error code "cannot_follow_self").
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [social]
+      summary: Unfollow a user
+      description: |
+        Removes the follow edge caller → user. Idempotent: 204 whether or
+        not the edge existed.
+      operationId: unfollowUser
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '204':
+          description: Edge removed (or never existed)
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed user id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No such user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '405':
+          description: Wrong method — this route supports POST and DELETE.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Allow:
+              description: Supported methods for this route
+              schema:
+                type: string
+                example: POST, DELETE
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/users/{id}/followers:
+    get:
+      tags: [social]
+      summary: List followers
+      description: |
+        Users following this user, newest first. Keyset-paginated on
+        (created_at, edge id) — pass `next_cursor` for the next page; null
+        `next_cursor` means the last page. No OFFSET, so pages stay stable
+        as the graph grows.
+      operationId: listFollowers
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/PageLimit'
+        - $ref: '#/components/parameters/PageCursor'
+      responses:
+        '200':
+          description: One page of followers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FollowPage'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed user id, bad limit, or bad cursor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No such user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/users/{id}/following:
+    get:
+      tags: [social]
+      summary: List following
+      description: |
+        Users this user follows, newest first. Same keyset pagination as
+        /followers.
+      operationId: listFollowing
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/PageLimit'
+        - $ref: '#/components/parameters/PageCursor'
+      responses:
+        '200':
+          description: One page of followed users
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FollowPage'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed user id, bad limit, or bad cursor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No such user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
 components:
+  parameters:
+    UserId:
+      name: id
+      in: path
+      required: true
+      description: User UUID.
+      schema:
+        type: string
+        format: uuid
+        example: 3f6b1c9e-8b4a-4d2e-9f01-abc123def456
+    PageLimit:
+      name: limit
+      in: query
+      required: false
+      description: |
+        Page size, 1–100. Above 100 clamps to 100; non-positive or
+        non-integer values are 400.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    PageCursor:
+      name: cursor
+      in: query
+      required: false
+      description: |
+        Opaque cursor from the previous page's `next_cursor`. Malformed
+        cursors are 400.
+      schema:
+        type: string
+
   securitySchemes:
     bearerAuth:
       type: http
@@ -174,7 +602,7 @@ components:
   schemas:
     User:
       type: object
-      required: [id, subject, handle, display_name, created_at, updated_at]
+      required: [id, subject, display_name, created_at, updated_at]
       properties:
         id:
           type: string
@@ -183,12 +611,8 @@ components:
           example: 3f6b1c9e-8b4a-4d2e-9f01-abc123def456
         subject:
           type: string
-          description: OIDC subject — the stable identity key, unique.
+          description: OIDC subject — the stable identity key, unique. Never exposed on public profile reads.
           example: 8f3a2b1c-4d5e-4f60-9a1b-2c3d4e5f6071
-        handle:
-          type: [string, 'null']
-          description: Claimable unique handle; null until claimed.
-          example: null
         display_name:
           type: [string, 'null']
           description: |
@@ -201,6 +625,99 @@ components:
         updated_at:
           type: string
           format: date-time
+
+    Profile:
+      type: object
+      required: [user_id, handle, display_name, bio, avatar_url, followers_count, following_count, created_at, updated_at]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+          example: 3f6b1c9e-8b4a-4d2e-9f01-abc123def456
+        handle:
+          type: [string, 'null']
+          description: |
+            First-come unique handle, `[a-z0-9_]{3,20}`; null until claimed.
+          example: dhanasvi
+        display_name:
+          type: [string, 'null']
+          description: |
+            Profile display name when set, otherwise the OIDC-seeded name
+            from the identity record.
+          example: Dhanasvi
+        bio:
+          type: [string, 'null']
+          maxLength: 160
+          example: Building Sutra.
+        avatar_url:
+          type: [string, 'null']
+          description: Must be an http(s) URL when set.
+          example: https://cdn.example/avatars/d.png
+        followers_count:
+          type: integer
+          description: Computed live from the follow graph (not denormalized).
+          example: 128
+        following_count:
+          type: integer
+          example: 42
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ProfilePatch:
+      type: object
+      description: |
+        Partial profile update: only present keys change; present-but-null
+        clears the field. Unknown keys are rejected.
+      properties:
+        handle:
+          type: [string, 'null']
+          description: Grammar `[a-z0-9_]{3,20}`; null clears the claim.
+          example: dhanasvi
+        display_name:
+          type: [string, 'null']
+          maxLength: 80
+        bio:
+          type: [string, 'null']
+          maxLength: 160
+        avatar_url:
+          type: [string, 'null']
+          description: Must be an http(s) URL when set.
+      additionalProperties: false
+
+    FollowItem:
+      type: object
+      required: [id, handle, display_name, avatar_url, followed_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        handle:
+          type: [string, 'null']
+        display_name:
+          type: [string, 'null']
+        avatar_url:
+          type: [string, 'null']
+        followed_at:
+          type: string
+          format: date-time
+          description: When the edge was created (newest-first ordering key).
+
+    FollowPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/FollowItem'
+        next_cursor:
+          type: [string, 'null']
+          description: |
+            Opaque cursor for the next page; null on the last page.
 
     ErrorEnvelope:
       type: object

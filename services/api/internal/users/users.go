@@ -6,8 +6,8 @@
 // ("just-in-time provisioning") — no separate signup step is needed for
 // OIDC users, which is the standard pattern for services behind an
 // identity provider. The display name is seeded from ID-token claims when
-// available; the public handle starts NULL and is claimed later via the
-// profile endpoint (future task).
+// available; the public handle is claimed via PATCH /v1/me/profile and
+// lives on the profiles table (see internal/social).
 package users
 
 import (
@@ -26,7 +26,6 @@ import (
 type User struct {
 	ID          string    `json:"id"`
 	Subject     string    `json:"subject"`
-	Handle      *string   `json:"handle"`
 	DisplayName *string   `json:"display_name"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
@@ -74,18 +73,17 @@ func Provision(ctx context.Context, pool *db.Pool, subject, displayName string) 
 		INSERT INTO users (subject, display_name)
 		VALUES ($1, NULLIF($2, ''))
 		ON CONFLICT (subject) DO NOTHING
-		RETURNING id, subject, handle, display_name, created_at, updated_at`
+		RETURNING id, subject, display_name, created_at, updated_at`
 
 	var (
-		u      User
-		id     pgtype.UUID
-		handle pgtype.Text
-		disp   pgtype.Text
+		u    User
+		id   pgtype.UUID
+		disp pgtype.Text
 	)
 	err := pool.QueryRow(ctx, insert, subject, displayName).
-		Scan(&id, &u.Subject, &handle, &disp, &u.CreatedAt, &u.UpdatedAt)
+		Scan(&id, &u.Subject, &disp, &u.CreatedAt, &u.UpdatedAt)
 	if err == nil {
-		finish(&u, id, handle, disp)
+		finish(&u, id, disp)
 		return &u, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -95,23 +93,20 @@ func Provision(ctx context.Context, pool *db.Pool, subject, displayName string) 
 	// Another writer won the race (or the row predates this call):
 	// read the row it created.
 	const selectBySubject = `
-		SELECT id, subject, handle, display_name, created_at, updated_at
+		SELECT id, subject, display_name, created_at, updated_at
 		FROM users
 		WHERE subject = $1`
 	if err := pool.QueryRow(ctx, selectBySubject, subject).
-		Scan(&id, &u.Subject, &handle, &disp, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		Scan(&id, &u.Subject, &disp, &u.CreatedAt, &u.UpdatedAt); err != nil {
 		return nil, err
 	}
-	finish(&u, id, handle, disp)
+	finish(&u, id, disp)
 	return &u, nil
 }
 
 // finish converts the pgtype nullables into the User's *string fields.
-func finish(u *User, id pgtype.UUID, handle, displayName pgtype.Text) {
+func finish(u *User, id pgtype.UUID, displayName pgtype.Text) {
 	u.ID = id.String()
-	if handle.Valid {
-		u.Handle = &handle.String
-	}
 	if displayName.Valid {
 		u.DisplayName = &displayName.String
 	}

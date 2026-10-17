@@ -593,7 +593,7 @@ every run. Gated items stay gated: real SMS/DLT stays post-incorporation
       loop are CI-gated (no docker on this VM) via the extended smoke
       job. Pushed.
 
-- [ ] **D2. Profiles + follow graph**
+- [x] **D2. Profiles + follow graph**
       Migration 0003: profiles (user_id PK, handle UNIQUE, display_name,
       bio, avatar_url, timestamps); follows (follower_id, followee_id,
       created_at; composite PK; no-self-follow CHECK). Go API:
@@ -602,6 +602,39 @@ every run. Gated items stay gated: real SMS/DLT stays post-incorporation
       Handle claim: first-come, lowercase [a-z0-9_]{3,20}.
       Accept: endpoints + tests green, OpenAPI updated, smoke covers a
       follow round-trip.
+      DONE 2026-10-18: migration `0003_profiles_follows.sql` (profiles +
+      follows + drops the 0002 placeholder users.handle — handles live on
+      profiles now; users.display_name stays the OIDC seed); new
+      `internal/social` package — `Profile`/`ProfilePatch` (presence-flag
+      partial updates; explicit null clears), handle regex validation,
+      avatar http(s)-only (javascript: rejected), first-come claims via the
+      UNIQUE constraint (loser → 409 handle_taken), PATCH serialized per
+      user (SELECT ... FOR UPDATE on the users row), follows idempotent
+      (composite PK + ON CONFLICT DO NOTHING: POST → 201 new / 200 retry,
+      DELETE → 204), self-follow rejected in Go + DB CHECK backstop,
+      computed follower/following counts (no denormalized drift),
+      keyset pagination on (created_at, edge-id) with opaque base64url
+      cursors, public profile never exposes the OIDC subject; routes wired
+      in main.go (Go 1.22 `{id}` patterns + explicit method guards → 405
+      envelopes); OpenAPI updated (5 new paths, Profile/ProfilePatch/
+      FollowItem/FollowPage schemas, User.handle removed) — redocly lint
+      0 warnings; smoke.sh gains the D2 follow round-trip (two Hydra
+      clients, bypass OFF: claim handles → follow 201/200 → self-follow
+      422 → listings verified → unfollow 204).
+      VERIFIED: `go build`+`go vet`+gofmt clean; full `go test ./...`
+      green on real PG16 — 3 pure unit suites (handle grammar matrix,
+      cursor round-trip + 5 malformed shapes, patch validation incl.
+      emoji-rune counting and javascript: avatar) + 5 integration suites:
+      profile patch/merge/clear, 10-racer handle-claim race (exactly 1
+      winner), follow/unfollow/idempotency/counts, 3-page cursor
+      pagination newest-first, HTTP round-trip (409/422/400/404/405
+      envelopes, unknown-field 400, no subject leak). Two real bugs caught
+      by tests before push: (1) next_cursor built from the lookahead row
+      instead of the last returned item (dropped a row per page); (2)
+      DisallowUnknownFields is a no-op on map decode — unknown PATCH keys
+      now rejected by an explicit allowlist (live-verified 400). Full
+      end-to-end also live-verified against the compiled binary (real
+      main.go mux patterns). Pushed.
 
 - [ ] **D3. Feed timelines (hybrid fan-out)**
       Valkey sorted-set timelines: fan-out-on-write to followers' home
@@ -667,3 +700,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-18 ~03:10 IST: C3 done — `docs/production.md`: secrets table (generation commands, gitignored .env), full api+chat env reference cross-checked against config.go/runtime.exs, image builds, migration procedure (api advisory-locked self-migrate; chat via Release.migrate(); separate ledgers), first-boot compose steps with docker-compose.prod.yml override, /healthz-vs-/readyz probe guidance, backups (PG nightly+WAL, seaweedfs snapshots, presence ephemeral), scaling (stateless api + limiter caveat, chat clustering via CLUSTER_ENABLED/RELEASE_NODE/RELEASE_COOKIE, PG single-primary caveat), incident table, pre-flight checklist, rollback, Kubernetes notes. Honest caveat documented: Hydra not landed (issue #4) → identity fail-closed in prod; AUTH_BYPASS dev-only, forbidden in prod. Pushed.
 - 2026-10-18 ~03:40 IST: C4 done — benchmarks: `docs/benchmarks.md` (methodology + hardware template + re-run policy; baseline tables TBD — no fabricated numbers); Go bench tests (cmd/api: Healthz seq/parallel, 404, 401, 405; middleware: limiter allow seq/parallel, envelope write, RequestID/SecurityHeaders isolation); `scripts/bench_ws.py` (stdlib Phoenix-channels-v2 load probe: conns/sec, server-confirmed msgs/sec, ack p50/p95/p99, --fail-on-errors); smoke.sh runs a short 20×10 probe with --fail-on-errors; CI go-api job runs the short bench suite. Verified: bash -n + py_compile + YAML clean, SPDX headers; bench_ws.py vs fake Phoenix server — happy 10×5 → 50/50 acks exit 0, ack-drop → errors counted + exit 3, refused port → connect errors counted + JSON exit 0. Go compile/bench CI-gated (no Go on this VM, apt locked). Pushed. **ALL PHASES COMPLETE — backend production build done; report to founder.**
 - 2026-10-18 ~04:35 IST: D1 done — real Ory identity plane in compose (Hydra v26.4.2 + Kratos v26.4.2, pinned; migrate one-shots; Kratos dev config + identity schema); Go API verifies Hydra RS256 JWTs via the unchanged A2 JWKS path (HYDRA_ISSUER/JWKS_URL/JWT_AUDIENCE explicit in compose); `internal/otp` adapter interface + fail-closed stub (`OTP_PROVIDER` env-gated, unknown provider refuses boot — proven live); `docs/identity.md` (DLT-gated SMS path + post-incorporation checklist); smoke.sh extended with the real-issuer loop (Hydra JWT → /v1/me 200 with bypass OFF, no-token → 401). Verified: go build+vet+test green, gofmt/bash/YAML/JSON/SPDX clean, `hydra create client` syntax confirmed against v2 CLI reference. Full-stack run is CI-gated. Pushed.
+- 2026-10-18 ~05:15 IST: D2 done — profiles + follow graph: migration 0003 (profiles/follows, retired users.handle), new internal/social package (PATCH /v1/me/profile with presence-flag partials + explicit-null clears, first-come handle claims via UNIQUE → 409, per-user PATCH serialization, idempotent follows 201/200/204, self-follow 422, computed counts, keyset cursor pagination, subject never exposed), 5 routes wired, OpenAPI + redocly green, smoke.sh D2 round-trip (two Hydra clients, bypass off). Verified: go build+vet+test green on real PG16 (incl. 10-racer claim race → 1 winner, 3-page pagination, HTTP envelope matrix); 2 real bugs caught by tests pre-push (next_cursor off-by-one row, DisallowUnknownFields no-op on maps → explicit allowlist); live binary smoke of all routes. Pushed.

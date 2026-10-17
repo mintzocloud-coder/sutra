@@ -96,9 +96,6 @@ func TestProvisionJITIntegration(t *testing.T) {
 	if u1.DisplayName == nil || *u1.DisplayName != "Alice" {
 		t.Fatalf("display_name = %v, want Alice", u1.DisplayName)
 	}
-	if u1.Handle != nil {
-		t.Fatalf("handle = %q, want nil (unclaimed on JIT)", *u1.Handle)
-	}
 	if u1.CreatedAt.IsZero() || u1.UpdatedAt.IsZero() {
 		t.Fatal("timestamps not populated")
 	}
