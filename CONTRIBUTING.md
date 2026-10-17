@@ -18,11 +18,27 @@ Sutra's equity map is public: **Founder 70% · Contributors 10% · Investors 20%
 - **Testing** — especially low-end Android devices and slow networks.
 - **Ideas** — well-argued RFCs in Discussions. Best ideas get specced and bountied.
 
-## 2. Bounties — cash now (INR)
+## 2. Finding work & claiming it — the no-conflict rule
+
+**Where to look:** [open issues with no assignee](https://github.com/mintzocloud-coder/sutra/issues?q=is%3Aissue+is%3Aopen+no%3Aassignee) — **no assignee = available**, that's the whole list. (Filter further by label: `good first issue`, `backend`, `documentation`.)
+
+**How to claim (4 steps):**
+1. Pick an issue from **Available** that has **no assignee**.
+2. Comment on it: "I want to work on this" + 2-3 lines on your approach.
+3. A maintainer assigns it to you within 24 hours. **Only start after you're assigned.**
+4. Open your PR with "Closes #N" in the description.
+
+**The no-conflict rule:** one issue = **one assignee**. If an issue already shows an assignee, it's taken — pick another. Never start work on an assigned issue without talking to the assignee first.
+
+**Stale claims:** no update for **7 days** → the issue is unassigned and returns to Available. (Bountied issues: same rule — first credible claim gets 7 days.)
+
+**Why conflicts are rare by design:** the monorepo is split by service (`services/chat`, `services/api`, `services/ai`, `apps/*`) and **no service writes another service's tables** (see ARCHITECTURE.md). Big work is split into small issues, so two people almost never need the same file.
+
+## 3. Bounties — cash now (INR)
 
 Selected issues carry a **₹ bounty**. The amount is written on the issue — no negotiation after merge. Claim by commenting; first credible claim gets 7 days, then it reopens. Paid within 14 days of merge via UPI/bank transfer. *(Initial bounty budget to be announced.)*
 
-## 3. Credits & leaderboard — reputation that compounds
+## 4. Credits & leaderboard — reputation that compounds
 
 | Contribution | Credits |
 |---|---|
@@ -36,7 +52,7 @@ Selected issues carry a **₹ bounty**. The amount is written on the issue — n
 - Credits never expire, tied to your GitHub identity.
 - Credits are **recognition + your path into the 10% pool** — they are not shares by themselves. (Indian law doesn't allow "PR = shares." The pool flows through formal roles — that's the compliant road, written down here instead of whispered.)
 
-## 4. The equity path — step by step
+## 5. The equity path — step by step
 
 1. **Contribute** → earn credits on the public leaderboard.
 2. **Get noticed** → consistent top contributors are invited to a formal role (technical advisor, contractor, or team member) — **a future job is genuinely possible** for the best.
@@ -44,12 +60,12 @@ Selected issues carry a **₹ bounty**. The amount is written on the issue — n
 
 We will never announce equity before the paperwork exists. The map is public; the instruments follow incorporation.
 
-## 5. License & CLA — read this before your first PR
+## 6. License & CLA — read this before your first PR
 
 - Public code is **AGPLv3**. If you run a modified version as a service, you publish your changes. That's the deal.
 - Before your first merged PR, sign the **CLA** ([CLA.md](./CLA.md)): you keep ownership of your code; you give the project a permanent license including relicensing rights — so the project can offer commercial licenses later without chasing every contributor. No CLA, no merge. Two minutes.
 
-## 6. Ground rules
+## 7. Ground rules
 
 - **Be kind, be honest.** Review code, not people.
 - **No AI-slop PRs.** AI assistance welcome; unreviewed mass-generated PRs get closed.
@@ -57,7 +73,7 @@ We will never announce equity before the paperwork exists. The map is public; th
 - **Security issues** → private channel, never public issues (see security policy).
 - **Brand, UX specs, production configs are private.** Don't ask for them in issues.
 
-## 7. What NOT to expect
+## 8. What NOT to expect
 
 - ❌ Shares for PRs directly. (The pool flows through formal roles — section 4.)
 - ❌ Payment for every contribution. Only bountied issues pay cash.
