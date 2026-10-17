@@ -1,0 +1,37 @@
+# Sutra dev stack — one command: docker compose up
+# Every dependency a contributor needs on their laptop. No managed services.
+services:
+  postgres:
+    image: pgvector/pgvector:pg18
+    environment:
+      POSTGRES_USER: sutra
+      POSTGRES_PASSWORD: sutra
+      POSTGRES_DB: sutra
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sutra"]
+      interval: 5s
+      retries: 10
+
+  valkey:
+    image: valkey/valkey:8
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:3.92
+    command: "server -dir=/data -volume.max=10 -master.volumeSizeLimitMB=1024 -ip=seaweedfs"
+    ports: ["9333:9333", "8080:8080"]
+    volumes: [weeddata:/data]
+
+  # Auth plumbing (Wave-1): Ory Kratos + Hydra — added by issue #4
+  # kratos:
+  # hydra:
+
+volumes:
+  pgdata:
+  weeddata:

@@ -1,0 +1,9 @@
+Sutra (development codename)
+Copyright (C) 2026 Harshal Vanpariya
+
+This project is licensed under the GNU Affero General Public License v3.0
+(see LICENSE). A commercial license is available for those who need it.
+
+Third-party components retain their own licenses — see dependency manifests.
+The public brand name is intentionally withheld until company registration;
+see brand.config.json (single source of truth).

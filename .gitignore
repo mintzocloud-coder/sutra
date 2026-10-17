@@ -1,0 +1,25 @@
+# Build outputs
+_build/
+deps/
+node_modules/
+__pycache__/
+*.pyc
+.next/
+dist/
+build/
+
+# Local env / secrets — NEVER commit these
+.env
+.env.*
+*.pem
+*.key
+secrets/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Data volumes are docker-managed, not in git
+pgdata/
+weeddata/
