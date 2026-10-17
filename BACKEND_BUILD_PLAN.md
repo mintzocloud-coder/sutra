@@ -174,11 +174,27 @@ Signal for messaging; idiomatic production Go services for the API).
       suite green on throwaway local PG16 AND green with no DB (10 clean
       skips). `go build`+`go vet`+`go test ./...` green.
 
-- [ ] **A8. Dockerfile hardening**
+- [x] **A8. Dockerfile hardening**
       Multi-stage build, `non-root` user, minimal base, `HEALTHCHECK`,
       graceful shutdown already present — verify SIGTERM handling.
       Accept: `docker build` succeeds; container runs as non-root
       (`whoami` ≠ root).
+      DONE 2026-10-17: rewrote `services/api/Dockerfile` — multi-stage
+      (golang:1.22-alpine → alpine:3.20), static stripped binary
+      (`CGO_ENABLED=0 -trimpath -ldflags="-s -w"`), non-root `app` user
+      (`addgroup -S`/`adduser -S`, `COPY --chown`, `USER app`), exec-form
+      ENTRYPOINT so SIGTERM reaches Go directly, `HEALTHCHECK` on
+      DB-independent `/healthz` (wget -qO-; /readyz stays the DB-aware
+      readiness signal, wired in compose/k8s separately). Also added a CI
+      step `docker build -f services/api/Dockerfile services/api` so the
+      image builds on every push. Verified: (1) exact Dockerfile build
+      flags compile a statically-linked stripped binary, `go vet` clean;
+      (2) ran the binary as unprivileged uid 65534 (mirrors `USER app`):
+      /healthz 200, /readyz 200, /v1/me 200; (3) SIGTERM → logged
+      "api stopped", process exited cleanly (graceful Shutdown path).
+      NOTE: literal `docker build` could not run on this VM — dockerd
+      fails to start (no iptables/nft kernel support for bridge
+      networking); the CI build step is the durable gate.
 
 ## Phase B — Chat service (Elixir) production
 
@@ -261,3 +277,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-17 ~20:25 IST: A5 done — per-IP token-bucket rate limiter (stdlib-only, RATE_LIMIT_RPS/BURST env, Retry-After + X-RateLimit-Limit), CORS middleware (CORS_ORIGINS allowlist/wildcard/disabled, preflight 204), security headers (nosniff/DENY/referrer-policy/CSP). 12 new middleware tests green; live smoke: 100 rapid reqs → 73×429 JSON envelope, preflight 204 + ACAO for configured origin, all headers on 200/429. Pushed.
 - 2026-10-17 ~20:55 IST: A6 done — JSON error envelope consolidated across ALL error paths: ErrorCode map + WriteStatusError + NotFound/MethodNotAllowed handlers; hand-rolled duplicates removed (auth, users, Recover); main.go extracted newHandler() for tests; /v1/me explicit method guard (405+Allow); RequestID outermost so panics carry real request_id. Tests: 7 unit + cmd/api integration (gated parts skip cleanly); full suite green on throwaway local PG16. Live smoke: 404/405/401/429/503 all envelope-shaped with echoed X-Request-ID; readyz 503→200 across real PG kill/restart. Pushed.
 - 2026-10-17 ~21:30 IST: A7 done — middleware unit tests (request ID/Logger/Recover/Chain, 8 tests), claims-propagation auth test, /v1/me 200-path X-Request-ID + HTTP-level provision idempotency assertions; CI go-api job now runs `go test ./...` against a postgres:16 service (was build+vet only, gated tests skipped silently in CI). Suite green on throwaway local PG16 and green with 10 graceful skips (no DB). Pushed.
+- 2026-10-17 ~21:55 IST: A8 done — Dockerfile hardening (multi-stage, static stripped binary, non-root `app` user, HEALTHCHECK on /healthz, exec ENTRYPOINT) + CI `docker build` step for the API image. Verified: exact Dockerfile build flags → statically-linked stripped binary, `go vet` clean; ran as unprivileged uid 65534 with /healthz, /readyz, /v1/me all 200; SIGTERM → "api stopped", clean exit. Local `docker build` impossible on this VM (dockerd: no iptables kernel support) — CI build step is the durable gate. Pushed. **Phase A complete.**
