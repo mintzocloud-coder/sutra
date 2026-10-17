@@ -28,11 +28,66 @@ services:
     ports: ["9333:9333", "8080:8080"]
     volumes: [weeddata:/data]
 
-  # Auth plumbing (Wave-1): Ory Kratos + Hydra — added by issue #4
-  # kratos:
-  # hydra:
+  # Identity (D1): Ory Hydra (OAuth2/OIDC issuer) + Ory Kratos (self-service
+  # identity store). The Go API verifies Hydra-issued RS256 tokens through
+  # the existing A2 JWKS path — no new auth code, Hydra is simply the real
+  # issuer now. See docs/identity.md. DEV SECRETS below are placeholders;
+  # production must override them (docs/production.md).
+  hydra-migrate:
+    image: oryd/hydra:v26.4.2
+    environment:
+      DSN: "postgres://sutra:sutra@postgres:5432/sutra?sslmode=disable"
+    command: migrate sql -e --yes
+    depends_on:
+      postgres:
+        condition: service_healthy
 
-  # Sutra services (scaffolds — see issues #4, #5)
+  hydra:
+    image: oryd/hydra:v26.4.2
+    # --dev: development defaults (no TLS requirement). Production serves
+    # behind TLS termination with an explicit config file instead.
+    command: serve all --dev
+    ports: ["4444:4444", "4445:4445"]
+    environment:
+      DSN: "postgres://sutra:sutra@postgres:5432/sutra?sslmode=disable"
+      # DEV-ONLY: must be identical across restarts (it encrypts the DB).
+      # Generate a real one for production; never commit it.
+      SECRETS_SYSTEM: "dev-only-secret-change-in-production-0123456789ab"
+      # The iss claim the API/chat verifiers expect (HYDRA_ISSUER below).
+      URLS_SELF_ISSUER: "http://hydra:4444"
+      # No login/consent UI ships in Wave 1 — these are placeholders until
+      # a Kratos-backed login app exists. Only client_credentials (M2M)
+      # flows are exercised today, which need neither.
+      URLS_LOGIN: "http://localhost:4433/self-service/login/browser"
+      URLS_CONSENT: "http://localhost:4433/self-service/consent/browser"
+    depends_on:
+      hydra-migrate:
+        condition: service_completed_successfully
+
+  kratos-migrate:
+    image: oryd/kratos:v26.4.2
+    environment:
+      DSN: "postgres://sutra:sutra@postgres:5432/sutra?sslmode=disable"
+    command: migrate sql -e --yes --config /etc/config/kratos/kratos.yml
+    volumes:
+      - ./services/identity/kratos:/etc/config/kratos:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  kratos:
+    image: oryd/kratos:v26.4.2
+    command: serve --config /etc/config/kratos/kratos.yml
+    ports: ["4433:4433", "4434:4434"]
+    environment:
+      DSN: "postgres://sutra:sutra@postgres:5432/sutra?sslmode=disable"
+    volumes:
+      - ./services/identity/kratos:/etc/config/kratos:ro
+    depends_on:
+      kratos-migrate:
+        condition: service_completed_successfully
+
+  # Sutra services
   chat:
     build: ./services/chat
     ports: ["4000:4000"]
@@ -51,8 +106,9 @@ services:
       # `mix` does not — see SutraChat.Release):
       #   docker compose run --rm chat /app/bin/sutra_chat eval "SutraChat.Release.migrate()"
       # Same identity contract as the API service (docs/auth-contract.md).
-      # Hydra itself lands with issue #4; until then the verifier fails
-      # closed (socket connects are refused, like the API's 401s).
+      # Hydra now runs in this compose file (D1); the verifier fails closed
+      # when Hydra is unreachable (socket connects are refused, like the
+      # API's 401s).
       HYDRA_ISSUER: "http://hydra:4444"
       JWT_AUDIENCE: "sutra-api"
       # Multi-node presence clustering (B5, docs/presence.md): opt-in.
@@ -76,6 +132,17 @@ services:
       PORT: "8080"
       DATABASE_URL: "postgres://sutra:sutra@postgres:5432/sutra?sslmode=disable"
       VALKEY_ADDR: "valkey:6379"
+      # Identity (D1): Hydra is the real OIDC issuer now. The API verifies
+      # Hydra-issued RS256 JWTs through the A2 JWKS path: iss must equal
+      # Hydra's URLS_SELF_ISSUER, aud the audience requested at token time
+      # (scripts/smoke.sh requests "sutra-api").
+      HYDRA_ISSUER: "http://hydra:4444"
+      HYDRA_JWKS_URL: "http://hydra:4444/.well-known/jwks.json"
+      JWT_AUDIENCE: "sutra-api"
+      # Phone-OTP SMS gateway (D1): only "stub" exists until DLT
+      # registration post-incorporation. Any other value makes the API
+      # refuse to boot (fail-closed) — see internal/otp + docs/identity.md.
+      OTP_PROVIDER: "stub"
       # Dev-only auth bypass for scripts/smoke.sh (the API logs a loud
       # WARN when this is set; never enable in production).
       AUTH_BYPASS: ${AUTH_BYPASS:-}

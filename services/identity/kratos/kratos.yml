@@ -1,0 +1,75 @@
+# Ory Kratos configuration for the Sutra dev compose stack (D1).
+#
+# This is a DEVELOPMENT config. The cookie/cipher secrets below are clearly
+# marked dev-only placeholders — production must mount its own kratos.yml
+# with generated secrets (see docs/identity.md and docs/production.md).
+# Never commit production secrets here.
+#
+# What this enables in Wave 1:
+#   - Self-service identity store (email+password credentials) on the shared
+#     Postgres, reachable at http://localhost:4433 (public) / :4434 (admin).
+#   - A foundation Hydra's login/consent flow will point at once a login UI
+#     exists (URLS_LOGIN/URLS_CONSENT in docker-compose.yml are placeholders
+#     until then; only client_credentials M2M flows are exercised today).
+#   - Courier (email delivery) is intentionally unconfigured: no verification
+#     or recovery emails are sent in dev. Wiring a real mailer is a
+#     post-incorporation step alongside SMS/DLT (see docs/identity.md).
+
+dsn: postgres://sutra:sutra@postgres:5432/sutra?sslmode=disable
+
+serve:
+  public:
+    base_url: http://localhost:4433/
+    cors:
+      enabled: true
+  admin:
+    base_url: http://kratos:4434/
+
+selfservice:
+  default_browser_return_url: http://localhost:4433/
+  allowed_return_urls:
+    - http://localhost:4433
+
+  methods:
+    password:
+      enabled: true
+
+  # Browser UI placeholders: no login/registration UI ships in Wave 1, so
+  # these point at the public base URL and are documented as future work in
+  # docs/identity.md. API-only flows (what D2+ will use) do not need them.
+  flows:
+    login:
+      ui_url: http://localhost:4433/login
+    registration:
+      ui_url: http://localhost:4433/registration
+    settings:
+      ui_url: http://localhost:4433/settings
+    recovery:
+      ui_url: http://localhost:4433/recovery
+    verification:
+      ui_url: http://localhost:4433/verification
+    # OTP (SMS) method stays DISABLED until DLT registration exists
+    # post-incorporation. Enabling it with the stub sender would fake
+    # deliveries, which the fail-closed design forbids.
+
+identity:
+  default_schema_id: default
+  schemas:
+    - id: default
+      url: file:///etc/config/kratos/identity.schema.json
+
+# DEV-ONLY secrets. 32+ characters each, as Kratos requires. Production
+# MUST replace this file (or at least these two values) with generated
+# secrets that never enter version control.
+secrets:
+  cookie:
+    - dev-only-kratos-cookie-secret-32c-min-abcdef
+  cipher:
+    - dev-only-kratos-cipher-secret-32c-min-abcdef
+
+hash:
+  argon2:
+    # Dev-tuned: fast enough for laptop iteration, still Argon2id.
+    memory: 65536
+    iterations: 2
+    parallelism: 2

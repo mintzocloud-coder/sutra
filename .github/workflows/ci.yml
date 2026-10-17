@@ -44,11 +44,14 @@ jobs:
   smoke:
     name: Full-stack smoke test
     runs-on: ubuntu-latest
-    # Gates C1: boots the whole compose stack (postgres, valkey, seaweedfs,
-    # api, chat), runs chat migrations, then exercises the API (/healthz,
-    # /readyz, /v1/me) and a real websocket send/receive round-trip with
-    # reconnect-history verification. The script tears the stack down
-    # afterwards; identity runs through AUTH_BYPASS=1 (dev-only hatch).
+    # Gates C1 + D1: boots the whole compose stack (postgres, valkey,
+    # seaweedfs, hydra, kratos, api, chat), runs chat migrations, then
+    # exercises the API (/healthz, /readyz, /v1/me), a real Hydra-issued
+    # JWT against /v1/me with the auth bypass OFF (proving the A2 JWKS
+    # verification path against a real OIDC issuer), and a websocket
+    # send/receive round-trip with reconnect-history verification.
+    # The script tears the stack down afterwards; basic API checks use
+    # AUTH_BYPASS=1 (dev-only hatch), the D1 loop does not.
     steps:
       - uses: actions/checkout@v4
       - name: Boot stack and run smoke tests

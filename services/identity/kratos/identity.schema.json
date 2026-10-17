@@ -1,0 +1,48 @@
+{
+  "$id": "https://sutra.local/schemas/identity.default.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "traits": {
+      "additionalProperties": false,
+      "properties": {
+        "email": {
+          "format": "email",
+          "maxLength": 320,
+          "minLength": 3,
+          "ory.sh/kratos": {
+            "credentials": {
+              "password": {
+                "identifier": true
+              }
+            },
+            "recovery": {
+              "via": "email"
+            },
+            "verification": {
+              "via": "email"
+            }
+          },
+          "title": "E-Mail",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 120,
+          "title": "Display name",
+          "type": "string"
+        },
+        "phone": {
+          "maxLength": 16,
+          "pattern": "^\\+[1-9][0-9]{6,14}$",
+          "title": "Phone (E.164)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "email"
+      ],
+      "type": "object"
+    }
+  },
+  "title": "Person",
+  "type": "object"
+}

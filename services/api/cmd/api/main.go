@@ -16,6 +16,7 @@ import (
 	"github.com/mintzocloud-coder/sutra/services/api/internal/db"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/middleware"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/oidc"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/otp"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/users"
 )
 
@@ -109,6 +110,17 @@ func main() {
 			"bypass_subject", cfg.BypassSubject)
 	}
 	verifier := oidc.NewVerifier(cfg.HydraJWKSURL, cfg.HydraIssuer, cfg.JWTAudience)
+
+	// Phone-OTP seam (D1): fail fast on an unknown OTP_PROVIDER so a
+	// misconfigured gateway name refuses to boot instead of silently
+	// dropping OTPs. Until DLT registration the only provider is the
+	// fail-closed stub (see internal/otp); the constructed sender is
+	// consumed by the login endpoints landing in D2+.
+	if _, err := otp.NewSender(cfg.OTPProvider); err != nil {
+		log.Error("invalid OTP_PROVIDER — refusing to start", "err", err)
+		os.Exit(1)
+	}
+	log.Info("otp provider configured", "provider", cfg.OTPProvider)
 
 	// Database: connect (fail fast if unreachable) then apply pending
 	// migrations before serving any traffic.

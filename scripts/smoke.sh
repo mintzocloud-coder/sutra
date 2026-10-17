@@ -11,11 +11,18 @@
 #           joins/sec + server-confirmed msgs/sec + ack-latency percentiles
 #   - SeaweedFS: /cluster/status 200; Valkey: PING → PONG
 #
-# Identity is exercised through AUTH_BYPASS=1 — the services' documented
-# dev-only escape hatch (both log a loud WARN when it is set; it is never
-# enabled in production). The chat release fails closed at boot without a
-# real SECRET_KEY_BASE, so this script generates an ephemeral one (kept in
-# the environment only, never written to disk or committed).
+# Identity is exercised two ways:
+#   - AUTH_BYPASS=1 for the basic API checks and the chat websocket
+#     round-trip — the services' documented dev-only escape hatch (both
+#     log a loud WARN when it is set; it is never enabled in production).
+#   - The D1 real-issuer loop: a Hydra-issued RS256 JWT (client_credentials
+#     + jwt-bearer grant) is presented to GET /v1/me with the api recreated
+#     WITHOUT the bypass, proving the A2 JWKS verification path against a
+#     real OIDC issuer. The bypass skips verification entirely, so the
+#     bypass-on checks alone would prove nothing about Hydra.
+# The chat release fails closed at boot without a real SECRET_KEY_BASE, so
+# this script generates an ephemeral one (kept in the environment only,
+# never written to disk or committed).
 #
 # Usage:
 #   bash scripts/smoke.sh                # tears the stack down afterwards
@@ -81,6 +88,14 @@ docker compose up -d postgres valkey seaweedfs
 wait_for 90 "postgres to accept connections" \
   docker compose exec -T postgres pg_isready -U sutra
 
+echo "smoke: starting hydra + kratos (migrate one-shots run first via depends_on)"
+docker compose up -d hydra kratos
+wait_for 120 "hydra openid-configuration" \
+  curl -sf http://localhost:4444/.well-known/openid-configuration
+wait_for 120 "kratos /health/alive" \
+  curl -sf http://localhost:4433/health/alive
+pass "hydra + kratos up (identity plane live)"
+
 echo "smoke: running chat database migrations"
 docker compose run --rm chat /app/bin/sutra_chat eval "SutraChat.Release.migrate()"
 
@@ -102,6 +117,64 @@ subject="$(printf '%s' "$me" | python3 -c 'import json,sys; print(json.load(sys.
 [ "$subject" = "$EXPECTED_SUBJECT" ] \
   || fail "/v1/me subject '$subject' != expected '$EXPECTED_SUBJECT'"
 pass "api /v1/me 200 (bypass identity '$subject', auto-provisioned)"
+
+# --- Real-issuer identity loop (D1) -----------------------------------------
+# The checks above ran with AUTH_BYPASS=1, which skips JWT verification
+# entirely. Now prove the real path: a Hydra-issued RS256 JWT verified
+# through the A2 JWKS flow reaches GET /v1/me.
+echo "smoke: creating hydra oauth2 client 'sutra-smoke'"
+SMOKE_HYDRA_CLIENT_SECRET="${SMOKE_HYDRA_CLIENT_SECRET:-$(openssl rand -hex 24)}"
+# The jwt-bearer grant type is what makes Hydra mint JWT (not opaque)
+# access tokens. Tolerate "already exists" for SMOKE_KEEP_UP=1 re-runs.
+if ! docker compose run --rm hydra hydra create client \
+    --endpoint http://hydra:4445 \
+    --id sutra-smoke \
+    --secret "$SMOKE_HYDRA_CLIENT_SECRET" \
+    --grant-type client_credentials \
+    --grant-type urn:ietf:params:oauth:grant-type:jwt-bearer \
+    --response-type token \
+    --scope openid \
+    --audience sutra-api \
+    --token-endpoint-auth-method client_secret_basic \
+    >/tmp/sutra-hydra-client.out 2>&1; then
+  if grep -qiE "already exists|conflict" /tmp/sutra-hydra-client.out; then
+    echo "smoke: hydra client 'sutra-smoke' already exists — reusing"
+  else
+    cat /tmp/sutra-hydra-client.out >&2
+    fail "hydra oauth2 client creation failed"
+  fi
+else
+  pass "hydra oauth2 client 'sutra-smoke' created"
+fi
+
+token_json="$(curl -sf -u "sutra-smoke:$SMOKE_HYDRA_CLIENT_SECRET" \
+  --data-urlencode 'grant_type=client_credentials' \
+  --data-urlencode 'audience=sutra-api' \
+  --data-urlencode 'scope=openid' \
+  http://localhost:4444/oauth2/token)" || fail "hydra token request failed"
+access_token="$(printf '%s' "$token_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
+case "$access_token" in
+  *.*.*) pass "hydra issued a JWT access token (jwt-bearer grant)" ;;
+  *) fail "hydra returned an opaque token, not a JWT — the jwt-bearer grant type is required on the client" ;;
+esac
+
+echo "smoke: recreating api WITHOUT auth bypass to exercise real JWT verification"
+AUTH_BYPASS= docker compose up -d --no-deps api
+wait_for 90 "api /healthz (bypass off)" curl -sf "$API_URL/healthz"
+
+me_jwt="$(curl -sf -H "Authorization: Bearer $access_token" "$API_URL/v1/me")" \
+  || fail "/v1/me with hydra JWT did not return 200"
+jwt_subject="$(printf '%s' "$me_jwt" | python3 -c 'import json,sys; print(json.load(sys.stdin)["subject"])')"
+[ "$jwt_subject" = "sutra-smoke" ] \
+  || fail "/v1/me subject '$jwt_subject' != hydra client 'sutra-smoke' — token was not really verified"
+pass "api /v1/me 200 with hydra-issued JWT (subject 'sutra-smoke', RS256 verified via JWKS)"
+
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$API_URL/v1/me")" = "401" ] \
+  || fail "/v1/me without token did not 401 — bypass still on?"
+pass "api /v1/me 401 without token (bypass confirmed off)"
+# NOTE: the api is intentionally left running WITHOUT the bypass from here
+# on — the more production-faithful state. Nothing later in this script
+# needs the bypass (chat keeps its own for the websocket round-trip).
 
 # --- Chat websocket round-trip --------------------------------------------
 wait_for 90 "chat websocket listener" \

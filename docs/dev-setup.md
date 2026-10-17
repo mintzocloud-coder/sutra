@@ -21,6 +21,8 @@ This brings up:
 | SeaweedFS | 9333 / 8080 | S3-compatible blob storage |
 | API (Go) | 8081 → container 8080 | REST API: `/healthz`, `/readyz`, `/v1/me` |
 | Chat (Elixir release) | 4000 | websocket `/socket/websocket` (Phoenix channels) |
+| Hydra (OAuth2/OIDC) | 4444 / 4445 | token issuer; API + chat verify its RS256 JWTs (D1) |
+| Kratos (identity) | 4433 / 4434 | self-service identity store (D1; login UI lands later) |
 
 The API and chat share one postgres database. Their migration ledgers are
 kept separate on purpose: the Go API uses `schema_migrations`, the chat
@@ -42,9 +44,12 @@ docker compose up -d
 
 `scripts/smoke.sh` boots the whole stack and verifies it end to end —
 API health/readiness/identity, a real websocket send → broadcast →
-`msg:ack` → reconnect-history round-trip, SeaweedFS and Valkey. Identity
-runs through the dev-only `AUTH_BYPASS=1` hatch (both services log a loud
-warning; never enable it in production):
+`msg:ack` → reconnect-history round-trip, SeaweedFS and Valkey. Basic
+identity checks run through the dev-only `AUTH_BYPASS=1` hatch (both
+services log a loud warning; never enable it in production) — and then
+D1's real-issuer loop mints a Hydra JWT and proves it reaches `/v1/me`
+with the bypass switched OFF. Full identity architecture:
+`docs/identity.md`.
 
 ```bash
 bash scripts/smoke.sh                # tears the stack down afterwards

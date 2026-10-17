@@ -542,7 +542,7 @@ rules as A/B/C: no placeholders, no TODOs, CI-gated verification, push
 every run. Gated items stay gated: real SMS/DLT stays post-incorporation
 (documented, fail-closed); E2E encryption is Wave 2 (never promise it).
 
-- [ ] **D1. Identity: Ory Kratos + Hydra in compose**
+- [x] **D1. Identity: Ory Kratos + Hydra in compose**
       Real Ory Kratos (self-service identity) + Ory Hydra (OAuth2/OIDC)
       services in docker-compose.yml; the Go API verifies Hydra-issued
       RS256 tokens through the existing A2 JWKS path — no new auth code,
@@ -552,6 +552,46 @@ every run. Gated items stay gated: real SMS/DLT stays post-incorporation
       fail-closed). First-boot documented.
       Accept: smoke.sh extended — dev token from Hydra → GET /v1/me 200;
       docs/identity.md describes the DLT-gated path.
+      DONE 2026-10-18: compose gains `hydra-migrate`/`hydra` +
+      `kratos-migrate`/`kratos` (images pinned `oryd/hydra:v26.4.2` +
+      `oryd/kratos:v26.4.2`, latest per Ory changelog 2026-10-15);
+      Hydra `serve all --dev` with explicit `URLS_SELF_ISSUER=
+      http://hydra:4444` (matches API/chat `HYDRA_ISSUER`), Kratos serves
+      `services/identity/kratos/kratos.yml` (dev config, email+password,
+      optional E.164 phone trait reserved for the OTP future, courier
+      unconfigured, dev secrets clearly marked) + `identity.schema.json`;
+      api env now sets `HYDRA_ISSUER`/`HYDRA_JWKS_URL`/`JWT_AUDIENCE`
+      explicitly. New `services/api/internal/otp` package: `Sender`
+      interface, `StubSender` (every Send → typed
+      `*ErrSMSSendingDisabled`, never a faked delivery), `NewSender`
+      (only "stub"/"" registered; unknown provider = fail-closed error),
+      `GenerateCode()` (crypto/rand 6-digit), `ValidatePhone()` (E.164);
+      `OTP_PROVIDER` env (default "stub") in config + compose; main.go
+      constructs the sender at startup and refuses to boot on unknown
+      providers. New `docs/identity.md`: token-loop diagram, compose
+      table, first boot, the smoke D1 loop, login/consent UI as Wave 1.5,
+      the full DLT-gated SMS path + post-incorporation checklist,
+      production secrets guidance, out-of-scope list (E2E Wave 2, real
+      SMS, login UI). `scripts/smoke.sh` extended: boots hydra+kratos
+      (waits on openid-configuration + /health/alive), creates a
+      `sutra-smoke` OAuth2 client with the `jwt-bearer` grant type
+      (→ JWT access tokens; `hydra create client` singular-flag syntax
+      verified against the v2 CLI reference), mints a token via
+      client_credentials (aud `sutra-api`), asserts it is JWT-shaped,
+      recreates `api` WITHOUT `AUTH_BYPASS` (bypass skips verification,
+      so leaving it on would prove nothing), then asserts
+      `GET /v1/me` → 200 with `subject == "sutra-smoke"` and no-token →
+      401. `docs/dev-setup.md` service table + identity paragraph
+      updated; CI `smoke` job comment updated.
+      VERIFIED: `gofmt` clean, `go build ./...` + `go vet ./...` green,
+      `go test ./...` green (4 new otp tests pass); fail-closed proven
+      live — `OTP_PROVIDER=bogus-gateway` → binary logs
+      "invalid OTP_PROVIDER — refusing to start" and exits before
+      touching the DB; `bash -n`, YAML (compose/CI), JSON schema, SPDX
+      headers all clean; Hydra/Kratos DSNs structurally match the real
+      compose postgres credentials. Full stack boot + the Hydra token
+      loop are CI-gated (no docker on this VM) via the extended smoke
+      job. Pushed.
 
 - [ ] **D2. Profiles + follow graph**
       Migration 0003: profiles (user_id PK, handle UNIQUE, display_name,
@@ -626,3 +666,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-18 ~02:40 IST: C2 done — `docs/openapi.yaml` (OpenAPI 3.1.0, hand-written with keep-in-sync note): /healthz, /readyz (incl. 503 envelope), GET /v1/me (Bearer RS256, JIT-provision semantics), 405 Allow path, catch-all 404; User + error-envelope schemas, all 10 stable codes, auth security scheme (RS256-pinned, exp/iss/aud, AUTH_BYPASS hatch), global conventions (X-Request-ID, security headers, per-IP rate limit + Retry-After). New `redocly.yaml` (2 rules deliberately disabled, commented) + CI `openapi` job linting the spec on every push. Verified: `npx @redocly/cli lint` → valid, 0 warnings (a missed unquoted colon was the only fix). Pushed.
 - 2026-10-18 ~03:10 IST: C3 done — `docs/production.md`: secrets table (generation commands, gitignored .env), full api+chat env reference cross-checked against config.go/runtime.exs, image builds, migration procedure (api advisory-locked self-migrate; chat via Release.migrate(); separate ledgers), first-boot compose steps with docker-compose.prod.yml override, /healthz-vs-/readyz probe guidance, backups (PG nightly+WAL, seaweedfs snapshots, presence ephemeral), scaling (stateless api + limiter caveat, chat clustering via CLUSTER_ENABLED/RELEASE_NODE/RELEASE_COOKIE, PG single-primary caveat), incident table, pre-flight checklist, rollback, Kubernetes notes. Honest caveat documented: Hydra not landed (issue #4) → identity fail-closed in prod; AUTH_BYPASS dev-only, forbidden in prod. Pushed.
 - 2026-10-18 ~03:40 IST: C4 done — benchmarks: `docs/benchmarks.md` (methodology + hardware template + re-run policy; baseline tables TBD — no fabricated numbers); Go bench tests (cmd/api: Healthz seq/parallel, 404, 401, 405; middleware: limiter allow seq/parallel, envelope write, RequestID/SecurityHeaders isolation); `scripts/bench_ws.py` (stdlib Phoenix-channels-v2 load probe: conns/sec, server-confirmed msgs/sec, ack p50/p95/p99, --fail-on-errors); smoke.sh runs a short 20×10 probe with --fail-on-errors; CI go-api job runs the short bench suite. Verified: bash -n + py_compile + YAML clean, SPDX headers; bench_ws.py vs fake Phoenix server — happy 10×5 → 50/50 acks exit 0, ack-drop → errors counted + exit 3, refused port → connect errors counted + JSON exit 0. Go compile/bench CI-gated (no Go on this VM, apt locked). Pushed. **ALL PHASES COMPLETE — backend production build done; report to founder.**
+- 2026-10-18 ~04:35 IST: D1 done — real Ory identity plane in compose (Hydra v26.4.2 + Kratos v26.4.2, pinned; migrate one-shots; Kratos dev config + identity schema); Go API verifies Hydra RS256 JWTs via the unchanged A2 JWKS path (HYDRA_ISSUER/JWKS_URL/JWT_AUDIENCE explicit in compose); `internal/otp` adapter interface + fail-closed stub (`OTP_PROVIDER` env-gated, unknown provider refuses boot — proven live); `docs/identity.md` (DLT-gated SMS path + post-incorporation checklist); smoke.sh extended with the real-issuer loop (Hydra JWT → /v1/me 200 with bypass OFF, no-token → 401). Verified: go build+vet+test green, gofmt/bash/YAML/JSON/SPDX clean, `hydra create client` syntax confirmed against v2 CLI reference. Full-stack run is CI-gated. Pushed.

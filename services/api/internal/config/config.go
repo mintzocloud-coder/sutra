@@ -24,6 +24,8 @@ type Config struct {
 	RateLimitBurst  int      // max burst per client IP
 	CORSOrigins     []string // CORS allowlist; empty = CORS disabled
 	CORSMaxAge      int      // preflight cache seconds
+	OTPProvider     string   // SMS gateway for phone OTP: "stub" until DLT
+	// registration post-incorporation (see internal/otp, docs/identity.md)
 }
 
 func getEnv(key, fallback string) string {
@@ -68,5 +70,6 @@ func Load() Config {
 		RateLimitBurst:  burst,
 		CORSOrigins:     parseCORSOrigins(getEnv("CORS_ORIGINS", "")),
 		CORSMaxAge:      maxAge,
+		OTPProvider:     getEnv("OTP_PROVIDER", "stub"),
 	}
 }
