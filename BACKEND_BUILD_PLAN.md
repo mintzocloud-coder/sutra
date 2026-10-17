@@ -386,10 +386,29 @@ Signal for messaging; idiomatic production Go services for the API).
       shared mode lets the channel process use the test's connection.
       Pushed.
 
-- [ ] **B7. Dockerfile hardening**
+- [x] **B7. Dockerfile hardening**
       Non-root, releases (`mix release`) instead of `mix phx.server`
       for production image.
       Accept: release boots; `mix phx.server` kept for dev.
+      DONE 2026-10-18: multi-stage `services/chat/Dockerfile` — build stage
+      (elixir:1.18-alpine, MIX_ENV=prod, deps-first layer caching,
+      `mix release`), runtime stage (alpine:3.21, libstdc++/libgcc/
+      ncurses-libs/ca-certificates, non-root `app` user, `--chown` copy,
+      `USER app`, `bin/sutra_chat start` in foreground so SIGTERM reaches
+      the BEAM). New `config/prod.exs` (minimal; required because config.exs
+      imports `#{config_env()}.exs` — `mix release` would fail without it).
+      `config/runtime.exs` now fails closed at boot without SECRET_KEY_BASE
+      (the dev key baked into config.exs must never ship) and sets endpoint
+      `url.host` from PHX_HOST. New `SutraChat.Release` module
+      (`migrate/0`, `rollback/2` — releases have no `mix`). HEALTHCHECK via
+      `bin/sutra_chat pid` (endpoint is websocket-only, no HTTP routes yet).
+      Compose chat docs updated (SECRET_KEY_BASE, migrate command,
+      RELEASE_NODE/RELEASE_COOKIE now functional for clustering); README
+      documents dev=`mix phx.server` / prod=release split. CI `compose` job
+      now also builds the chat image on every push (A8-style gate).
+      VERIFIED: YAML valid for compose + CI; SPDX headers on all new files;
+      full `mix release` + image boot are CI-gated (no Elixir/docker on this
+      VM — same standing constraint as B1–B6). **Phase B complete.**
 
 ## Phase C — Integration, docs, proof
 
@@ -437,3 +456,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-17 ~23:55 IST: B4 done — delivery receipts: send path persist → broadcast → `msg:ack` push (sender only, pushed event not reply, never precedes durability); `persist_message/1` returns `{:ok, message, deduped}` via single-statement upsert with `xmax`-probe fresh-vs-retry detection (no extra SELECT, race-free); pure `Chat.ack_payload/2` (id/room_id/echoed client_msg_id/deduped/sent_at); `docs/delivery-semantics.md` documents the at-least-once contract + client retry rules + crash windows. Verified: 3 ExUnit tests green, modules compile vs real ecto beams, exact upsert SQL proven at parameterized-protocol level on PG16 (fresh=t / retry→same row f / other sender→new t). Pushed.
 - 2026-10-18 ~00:35 IST: B5 done — presence hardening: libcluster 3.5.0 dep + Cluster.Supervisor in app tree (no-op when disabled); runtime.exs opt-in topologies (CLUSTER_ENABLED=1 → gossip; commented k8s DNS strategy); per-device presence metas (online_at ms/device/status) with client device_id join param; docs/presence.md; ExUnit presence suite (5 tests). NOTE: this run's VM lost apt Elixir mid-run and provisioning's apt-get update wedged — no local Elixir runtime, so the behavioral harness couldn't execute; per plan, CI (1.18) is the gate. All libcluster/Phoenix.Presence APIs verified against real dep sources; SPDX check green. Pushed.
 - 2026-10-18 ~01:10 IST: B6 done — channel tests: SutraChatWeb.ChatChannelTest (13 tests, async:false, Phoenix.ChannelTest vs real Repo via Ecto sandbox + real Presence): join/auth (unauthorized socket refused, bad room ids rejected), presence_state/diff, send→persist→broadcast→sender-only msg:ack, client_msg_id dedupe (second ack deduped:true + original id, 1 row), history oldest-first + cursor pagination + invalid cursor, payload validation errors. New test infra: config/test.exs (sandbox Repo, DATABASE_URL in CI / local fallback, server:false, quiet logger), import_config per-env, test/support (DataCase, ChannelCase) via elixirc_paths(:test), test_helper sandbox manual mode. CI elixir-chat job now runs postgres:16 + mix ecto.create/migrate + mix test. Verified: syntax-checked all 7 files, SPDX headers present; full compile/test CI-gated (1.14 can't build phoenix_template 1.1.0). Pushed.
+- 2026-10-18 ~01:35 IST: B7 done — chat Dockerfile hardening: multi-stage `mix release` build (deps-first caching), alpine:3.21 runtime (libstdc++/libgcc/ncurses-libs/ca-certificates), non-root `app` user, foreground `bin/sutra_chat start`, HEALTHCHECK via release `pid` (websocket-only endpoint). New config/prod.exs (minimal — `mix release` needs it since config.exs imports per-env files); runtime.exs fails closed at boot without SECRET_KEY_BASE (dev key never ships) + PHX_HOST url override; new SutraChat.Release migrate/rollback module (no `mix` inside releases); compose docs (SECRET_KEY_BASE, migrate command, RELEASE_NODE/COOKIE functional); README dev/prod split; CI builds the chat image on every push. Verified: YAML valid, SPDX headers present; release assembly + boot CI-gated (no Elixir/docker on this VM). Pushed. **Phase B complete.**

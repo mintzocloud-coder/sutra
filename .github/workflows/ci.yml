@@ -23,6 +23,10 @@ jobs:
       - name: Build API production image
         # Gates A8: the hardened Dockerfile must build on every push.
         run: docker build -f services/api/Dockerfile services/api
+      - name: Build chat production image
+        # Gates B7: the release-based Dockerfile must build on every push
+        # (`mix release` runs inside; full local compile is CI-gated).
+        run: docker build -f services/chat/Dockerfile services/chat
 
   go-api:
     name: Go API builds and tests

@@ -39,15 +39,24 @@ services:
     environment:
       MIX_ENV: prod
       DATABASE_URL: "postgres://sutra:sutra@postgres:5432/sutra?sslmode=disable"
+      # B7: the chat image is a `mix release` now. It fails closed at boot
+      # without a real SECRET_KEY_BASE (the dev key baked into config.exs
+      # is never used). Generate one and keep it out of git:
+      #   mix phx.gen.secret
+      # SECRET_KEY_BASE: "paste-generated-value-here"
+      # First boot of a fresh database (migrations live in the release,
+      # `mix` does not — see SutraChat.Release):
+      #   docker compose run --rm chat /app/bin/sutra_chat eval "SutraChat.Release.migrate()"
       # Same identity contract as the API service (docs/auth-contract.md).
       # Hydra itself lands with issue #4; until then the verifier fails
       # closed (socket connects are refused, like the API's 401s).
       HYDRA_ISSUER: "http://hydra:4444"
       JWT_AUDIENCE: "sutra-api"
       # Multi-node presence clustering (B5, docs/presence.md): opt-in.
-      # Single chat replica needs nothing. For >1 chat node, set
-      # CLUSTER_ENABLED=1 on every chat replica plus a shared
-      # RELEASE_COOKIE (and RELEASE_NODE per node once B7 ships releases).
+      # Single chat replica needs nothing. For >1 chat node, releases (B7)
+      # honor RELEASE_NODE/RELEASE_COOKIE natively — set CLUSTER_ENABLED=1
+      # on every chat replica plus a shared RELEASE_COOKIE and a unique
+      # RELEASE_NODE per replica (e.g. sutra-chat@10.0.0.2).
       # CLUSTER_ENABLED: "1"
       # CLUSTER_SECRET: "change-me-in-prod"
       # RELEASE_COOKIE: "change-me-in-prod"

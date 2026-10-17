@@ -13,6 +13,18 @@ if config_env() == :prod do
     url: database_url,
     pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10")
 
+  # config.exs bakes a DEV-ONLY secret_key_base into the release — a real
+  # deployment must never run with it. Fail closed at boot (not at build,
+  # so one image serves every environment) when the operator hasn't
+  # provided one. Generate with `mix phx.gen.secret`.
+  secret_key_base =
+    System.get_env("SECRET_KEY_BASE") ||
+      raise "SECRET_KEY_BASE is not set (required in prod)"
+
+  config :sutra_chat, SutraChatWeb.Endpoint,
+    secret_key_base: secret_key_base,
+    url: [host: System.get_env("PHX_HOST") || "localhost"]
+
   # Same identity contract as the Go API service, read at boot (not build)
   # so operators configure identity once for both services.
   config :sutra_chat, :auth,

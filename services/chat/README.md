@@ -20,3 +20,14 @@ Elixir's rarity is deliberate: thin talent pool = harder to copy. The footprint 
 - Message store: partitioned PostgreSQL 18 append-only tables, `client_msg_id` idempotency.
 - E2E encryption is a **Wave-2** goal (libsignal/MLS) — ship TLS + at-rest first, design the seams now.
 - Every new module: supervision tree first, tests with it.
+
+## Running
+
+- **Dev:** `mix phx.server` — websocket on `:4000`. Postgres defaults live
+  in `config/config.exs`; override with `DATABASE_URL`.
+- **Prod:** `mix release` image only — `mix phx.server` is never used in
+  production. The Dockerfile builds the release, drops to a non-root user,
+  and boots with `bin/sutra_chat start`. Required env: `DATABASE_URL` and
+  `SECRET_KEY_BASE` (generate with `mix phx.gen.secret`; the release fails
+  closed without it). First boot against a fresh database:
+  `bin/sutra_chat eval "SutraChat.Release.migrate()"`.
