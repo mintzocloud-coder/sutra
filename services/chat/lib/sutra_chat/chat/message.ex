@@ -31,6 +31,11 @@ defmodule SutraChat.Chat.Message do
     message
     |> cast(attrs, @required_fields)
     |> validate_required(@required_fields)
+    # Size caps mirror SutraChat.Chat.RoomPolicy (the channel rejects
+    # oversized payloads first, but the persistence boundary must never
+    # depend on the channel having checked).
+    |> validate_length(:body, max: 4096)
+    |> validate_length(:client_msg_id, max: 128)
     # The unique index backs the INSERT ... ON CONFLICT in Chat.persist_message/1.
     |> unique_constraint([:sender_subject, :client_msg_id],
       name: :messages_sender_subject_client_msg_id_index

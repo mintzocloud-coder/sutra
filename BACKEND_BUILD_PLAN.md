@@ -265,12 +265,28 @@ Signal for messaging; idiomatic production Go services for the API).
       key tuples on OTP 25's crypto 5.1 (`pkey.c:357` badarg) — use the
       stable `:public_key.sign/3` + `:public_key.verify/4` instead.
 
-- [ ] **B3. Channel authorization**
+- [x] **B3. Channel authorization**
       `ChatChannel.join`: only allow `room:*` for authenticated subjects;
       document the room membership model (Wave 1: open rooms by ID;
       Wave 2: membership lists). Payload validation (max body length,
       e.g. 4096 chars).
       Accept: unauthenticated join → error; oversized body → error.
+      DONE 2026-10-17: new pure `SutraChat.Chat.RoomPolicy` (no Repo/Phoenix,
+      unit-testable): `authorize_join/2` rejects nil/empty `user_id`
+      (:unauthorized — defense-in-depth behind UserSocket's connect refusal)
+      and malformed room ids (`^[A-Za-z0-9_-]{1,64}$`); `authorize_send/2`
+      rejects empty payloads + body > 4096 chars (Telegram's cap) +
+      client_msg_id > 128 chars. `ChatChannel.join/3` and
+      `handle_in("message:new")` route through it with clean
+      `{:error, %{reason: ...}}` replies; `Message.changeset` enforces the
+      same caps at the persistence boundary. New doc `docs/room-membership.md`
+      (Wave 1 open-rooms-by-ID rationale + enforcement table; Wave 2
+      membership-list design where `authorize_join/2` keeps its shape;
+      Wave 3+ E2E note). Tests: 10 ExUnit cases green (join auth/matrix,
+      boundary 64/65, size caps, grapheme-vs-byte emoji check) + changeset
+      verified against real ecto beams (4096 ok, 4097 → "should be at most
+      4096 character(s)", 129-char client_msg_id rejected). Syntax-checked
+      all touched files; full `mix compile` still CI-gated (1.14). Pushed.
 
 - [ ] **B4. Delivery receipts**
       `msg:ack` event: sender gets confirmation when message persisted +
@@ -334,3 +350,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-17 ~21:55 IST: A8 done — Dockerfile hardening (multi-stage, static stripped binary, non-root `app` user, HEALTHCHECK on /healthz, exec ENTRYPOINT) + CI `docker build` step for the API image. Verified: exact Dockerfile build flags → statically-linked stripped binary, `go vet` clean; ran as unprivileged uid 65534 with /healthz, /readyz, /v1/me all 200; SIGTERM → "api stopped", clean exit. Local `docker build` impossible on this VM (dockerd: no iptables kernel support) — CI build step is the durable gate. Pushed. **Phase A complete.**
 - 2026-10-17 ~22:35 IST: B1 done — Ecto message persistence (Repo, migration, Message schema, Chat context with atomic upsert dedupe + cursor-paged history, channel persist-before-broadcast + history on join, DATABASE_URL runtime config + compose wiring). Verified on real PG at SQL level (dedupe/pagination semantics) + Ecto-level (compile vs real ecto beams, changeset validation); full local `mix compile` impossible on apt Elixir 1.14 (phoenix_template/postgrex need ≥1.15/1.16) — CI (1.18) is the gate. Lesson: NEVER pin deps down just for local 1.14 compile — old postgrex/decimal pins carry HIGH/MEDIUM CVEs; keep latest and let CI gate. Pushed.
 - 2026-10-17 ~23:05 IST: B2 done — socket authentication: pure RS256 verifier (Token, stdlib :public_key + Jason, mirrors Go internal/oidc claim-for-claim) + TokenVerifier GenServer (JWKS cache 15m TTL, lazy fetch, rotation refresh) + UserSocket.connect requires token param, refuses without/invalid, assigns subject. Contract in docs/auth-contract.md; compose chat gets HYDRA_ISSUER/JWT_AUDIENCE. Verified: 34-check local harness green (all error paths, GenServer vs stub JWKS incl. rotation + issuer-down, bypass) + socket glue via stub; ExUnit suite (18 tests) shipped for CI/B6. Lesson: :crypto.sign/verify(:rsa,...) rejects key tuples on OTP 25 crypto 5.1 — use :public_key.sign/3 + :public_key.verify/4. Pushed.
+- 2026-10-17 ~23:35 IST: B3 done — channel authorization: pure `SutraChat.Chat.RoomPolicy` (join auth check + room-id charset/length + send size caps), wired into `ChatChannel.join/3` and `handle_in("message:new")` with clean error replies; `Message.changeset` mirrors caps as defense-in-depth; `docs/room-membership.md` documents Wave 1 open-rooms-by-ID + Wave 2 membership-list roadmap. Verified: 10 ExUnit tests green, changeset caps confirmed against real ecto beams (4096 ok / 4097 rejected), SPDX header check green. Full `mix compile` CI-gated. Pushed.
