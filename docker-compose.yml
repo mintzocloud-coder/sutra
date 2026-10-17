@@ -39,6 +39,11 @@ services:
     environment:
       MIX_ENV: prod
       DATABASE_URL: "postgres://sutra:sutra@postgres:5432/sutra?sslmode=disable"
+      # Same identity contract as the API service (docs/auth-contract.md).
+      # Hydra itself lands with issue #4; until then the verifier fails
+      # closed (socket connects are refused, like the API's 401s).
+      HYDRA_ISSUER: "http://hydra:4444"
+      JWT_AUDIENCE: "sutra-api"
     depends_on:
       - postgres
 

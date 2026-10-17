@@ -15,7 +15,9 @@ defmodule SutraChat.MixProject do
   def application do
     [
       mod: {SutraChat.Application, []},
-      extra_applications: [:logger, :runtime_tools]
+      # :inets + :ssl back the JWKS fetches in TokenVerifier (stdlib HTTP,
+      # no extra dependency).
+      extra_applications: [:logger, :runtime_tools, :inets, :ssl]
     ]
   end
 

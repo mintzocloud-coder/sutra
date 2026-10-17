@@ -233,10 +233,37 @@ Signal for messaging; idiomatic production Go services for the API).
       attempted 1.14-compatible pin (postgrex 0.19.3) was REVERTED after
       `mix hex.audit` showed HIGH/MEDIUM CVEs in the old pins. Pushed.
 
-- [ ] **B2. Socket authentication**
+- [x] **B2. Socket authentication**
       `UserSocket.connect/3`: verify JWT (shared secret/JWKS with API —
       document the contract), reject unauthenticated; assign subject.
       Accept: no/invalid token → connect refused; valid → `socket.assigns.subject`.
+      DONE 2026-10-17: new `SutraChat.Auth.Token` — pure RS256 verifier
+      (stdlib `:public_key` + Jason, no JWT lib), mirroring Go
+      `internal/oidc` claim-for-claim: alg pinned RS256 (none/HS256
+      rejected), kid required, exp with 60s leeway (expiring-within-60s
+      counts as expired, same as Go), iss/aud enforced, sub required,
+      aud string-or-list; new `SutraChat.Auth.TokenVerifier` GenServer —
+      JWKS cache (15m TTL, lazy first fetch, refresh on unknown kid for
+      rotation, single-process serialization = no thundering herd),
+      same env vars as the Go API (`HYDRA_ISSUER` default
+      `http://hydra:4444`, `JWT_AUDIENCE` default `sutra-api`,
+      `AUTH_BYPASS`/`AUTH_BYPASS_SUBJECT` dev bypass with loud WARN);
+      `UserSocket.connect/3` now requires a `token` param, refuses
+      (`:error`) on missing/invalid, assigns `user_id` = subject on valid;
+      contract documented in `docs/auth-contract.md`; compose chat service
+      gets HYDRA_ISSUER/JWT_AUDIENCE (fails closed until Hydra lands in
+      issue #4); `:inets`/`:ssl` added to extra_applications.
+      VERIFIED: apt Elixir 1.14 still can't compile Phoenix — CI-gated as
+      per plan. Locally: syntax-checked all 9 files; Token+TokenVerifier
+      compiled against real Jason beams; 34-check behavioral harness green
+      (all error paths, leeway edge, float exp, JWK parse/reject, GenServer
+      vs stub JWKS: lazy fetch, rotation refresh, unknown-kid, issuer-down
+      clean error, bypass); socket glue exercised via Phoenix.Socket stub
+      (valid→assigns.user_id+id/1, missing/invalid→:error). New ExUnit
+      suite `test/sutra_chat/auth/token_test.exs` (18 tests) + test_helper
+      shipped for CI/B6. GOTCHA: `:crypto.sign/verify` with `:rsa` rejects
+      key tuples on OTP 25's crypto 5.1 (`pkey.c:357` badarg) — use the
+      stable `:public_key.sign/3` + `:public_key.verify/4` instead.
 
 - [ ] **B3. Channel authorization**
       `ChatChannel.join`: only allow `room:*` for authenticated subjects;
@@ -306,3 +333,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-17 ~21:30 IST: A7 done — middleware unit tests (request ID/Logger/Recover/Chain, 8 tests), claims-propagation auth test, /v1/me 200-path X-Request-ID + HTTP-level provision idempotency assertions; CI go-api job now runs `go test ./...` against a postgres:16 service (was build+vet only, gated tests skipped silently in CI). Suite green on throwaway local PG16 and green with 10 graceful skips (no DB). Pushed.
 - 2026-10-17 ~21:55 IST: A8 done — Dockerfile hardening (multi-stage, static stripped binary, non-root `app` user, HEALTHCHECK on /healthz, exec ENTRYPOINT) + CI `docker build` step for the API image. Verified: exact Dockerfile build flags → statically-linked stripped binary, `go vet` clean; ran as unprivileged uid 65534 with /healthz, /readyz, /v1/me all 200; SIGTERM → "api stopped", clean exit. Local `docker build` impossible on this VM (dockerd: no iptables kernel support) — CI build step is the durable gate. Pushed. **Phase A complete.**
 - 2026-10-17 ~22:35 IST: B1 done — Ecto message persistence (Repo, migration, Message schema, Chat context with atomic upsert dedupe + cursor-paged history, channel persist-before-broadcast + history on join, DATABASE_URL runtime config + compose wiring). Verified on real PG at SQL level (dedupe/pagination semantics) + Ecto-level (compile vs real ecto beams, changeset validation); full local `mix compile` impossible on apt Elixir 1.14 (phoenix_template/postgrex need ≥1.15/1.16) — CI (1.18) is the gate. Lesson: NEVER pin deps down just for local 1.14 compile — old postgrex/decimal pins carry HIGH/MEDIUM CVEs; keep latest and let CI gate. Pushed.
+- 2026-10-17 ~23:05 IST: B2 done — socket authentication: pure RS256 verifier (Token, stdlib :public_key + Jason, mirrors Go internal/oidc claim-for-claim) + TokenVerifier GenServer (JWKS cache 15m TTL, lazy fetch, rotation refresh) + UserSocket.connect requires token param, refuses without/invalid, assigns subject. Contract in docs/auth-contract.md; compose chat gets HYDRA_ISSUER/JWT_AUDIENCE. Verified: 34-check local harness green (all error paths, GenServer vs stub JWKS incl. rotation + issuer-down, bypass) + socket glue via stub; ExUnit suite (18 tests) shipped for CI/B6. Lesson: :crypto.sign/verify(:rsa,...) rejects key tuples on OTP 25 crypto 5.1 — use :public_key.sign/3 + :public_key.verify/4. Pushed.
