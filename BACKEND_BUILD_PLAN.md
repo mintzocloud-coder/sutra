@@ -42,13 +42,24 @@ Signal for messaging; idiomatic production Go services for the API).
       main.go uses slog JSON + middleware chain; verified `go build`+`go vet`
       clean, smoke test: X-Request-ID present, /v1/me 401, JSON access logs.
 
-- [ ] **A2. Real JWT verification middleware**
+- [x] **A2. Real JWT verification middleware**
       Complete the OIDC/JWKS seam: fetch + cache JWKS from Hydra issuer URL,
       verify RS256 signature/expiry/issuer/audience; `Authorization: Bearer`
       middleware populating request context with subject + claims; test-mode
       bypass via env for local dev (explicitly logged as insecure).
       Accept: valid token → 200 with subject in context; expired/wrong-signature
       → 401 JSON; unit tests with locally-generated RSA keys.
+      DONE 2026-10-17: rewrote `internal/oidc` — stdlib-only RS256 verifier
+      (no third-party JWT lib): JWKS fetch + cache (15m TTL, refresh on
+      unknown kid for key rotation), alg pinned to RS256 (rejects alg:none),
+      exp/iss/aud checks with 60s skew leeway; new `internal/middleware/auth.go`
+      `RequireAuth` stores subject+claims in context, 401 JSON envelope,
+      `AUTH_BYPASS=1` dev bypass (loud WARN at startup). Config: HYDRA_ISSUER,
+      JWT_AUDIENCE, AUTH_BYPASS, AUTH_BYPASS_SUBJECT. `/v1/*` now behind auth;
+      /healthz open. Tests: 8 oidc tests + 4 middleware tests (RSA-2048 keys,
+      httptest JWKS, incl. rotation) — `go build`+`go vet`+`go test ./...`
+      green; live smoke: 401 JSON without token, 200+bypass subject with
+      AUTH_BYPASS=1.
 
 - [ ] **A3. PostgreSQL connection + migrations**
       Add: `database/sql` + pgx pool, env-configured DSN, versioned SQL
@@ -163,3 +174,4 @@ Then report to founder: production-ready backend live on main.
 ## Log
 
 - 2026-10-17: Plan created. Starting Phase A.
+- 2026-10-17 18:38 IST: A2 done — real JWT verification (RS256, JWKS cache+rotation, exp/iss/aud), RequireAuth middleware, AUTH_BYPASS dev mode. Verified `go build`+`go vet`+`go test ./...` green, live smoke 401/200 paths. Pushed.

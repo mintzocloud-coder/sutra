@@ -22,7 +22,17 @@ func main() {
 		Level: slog.LevelInfo,
 	}))
 	cfg := config.Load()
-	verifier := oidc.NewVerifier(cfg.HydraJWKSURL)
+	if cfg.AuthBypass {
+		log.Warn("AUTH_BYPASS=1: JWT verification DISABLED — every request is "+
+			"authenticated as the bypass subject. INSECURE: local development only, "+
+			"never enable in production.",
+			"bypass_subject", cfg.BypassSubject)
+	}
+	verifier := oidc.NewVerifier(cfg.HydraJWKSURL, cfg.HydraIssuer, cfg.JWTAudience)
+	auth := middleware.RequireAuth(verifier, log, middleware.AuthOptions{
+		Bypass:        cfg.AuthBypass,
+		BypassSubject: cfg.BypassSubject,
+	})
 
 	mux := http.NewServeMux()
 
@@ -37,15 +47,15 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	mux.HandleFunc("/v1/me", func(w http.ResponseWriter, r *http.Request) {
-		sub, err := verifier.Subject(r.Header.Get("Authorization"))
-		if err != nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
+	// Protected API routes: every /v1/* handler runs behind RequireAuth,
+	// so the verified subject is always in the request context.
+	v1 := http.NewServeMux()
+	v1.HandleFunc("/v1/me", func(w http.ResponseWriter, r *http.Request) {
+		sub := middleware.SubjectFromContext(r.Context())
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"sub":` + `"` + sub + `"}`))
 	})
+	mux.Handle("/v1/", auth(v1))
 
 	// Middleware order (outermost first): Recover → RequestID → Logger.
 	// Recover must be outermost so it also catches panics in the other
