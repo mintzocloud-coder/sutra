@@ -44,6 +44,13 @@ services:
       # closed (socket connects are refused, like the API's 401s).
       HYDRA_ISSUER: "http://hydra:4444"
       JWT_AUDIENCE: "sutra-api"
+      # Multi-node presence clustering (B5, docs/presence.md): opt-in.
+      # Single chat replica needs nothing. For >1 chat node, set
+      # CLUSTER_ENABLED=1 on every chat replica plus a shared
+      # RELEASE_COOKIE (and RELEASE_NODE per node once B7 ships releases).
+      # CLUSTER_ENABLED: "1"
+      # CLUSTER_SECRET: "change-me-in-prod"
+      # RELEASE_COOKIE: "change-me-in-prod"
     depends_on:
       - postgres
 

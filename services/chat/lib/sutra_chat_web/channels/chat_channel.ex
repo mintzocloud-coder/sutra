@@ -15,6 +15,12 @@ defmodule SutraChatWeb.ChatChannel do
   Delivery semantics are at-least-once; see `docs/delivery-semantics.md`.
   Joins return recent history, cursor-paged.
 
+  Presence: every join tracks the subject with a per-device meta
+  (`online_at` ms, `device`, `status`) and pushes `"presence_state"`;
+  joins/leaves broadcast as `"presence_diff"` (emitted by
+  `Phoenix.Presence` itself). The full contract lives in
+  `SutraChat.Presence` and `docs/presence.md`.
+
   Authorization: only authenticated sockets may join (enforced first at
   `UserSocket.connect/3`, checked again here via
   `SutraChat.Chat.RoomPolicy`); Wave 1 allows any authenticated subject
@@ -43,6 +49,10 @@ defmodule SutraChatWeb.ChatChannel do
       :ok ->
         send(self(), :after_join)
         socket = assign(socket, :room_id, room_id)
+        # Stable per-install device id lets the presence roster label
+        # "phone" vs "laptop"; absent/invalid → server mints a per-session
+        # id in :after_join so metas still distinguish devices.
+        socket = assign(socket, :device_id, join_device_id(params))
 
         case Chat.history(room_id, history_limit(params), history_cursor(params)) do
           {:ok, page} ->
@@ -56,14 +66,34 @@ defmodule SutraChatWeb.ChatChannel do
 
   @impl true
   def handle_info(:after_join, socket) do
+    # One meta per channel join (one per tracking pid): the same user on
+    # two devices accumulates two metas under their user_id key.
+    # "presence_diff" broadcasts on track/untrack are emitted by
+    # Phoenix.Presence itself — see SutraChat.Presence for the contract.
     {:ok, _} =
       Presence.track(socket, socket.assigns.user_id, %{
-        online_at: System.system_time(:second)
+        online_at: System.system_time(:millisecond),
+        device: device_id(socket),
+        status: "online"
       })
 
     push(socket, "presence_state", Presence.list(socket))
     {:noreply, socket}
   end
+
+  # Client-supplied stable id (per app install); capped like client_msg_id.
+  defp device_id(socket) do
+    case socket.assigns[:device_id] do
+      id when is_binary(id) and byte_size(id) > 0 -> id
+      _ -> "anon-" <> Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
+    end
+  end
+
+  defp join_device_id(%{"device_id" => id})
+       when is_binary(id) and byte_size(id) > 0 and byte_size(id) <= 128,
+       do: id
+
+  defp join_device_id(_params), do: nil
 
   @impl true
   def handle_in("message:new", %{"body" => body, "client_msg_id" => client_msg_id}, socket) do

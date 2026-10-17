@@ -12,6 +12,12 @@ defmodule SutraChat.Application do
       SutraChat.Auth.TokenVerifier,
       {Phoenix.PubSub, name: SutraChat.PubSub},
       SutraChat.Presence,
+      # libcluster topology workers (B5): with no topologies configured
+      # (default — clustering is opt-in via CLUSTER_ENABLED=1) this is a
+      # no-op supervisor. When enabled, it connects BEAM nodes so
+      # Phoenix.Presence / PubSub CRDTs converge across chat nodes.
+      {Cluster.Supervisor,
+       [Application.get_env(:libcluster, :topologies, []), [name: SutraChat.ClusterSupervisor]]},
       SutraChatWeb.Endpoint
     ]
 

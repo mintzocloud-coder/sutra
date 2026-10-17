@@ -16,8 +16,9 @@ defmodule SutraChat.MixProject do
     [
       mod: {SutraChat.Application, []},
       # :inets + :ssl back the JWKS fetches in TokenVerifier (stdlib HTTP,
-      # no extra dependency).
-      extra_applications: [:logger, :runtime_tools, :inets, :ssl]
+      # no extra dependency). :crypto backs libcluster gossip HMAC and the
+      # per-device presence session ids.
+      extra_applications: [:logger, :runtime_tools, :inets, :ssl, :crypto]
     ]
   end
 
@@ -28,7 +29,11 @@ defmodule SutraChat.MixProject do
       {:jason, "~> 1.4"},
       {:bandit, "~> 1.5"},
       {:ecto_sql, "~> 3.11"},
-      {:postgrex, "~> 0.19"}
+      {:postgrex, "~> 0.19"},
+      # Multi-node clustering for Phoenix.Presence / Phoenix.PubSub CRDT
+      # convergence (B5). Gossip strategy for dev/local, Kubernetes
+      # strategy (commented config) for k8s.
+      {:libcluster, "~> 3.3"}
     ]
   end
 end
