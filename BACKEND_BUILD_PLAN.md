@@ -470,11 +470,42 @@ Signal for messaging; idiomatic production Go services for the API).
       twice: YAML parse + full semantic lint). Kept hand-written because
       there is no codegen step — header comment in the file says so.
 
-- [ ] **C3. Production runbook**
+- [x] **C3. Production runbook**
       `docs/production.md`: env vars, secrets, migrations, backups,
       scaling notes (when to add chat nodes, PG read replicas),
       incident basics.
       Accept: a new contributor can deploy from this doc.
+      DONE 2026-10-18: new `docs/production.md` — secrets generation
+      table (SECRET_KEY_BASE/POSTGRES_PASSWORD/RELEASE_COOKIE/
+      CLUSTER_SECRET, gitignored .env, chmod 600), full env reference
+      for api (internal/config.Load) and chat (config/runtime.exs),
+      image build commands, migration procedure (api self-migrates
+      advisory-locked at boot; chat via `SutraChat.Release.migrate()`
+      before starting; separate ledgers schema_migrations vs
+      chat_schema_migrations; backup-before-migrate rule),
+      first-boot compose steps with a `docker-compose.prod.yml`
+      override pattern, health/readiness verification table
+      (/healthz liveness DB-free, /readyz readiness DB-aware — the
+      probe your orchestrator should use), backup scope (PG nightly
+      + WAL archiving once real users, seaweedfs volume snapshots,
+      presence/valkey ephemeral by design), scaling notes (stateless
+      api replicas + per-IP limiter caveat as replicas grow;
+      chat multi-node via CLUSTER_ENABLED/RELEASE_NODE/RELEASE_COOKIE
+      + k8s DNS preference; PG single-primary today, read-split not
+      yet built), incident table (readyz 503, 401s, socket refusals,
+      429 spikes, presence divergence, panics, restarts), pre-flight
+      checklist (AUTH_BYPASS unset both services, SECRET_KEY_BASE,
+      Hydra consistency, CORS never *, backup, smoke on staging,
+      CI green, secrets via store, cluster secrets changed), rollback
+      (immutable images, forward-only migrations, expand/migrate/
+      contract), Kubernetes notes (probes, secrets, DNS clustering,
+      PDB for websocket drain). Honest caveat documented: Hydra
+      (issue #4) not landed → identity fail-closed in prod until it
+      does; AUTH_BYPASS is the documented dev-only hatch, forbidden
+      in production. Verified: every env var name/default cross-checked
+      against `internal/config/config.go` and `config/runtime.exs`;
+      migration files/ledgers and migrate command against the real
+      repo state. Pushed.
 
 - [ ] **C4. Benchmarks**
       Basic load numbers: ws connections/sec, msg throughput single node
@@ -506,3 +537,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-18 ~01:35 IST: B7 done — chat Dockerfile hardening: multi-stage `mix release` build (deps-first caching), alpine:3.21 runtime (libstdc++/libgcc/ncurses-libs/ca-certificates), non-root `app` user, foreground `bin/sutra_chat start`, HEALTHCHECK via release `pid` (websocket-only endpoint). New config/prod.exs (minimal — `mix release` needs it since config.exs imports per-env files); runtime.exs fails closed at boot without SECRET_KEY_BASE (dev key never ships) + PHX_HOST url override; new SutraChat.Release migrate/rollback module (no `mix` inside releases); compose docs (SECRET_KEY_BASE, migrate command, RELEASE_NODE/COOKIE functional); README dev/prod split; CI builds the chat image on every push. Verified: YAML valid, SPDX headers present; release assembly + boot CI-gated (no Elixir/docker on this VM). Pushed. **Phase B complete.**
 - 2026-10-18 ~02:10 IST: C1 done — full compose stack + `scripts/smoke.sh`: builds images, boots pg/valkey/seaweedfs, runs chat migrations via the release, boots api+chat; asserts /healthz 200 + X-Request-ID, /readyz 200, /v1/me 200 (bypass identity dev-user), websocket join→send→broadcast+msg:ack→reconnect-history round-trip (stdlib Python Phoenix-channels client), seaweedfs /cluster/status 200, valkey PONG. New CI `smoke` job runs it on every push. Fixed 3 real wiring bugs found: api/seaweedfs host-8080 port clash (api→8081), Go-vs-Ecto `schema_migrations` ledger collision (chat → `chat_schema_migrations`), SECRET_KEY_BASE empty-string bypass of the fail-closed check. Verified: shell/Python syntax, YAML parse, SPDX headers, ws client vs fake Phoenix server (happy + negative paths); real end-to-end run is CI-gated. Pushed.
 - 2026-10-18 ~02:40 IST: C2 done — `docs/openapi.yaml` (OpenAPI 3.1.0, hand-written with keep-in-sync note): /healthz, /readyz (incl. 503 envelope), GET /v1/me (Bearer RS256, JIT-provision semantics), 405 Allow path, catch-all 404; User + error-envelope schemas, all 10 stable codes, auth security scheme (RS256-pinned, exp/iss/aud, AUTH_BYPASS hatch), global conventions (X-Request-ID, security headers, per-IP rate limit + Retry-After). New `redocly.yaml` (2 rules deliberately disabled, commented) + CI `openapi` job linting the spec on every push. Verified: `npx @redocly/cli lint` → valid, 0 warnings (a missed unquoted colon was the only fix). Pushed.
+- 2026-10-18 ~03:10 IST: C3 done — `docs/production.md`: secrets table (generation commands, gitignored .env), full api+chat env reference cross-checked against config.go/runtime.exs, image builds, migration procedure (api advisory-locked self-migrate; chat via Release.migrate(); separate ledgers), first-boot compose steps with docker-compose.prod.yml override, /healthz-vs-/readyz probe guidance, backups (PG nightly+WAL, seaweedfs snapshots, presence ephemeral), scaling (stateless api + limiter caveat, chat clustering via CLUSTER_ENABLED/RELEASE_NODE/RELEASE_COOKIE, PG single-primary caveat), incident table, pre-flight checklist, rollback, Kubernetes notes. Honest caveat documented: Hydra not landed (issue #4) → identity fail-closed in prod; AUTH_BYPASS dev-only, forbidden in prod. Pushed.
