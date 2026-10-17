@@ -32,6 +32,26 @@ services:
   # kratos:
   # hydra:
 
+  # Sutra services (scaffolds — see issues #4, #5)
+  chat:
+    build: ./services/chat
+    ports: ["4000:4000"]
+    environment:
+      MIX_ENV: prod
+    depends_on:
+      - postgres
+
+  api:
+    build: ./services/api
+    ports: ["8080:8080"]
+    environment:
+      PORT: "8080"
+      DATABASE_URL: "postgres://sutra:sutra@postgres:5432/sutra?sslmode=disable"
+      VALKEY_ADDR: "valkey:6379"
+    depends_on:
+      - postgres
+      - valkey
+
 volumes:
   pgdata:
   weeddata:
