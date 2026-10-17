@@ -153,11 +153,26 @@ Signal for messaging; idiomatic production Go services for the API).
       401/429/503 all return envelope + echo X-Request-ID; readyz 503→200
       across a real PG kill/restart, healthz 200 throughout.
 
-- [ ] **A7. API tests**
+- [x] **A7. API tests**
       Unit tests for middleware (auth, rate limit, request ID); integration
       test for `/v1/me` against real PG (testcontainers or local PG via
       compose; skip gracefully if unavailable).
       Accept: `go test ./...` green.
+      DONE 2026-10-17: filled the coverage gaps — new
+      `internal/middleware/middleware_test.go` (8 tests: RequestID
+      generate/reuse/echo/uniqueness, FromContext empty, Logger JSON line
+      with request_id + status + duration + implicit-200 default, Recover
+      panic→500 envelope with request_id + no panic-value leak + clean
+      passthrough, Chain first-middleware-outermost order); new
+      `TestRequireAuthPopulatesClaims` in auth_test.go (full claim set
+      reaches handlers: subject/issuer/audience); TestHandler_MeOK
+      strengthened (X-Request-ID asserted on the 200 success path, second
+      GET returns same user id — HTTP-level provision idempotency). CI now
+      actually RUNS the integration tests: `go-api` job has a postgres:16
+      service + TEST_DATABASE_URL + `go test ./...` step (was build+vet
+      only; gated tests skipped silently in CI before). Verified: full
+      suite green on throwaway local PG16 AND green with no DB (10 clean
+      skips). `go build`+`go vet`+`go test ./...` green.
 
 - [ ] **A8. Dockerfile hardening**
       Multi-stage build, `non-root` user, minimal base, `HEALTHCHECK`,
@@ -245,3 +260,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-17 ~20:05 IST: A4 done — users table (migration 0002) + real GET /v1/me with just-in-time provisioning (race-safe ON CONFLICT, claim-seeded display name, NULL handle until claimed). Verified `go build`+`go vet`+`go test ./...` green against real PG16 incl. 8-racer concurrency test; live smoke: first call creates row, second returns same id, no-token → 401 JSON envelope. Pushed.
 - 2026-10-17 ~20:25 IST: A5 done — per-IP token-bucket rate limiter (stdlib-only, RATE_LIMIT_RPS/BURST env, Retry-After + X-RateLimit-Limit), CORS middleware (CORS_ORIGINS allowlist/wildcard/disabled, preflight 204), security headers (nosniff/DENY/referrer-policy/CSP). 12 new middleware tests green; live smoke: 100 rapid reqs → 73×429 JSON envelope, preflight 204 + ACAO for configured origin, all headers on 200/429. Pushed.
 - 2026-10-17 ~20:55 IST: A6 done — JSON error envelope consolidated across ALL error paths: ErrorCode map + WriteStatusError + NotFound/MethodNotAllowed handlers; hand-rolled duplicates removed (auth, users, Recover); main.go extracted newHandler() for tests; /v1/me explicit method guard (405+Allow); RequestID outermost so panics carry real request_id. Tests: 7 unit + cmd/api integration (gated parts skip cleanly); full suite green on throwaway local PG16. Live smoke: 404/405/401/429/503 all envelope-shaped with echoed X-Request-ID; readyz 503→200 across real PG kill/restart. Pushed.
+- 2026-10-17 ~21:30 IST: A7 done — middleware unit tests (request ID/Logger/Recover/Chain, 8 tests), claims-propagation auth test, /v1/me 200-path X-Request-ID + HTTP-level provision idempotency assertions; CI go-api job now runs `go test ./...` against a postgres:16 service (was build+vet only, gated tests skipped silently in CI). Suite green on throwaway local PG16 and green with 10 graceful skips (no DB). Pushed.

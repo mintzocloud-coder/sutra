@@ -144,6 +144,35 @@ func TestRequireAuthBypass(t *testing.T) {
 
 // TestBypassIsExplicitlyInsecure documents the A2 requirement: the bypass
 // path exists only for local dev and the insecure startup warning is real.
+// TestRequireAuthPopulatesClaims verifies the full claim set — not just the
+// subject — reaches downstream handlers, since handlers use claims for
+// display-name seeding and future authorization.
+func TestRequireAuthPopulatesClaims(t *testing.T) {
+	v, key := testSetup(t)
+	h := Chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c := ClaimsFromContext(r.Context())
+		if c == nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte("no claims in context"))
+			return
+		}
+		_, _ = fmt.Fprintf(w, "%s|%s|%s", c.Subject, c.Issuer, c.Audience)
+	}), RequireAuth(v, discardLog, AuthOptions{}))
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+	req.Header.Set("Authorization", "Bearer "+sign(t, key, "user-9", time.Now().Add(time.Hour)))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	want := "user-9|https://issuer.example|[sutra-api]"
+	if rec.Body.String() != want {
+		t.Fatalf("claims in context = %q, want %q", rec.Body.String(), want)
+	}
+}
+
 func TestBypassIsExplicitlyInsecure(t *testing.T) {
 	if os.Getenv("AUTH_BYPASS") == "1" {
 		t.Skip("running with AUTH_BYPASS=1 — bypass is intentionally active")

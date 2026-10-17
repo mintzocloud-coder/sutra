@@ -147,6 +147,10 @@ func TestHandler_V1UnknownPathEnvelope(t *testing.T) {
 	assertErrorResponse(t, rec, http.StatusNotFound, "not_found")
 }
 
+// TestHandler_MeOK exercises the full stack: auth bypass → just-in-time
+// provisioning → 200 with the user row. A second call must return the same
+// row (idempotent provision over HTTP), and the 200 must carry X-Request-ID
+// like every other response.
 func TestHandler_MeOK(t *testing.T) {
 	h, _ := testDeps(t, true)
 	req := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
@@ -155,12 +159,29 @@ func TestHandler_MeOK(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /v1/me = %d (body %q), want 200", rec.Code, rec.Body.String())
 	}
+	if rec.Header().Get("X-Request-ID") == "" {
+		t.Fatal("200 response missing X-Request-ID")
+	}
 	var user map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &user); err != nil {
 		t.Fatalf("me response not JSON: %v", err)
 	}
 	if user["subject"] != "test-user" {
 		t.Fatalf("subject = %v, want test-user", user["subject"])
+	}
+
+	req2 := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("second GET /v1/me = %d (body %q), want 200", rec2.Code, rec2.Body.String())
+	}
+	var user2 map[string]any
+	if err := json.Unmarshal(rec2.Body.Bytes(), &user2); err != nil {
+		t.Fatalf("second me response not JSON: %v", err)
+	}
+	if user2["id"] != user["id"] {
+		t.Fatalf("second call id = %v, want %v (provision not idempotent)", user2["id"], user["id"])
 	}
 }
 
