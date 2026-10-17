@@ -131,10 +131,27 @@ Signal for messaging; idiomatic production Go services for the API).
       path in the same command line SIGTERMs your own shell — `pkill -x`
       only for stopping test servers.
 
-- [ ] **A6. JSON error envelope**
+- [x] **A6. JSON error envelope**
       Standard `{"error":{"code","message","request_id"}}` for all errors;
       map common cases (400/401/403/404/409/422/429/500).
       Accept: every non-2xx from the API matches the envelope (test).
+      DONE 2026-10-17: consolidated every error path onto the envelope —
+      new `ErrorCode()` status→code map (400/401/403/404/405/409/422/429/
+      500/503, "error" fallback), `WriteStatusError()` (code derived from
+      status), `NotFoundHandler()` + `MethodNotAllowedHandler()` (Allow
+      header); removed hand-rolled duplicates in auth.go / users/handler.go
+      / Recover. main.go: extracted `newHandler()` (integration-testable),
+      outer "/" catch-all → 404 envelope, inner /v1/ catch-all → 404,
+      explicit method guard on /v1/me → 405 envelope (no Go method-pattern
+      ambiguity), /readyz 503 → service_unavailable envelope; RequestID
+      moved OUTERMOST so recovered panics carry a real request_id (was
+      empty before). Tests: 7 envelope/mapping/handler unit tests +
+      Recover-with-request-id order test; cmd/api integration tests —
+      404/405/401 envelopes, readyz 503 envelope (closed pool), /v1/me 200
+      (DB parts gated, skip cleanly). `go build`+`go vet`+`go test ./...`
+      green incl. full run on throwaway local PG16. Live smoke: 404/405/
+      401/429/503 all return envelope + echo X-Request-ID; readyz 503→200
+      across a real PG kill/restart, healthz 200 throughout.
 
 - [ ] **A7. API tests**
       Unit tests for middleware (auth, rate limit, request ID); integration
@@ -227,3 +244,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-17 19:25 IST: A3 done — pgx pool + embedded advisory-locked migrations + DB-aware /readyz. Verified end-to-end on real PG16 (kill/restart PG: readyz 503→200, healthz 200 throughout). Tests green. Pushed.
 - 2026-10-17 ~20:05 IST: A4 done — users table (migration 0002) + real GET /v1/me with just-in-time provisioning (race-safe ON CONFLICT, claim-seeded display name, NULL handle until claimed). Verified `go build`+`go vet`+`go test ./...` green against real PG16 incl. 8-racer concurrency test; live smoke: first call creates row, second returns same id, no-token → 401 JSON envelope. Pushed.
 - 2026-10-17 ~20:25 IST: A5 done — per-IP token-bucket rate limiter (stdlib-only, RATE_LIMIT_RPS/BURST env, Retry-After + X-RateLimit-Limit), CORS middleware (CORS_ORIGINS allowlist/wildcard/disabled, preflight 204), security headers (nosniff/DENY/referrer-policy/CSP). 12 new middleware tests green; live smoke: 100 rapid reqs → 73×429 JSON envelope, preflight 204 + ACAO for configured origin, all headers on 200/429. Pushed.
+- 2026-10-17 ~20:55 IST: A6 done — JSON error envelope consolidated across ALL error paths: ErrorCode map + WriteStatusError + NotFound/MethodNotAllowed handlers; hand-rolled duplicates removed (auth, users, Recover); main.go extracted newHandler() for tests; /v1/me explicit method guard (405+Allow); RequestID outermost so panics carry real request_id. Tests: 7 unit + cmd/api integration (gated parts skip cleanly); full suite green on throwaway local PG16. Live smoke: 404/405/401/429/503 all envelope-shaped with echoed X-Request-ID; readyz 503→200 across real PG kill/restart. Pushed.

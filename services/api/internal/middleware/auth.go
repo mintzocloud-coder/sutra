@@ -4,7 +4,6 @@ package middleware
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 
@@ -32,21 +31,6 @@ func ClaimsFromContext(ctx context.Context) *oidc.Claims {
 		return c
 	}
 	return nil
-}
-
-// writeAuthError sends a 401 in the standard error envelope shape
-// (see A6; kept consistent here so the shape is stable).
-func writeAuthError(w http.ResponseWriter, r *http.Request, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusUnauthorized)
-	body, _ := json.Marshal(map[string]any{
-		"error": map[string]any{
-			"code":       "unauthorized",
-			"message":    msg,
-			"request_id": FromContext(r.Context()),
-		},
-	})
-	_, _ = w.Write(body)
 }
 
 // AuthOptions configures RequireAuth.
@@ -79,7 +63,7 @@ func RequireAuth(v *oidc.Verifier, log *slog.Logger, opts AuthOptions) func(http
 				// Log at debug: auth failures are routine (expired tokens,
 				// missing headers) and must not spam the error log.
 				log.Debug("auth rejected", "err", err, "request_id", FromContext(r.Context()))
-				writeAuthError(w, r, "unauthorized")
+				WriteStatusError(w, r, http.StatusUnauthorized, "unauthorized")
 				return
 			}
 			ctx := context.WithValue(r.Context(), subjectKey{}, claims.Subject)

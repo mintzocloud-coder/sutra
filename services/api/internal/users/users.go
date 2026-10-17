@@ -77,10 +77,10 @@ func Provision(ctx context.Context, pool *db.Pool, subject, displayName string) 
 		RETURNING id, subject, handle, display_name, created_at, updated_at`
 
 	var (
-		u       User
-		id      pgtype.UUID
-		handle  pgtype.Text
-		disp    pgtype.Text
+		u      User
+		id     pgtype.UUID
+		handle pgtype.Text
+		disp   pgtype.Text
 	)
 	err := pool.QueryRow(ctx, insert, subject, displayName).
 		Scan(&id, &u.Subject, &handle, &disp, &u.CreatedAt, &u.UpdatedAt)

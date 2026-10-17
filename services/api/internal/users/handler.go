@@ -10,21 +10,6 @@ import (
 	"github.com/mintzocloud-coder/sutra/services/api/internal/middleware"
 )
 
-// writeError sends a JSON error in the standard envelope shape
-// (see A6; kept consistent here so the shape is stable when A6 lands).
-func writeError(w http.ResponseWriter, r *http.Request, status int, code, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	body, _ := json.Marshal(map[string]any{
-		"error": map[string]any{
-			"code":       code,
-			"message":    msg,
-			"request_id": middleware.FromContext(r.Context()),
-		},
-	})
-	_, _ = w.Write(body)
-}
-
 // MeHandler serves GET /v1/me: the identity record for the caller.
 //
 // The subject always comes from the verified JWT (RequireAuth runs
@@ -40,7 +25,7 @@ func MeHandler(pool *db.Pool, log *slog.Logger) http.HandlerFunc {
 			// Invariant broken: this handler must only be reachable
 			// through RequireAuth. Log loudly; do not guess an identity.
 			log.Error("me: no subject in context", "request_id", middleware.FromContext(ctx))
-			writeError(w, r, http.StatusInternalServerError, "internal", "internal server error")
+			middleware.WriteStatusError(w, r, http.StatusInternalServerError, "internal server error")
 			return
 		}
 
@@ -48,7 +33,7 @@ func MeHandler(pool *db.Pool, log *slog.Logger) http.HandlerFunc {
 		if err != nil {
 			log.Error("me: provision failed", "err", err, "subject", subject,
 				"request_id", middleware.FromContext(ctx))
-			writeError(w, r, http.StatusInternalServerError, "internal", "internal server error")
+			middleware.WriteStatusError(w, r, http.StatusInternalServerError, "internal server error")
 			return
 		}
 

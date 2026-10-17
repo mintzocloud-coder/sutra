@@ -94,23 +94,23 @@ func Logger(log *slog.Logger) func(http.Handler) http.Handler {
 }
 
 // Recover catches panics in downstream handlers and converts them into a
-// JSON 500 response instead of crashing the process. The panic value and a
-// stack trace go to the error log; the client only sees the request ID.
+// JSON 500 response in the standard error envelope instead of crashing the
+// process. The panic value and a stack trace go to the error log; the
+// client only sees the request ID. RequestID must run outside Recover so
+// the recovered response carries the request's ID.
 func Recover(log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				if rec := recover(); rec != nil {
-					id := FromContext(r.Context())
 					log.Error("panic recovered",
 						"panic", rec,
-						"request_id", id,
+						"request_id", FromContext(r.Context()),
 						"method", r.Method,
 						"path", r.URL.Path,
 					)
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusInternalServerError)
-					_, _ = w.Write([]byte(`{"error":{"code":"internal","message":"internal server error","request_id":"` + id + `"}}`))
+					WriteJSONError(w, r, http.StatusInternalServerError,
+						"internal", "internal server error")
 				}
 			}()
 			next.ServeHTTP(w, r)
