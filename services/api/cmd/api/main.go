@@ -16,6 +16,7 @@ import (
 	"github.com/mintzocloud-coder/sutra/services/api/internal/db"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/middleware"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/oidc"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/users"
 )
 
 func main() {
@@ -75,13 +76,11 @@ func main() {
 	})
 
 	// Protected API routes: every /v1/* handler runs behind RequireAuth,
-	// so the verified subject is always in the request context.
+	// so the verified subject is always in the request context. GET /v1/me
+	// returns the caller's identity record, provisioning it on first sight
+	// (see internal/users).
 	v1 := http.NewServeMux()
-	v1.HandleFunc("/v1/me", func(w http.ResponseWriter, r *http.Request) {
-		sub := middleware.SubjectFromContext(r.Context())
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"sub":` + `"` + sub + `"}`))
-	})
+	v1.Handle("GET /v1/me", users.MeHandler(pool, log))
 	mux.Handle("/v1/", auth(v1))
 
 	// Middleware order (outermost first): Recover → RequestID → Logger.

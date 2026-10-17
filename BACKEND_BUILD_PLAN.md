@@ -83,13 +83,26 @@ Signal for messaging; idiomatic production Go services for the API).
       pull go1.25 toolchain via pgx v5.11; pinned v5.7.4 + exported
       GOTOOLCHAIN=local during tidy.
 
-- [ ] **A4. Users table + real `/v1/me`**
+- [x] **A4. Users table + real `/v1/me`**
       Migration: `users(id uuid pk, subject text unique, handle text unique,
       display_name text, created_at, updated_at)`. `GET /v1/me` returns the
       DB row for the JWT subject (auto-provision on first seen = "just-in-time
       provisioning", standard for OIDC).
       Accept: first call with new subject creates row; second call returns it;
       unknown subject without token → 401.
+      DONE 2026-10-17: migration `0002_users.sql` (uuid pk via pgcrypto,
+      unique subject/handle, nullable display_name, `set_updated_at()`
+      trigger); new `internal/users` package — `Provision()` (INSERT ...
+      ON CONFLICT (subject) DO NOTHING RETURNING + SELECT fallback, race-safe;
+      display name seeded from OIDC `name`/`preferred_username` claims, never
+      overwritten on later calls; handle stays NULL until claimed);
+      `MeHandler` serves GET /v1/me with standard JSON error envelope.
+      Verified: `go build`+`go vet`+`go test ./...` green on real PG16
+      (8-racer concurrent-provision test converges on 1 row); live smoke:
+      call 1 creates row, call 2 returns same id, no-token → 401 JSON
+      envelope, X-Request-ID present. main.go now uses "GET /v1/me"
+      method-pattern routing. GOTCHA: pkill -f with the binary name in the
+      same command line self-matches — use `pkill -x` instead.
 
 - [ ] **A5. Rate limiting + CORS + security headers**
       Add: per-IP token-bucket rate limiter (in-memory, configurable),
@@ -192,3 +205,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-17 18:38 IST: A2 done — real JWT verification (RS256, JWKS cache+rotation, exp/iss/aud), RequireAuth middleware, AUTH_BYPASS dev mode. Verified `go build`+`go vet`+`go test ./...` green, live smoke 401/200 paths. Pushed.
 - 2026-10-17 18:56 IST: CI red root cause = `scripts/check-headers.sh` failing on itself + `.gitignore` (both lacked the SPDX header it enforces; other 3 CI jobs green on all 3 runs). Fix: added `# SPDX-License-Identifier: AGPL-3.0-or-later` to both files (2 lines); checker verified passing locally. Rides the next scheduled push.
 - 2026-10-17 19:25 IST: A3 done — pgx pool + embedded advisory-locked migrations + DB-aware /readyz. Verified end-to-end on real PG16 (kill/restart PG: readyz 503→200, healthz 200 throughout). Tests green. Pushed.
+- 2026-10-17 ~20:05 IST: A4 done — users table (migration 0002) + real GET /v1/me with just-in-time provisioning (race-safe ON CONFLICT, claim-seeded display name, NULL handle until claimed). Verified `go build`+`go vet`+`go test ./...` green against real PG16 incl. 8-racer concurrency test; live smoke: first call creates row, second returns same id, no-token → 401 JSON envelope. Pushed.
