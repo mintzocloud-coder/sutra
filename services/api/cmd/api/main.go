@@ -5,7 +5,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -13,10 +13,14 @@ import (
 	"time"
 
 	"github.com/mintzocloud-coder/sutra/services/api/internal/config"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/middleware"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/oidc"
 )
 
 func main() {
+	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
 	cfg := config.Load()
 	verifier := oidc.NewVerifier(cfg.HydraJWKSURL)
 
@@ -28,7 +32,7 @@ func main() {
 	})
 
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		// TODO: check database + Valkey reachability.
+		// TODO(A3): check database + Valkey reachability.
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
@@ -43,12 +47,22 @@ func main() {
 		_, _ = w.Write([]byte(`{"sub":` + `"` + sub + `"}`))
 	})
 
-	srv := &http.Server{Addr: ":" + cfg.Port, Handler: mux}
+	// Middleware order (outermost first): Recover → RequestID → Logger.
+	// Recover must be outermost so it also catches panics in the other
+	// middleware; RequestID must precede Logger so the ID is in the context.
+	handler := middleware.Chain(mux,
+		middleware.Recover(log),
+		middleware.RequestID,
+		middleware.Logger(log),
+	)
+
+	srv := &http.Server{Addr: ":" + cfg.Port, Handler: handler}
 
 	go func() {
-		log.Printf("api listening on :%s", cfg.Port)
+		log.Info("api listening", "port", cfg.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen: %v", err)
+			log.Error("listen failed", "err", err)
+			os.Exit(1)
 		}
 	}()
 
@@ -59,7 +73,8 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.ShutdownTimeout)*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatalf("shutdown: %v", err)
+		log.Error("shutdown failed", "err", err)
+		os.Exit(1)
 	}
-	log.Println("api stopped")
+	log.Info("api stopped")
 }

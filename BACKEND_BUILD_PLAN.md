@@ -33,11 +33,14 @@ Signal for messaging; idiomatic production Go services for the API).
 
 ## Phase A — API service (Go) hardening
 
-- [ ] **A1. Structured logging + request IDs + panic recovery**
+- [x] **A1. Structured logging + request IDs + panic recovery**
       Add: `slog` JSON logging, `X-Request-ID` middleware (generate if absent,
       echo back), panic-recovery middleware returning 500 JSON.
       Accept: every response carries `X-Request-ID`; panics in handlers return
       JSON 500 (not crash); `go vet` clean.
+      DONE 2026-10-17: `internal/middleware` (RequestID, Logger, Recover, Chain);
+      main.go uses slog JSON + middleware chain; verified `go build`+`go vet`
+      clean, smoke test: X-Request-ID present, /v1/me 401, JSON access logs.
 
 - [ ] **A2. Real JWT verification middleware**
       Complete the OIDC/JWKS seam: fetch + cache JWKS from Hydra issuer URL,
