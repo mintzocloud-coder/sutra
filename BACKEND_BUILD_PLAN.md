@@ -353,9 +353,38 @@ Signal for messaging; idiomatic production Go services for the API).
       / Phoenix.Presence API used was verified against the real sources.
       Pushed.
 
-- [ ] **B6. Chat tests**
+- [x] **B6. Chat tests**
       Channel tests: join/auth, send/persist, dedupe, history.
       Accept: `mix test` green in CI.
+      DONE 2026-10-18: new `SutraChatWeb.ChatChannelTest` (13 tests) via
+      `Phoenix.ChannelTest`, all `async: false` against the real Repo
+      (Ecto SQL sandbox, rollback per test) + real Presence:
+      join/auth (no-identity socket refused, malformed room ids rejected,
+      empty history on fresh room), presence (presence_state push shape +
+      presence_diff broadcast), join params (limit honored, bad cursor
+      rejected), send/persist (persist → broadcast → sender-only msg:ack,
+      ack id matches broadcast id, row verified in PG via Chat.history),
+      dedupe (same client_msg_id twice → one row, second ack
+      `deduped: true` with the ORIGINAL id), history oldest-first across
+      re-joins, cursor pagination (5 msgs / limit 2 → 3 pages + invalid
+      cursor error), payload validation (4097-char body → clean error,
+      missing/nil body → error, nothing persisted). New infra:
+      `config/test.exs` (sandbox Repo — DATABASE_URL in CI, local
+      sutra_chat_test fallback; endpoint `server: false`; quiet logger),
+      `import_config "#{config_env()}.exs"` in config.exs, `test/support/`
+      (`DataCase`, `ChannelCase`) compiled via new `elixirc_paths(:test)`
+      in mix.exs, test_helper puts sandbox in manual mode. CI `elixir-chat`
+      job renamed "builds and tests": postgres:16 service + DATABASE_URL,
+      `mix ecto.create` + `mix ecto.migrate` + `mix test`.
+      VERIFIED: all 7 new/edited files syntax-checked
+      (`Code.string_to_quoted!`), SPDX headers present (checker green);
+      full `mix compile`/`mix test` remain CI-gated (Elixir 1.18) — local
+      1.14 cannot compile phoenix_template 1.1.0 (needs ~> 1.16), same as
+      B1–B5. Test logic reviewed against Phoenix.ChannelTest semantics:
+      `{:noreply, _}` handlers produce no reply (assert via broadcast/ack,
+      not assert_reply), `^`-pinned id across the two dedupe acks, sandbox
+      shared mode lets the channel process use the test's connection.
+      Pushed.
 
 - [ ] **B7. Dockerfile hardening**
       Non-root, releases (`mix release`) instead of `mix phx.server`
@@ -407,3 +436,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-17 ~23:35 IST: B3 done — channel authorization: pure `SutraChat.Chat.RoomPolicy` (join auth check + room-id charset/length + send size caps), wired into `ChatChannel.join/3` and `handle_in("message:new")` with clean error replies; `Message.changeset` mirrors caps as defense-in-depth; `docs/room-membership.md` documents Wave 1 open-rooms-by-ID + Wave 2 membership-list roadmap. Verified: 10 ExUnit tests green, changeset caps confirmed against real ecto beams (4096 ok / 4097 rejected), SPDX header check green. Full `mix compile` CI-gated. Pushed.
 - 2026-10-17 ~23:55 IST: B4 done — delivery receipts: send path persist → broadcast → `msg:ack` push (sender only, pushed event not reply, never precedes durability); `persist_message/1` returns `{:ok, message, deduped}` via single-statement upsert with `xmax`-probe fresh-vs-retry detection (no extra SELECT, race-free); pure `Chat.ack_payload/2` (id/room_id/echoed client_msg_id/deduped/sent_at); `docs/delivery-semantics.md` documents the at-least-once contract + client retry rules + crash windows. Verified: 3 ExUnit tests green, modules compile vs real ecto beams, exact upsert SQL proven at parameterized-protocol level on PG16 (fresh=t / retry→same row f / other sender→new t). Pushed.
 - 2026-10-18 ~00:35 IST: B5 done — presence hardening: libcluster 3.5.0 dep + Cluster.Supervisor in app tree (no-op when disabled); runtime.exs opt-in topologies (CLUSTER_ENABLED=1 → gossip; commented k8s DNS strategy); per-device presence metas (online_at ms/device/status) with client device_id join param; docs/presence.md; ExUnit presence suite (5 tests). NOTE: this run's VM lost apt Elixir mid-run and provisioning's apt-get update wedged — no local Elixir runtime, so the behavioral harness couldn't execute; per plan, CI (1.18) is the gate. All libcluster/Phoenix.Presence APIs verified against real dep sources; SPDX check green. Pushed.
+- 2026-10-18 ~01:10 IST: B6 done — channel tests: SutraChatWeb.ChatChannelTest (13 tests, async:false, Phoenix.ChannelTest vs real Repo via Ecto sandbox + real Presence): join/auth (unauthorized socket refused, bad room ids rejected), presence_state/diff, send→persist→broadcast→sender-only msg:ack, client_msg_id dedupe (second ack deduped:true + original id, 1 row), history oldest-first + cursor pagination + invalid cursor, payload validation errors. New test infra: config/test.exs (sandbox Repo, DATABASE_URL in CI / local fallback, server:false, quiet logger), import_config per-env, test/support (DataCase, ChannelCase) via elixirc_paths(:test), test_helper sandbox manual mode. CI elixir-chat job now runs postgres:16 + mix ecto.create/migrate + mix test. Verified: syntax-checked all 7 files, SPDX headers present; full compile/test CI-gated (1.14 can't build phoenix_template 1.1.0). Pushed.

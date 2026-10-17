@@ -57,8 +57,25 @@ jobs:
       - run: go test ./...
 
   elixir-chat:
-    name: Elixir chat compiles
+    name: Elixir chat builds and tests
     runs-on: ubuntu-latest
+    # Channel tests (B6) run against this real PostgreSQL: config/test.exs
+    # uses DATABASE_URL when set, so `mix ecto.create/migrate` + `mix test`
+    # exercise the real Repo (persist/dedupe/history) via the Ecto sandbox.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/sutra_chat_test?sslmode=disable
     defaults:
       run:
         working-directory: services/chat
@@ -70,3 +87,6 @@ jobs:
           otp-version: "27"
       - run: mix deps.get
       - run: mix compile --warnings-as-errors
+      - run: mix ecto.create
+      - run: mix ecto.migrate
+      - run: mix test

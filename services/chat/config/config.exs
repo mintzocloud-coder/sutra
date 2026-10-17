@@ -33,3 +33,7 @@ config :sutra_chat, :auth,
 config :logger, :console,
   format: "$time $metadata[$level] $message\n",
   metadata: [:request_id]
+
+# Per-environment overrides (config/test.exs carries the sandbox Repo,
+# server: false endpoint, and quiet logger for `mix test`).
+import_config "#{config_env()}.exs"
