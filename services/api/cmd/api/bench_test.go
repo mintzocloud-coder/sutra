@@ -43,7 +43,7 @@ func benchConfig() config.Config {
 // dereference them.
 func benchHandler(b *testing.B) http.Handler {
 	b.Helper()
-	return newHandler(benchConfig(), nil, testVerifier(), nil, nil, nil, testLogger())
+	return newHandler(benchConfig(), nil, testVerifier(), nil, nil, nil, nil, testLogger())
 }
 
 // serveOnce runs one request through h; shared by the sequential

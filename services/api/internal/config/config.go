@@ -52,6 +52,11 @@ type Config struct {
 	// API refuse to boot (fail-closed).
 	ChatInternalURL   string // e.g. http://chat:4000; path /internal/events appended
 	ChatInternalToken string // shared service-to-service secret; never commit
+	// AI core (E1): the Python AI service behind /v1/ai/*. Empty
+	// AIServiceToken disables the proxy (503 service_unavailable); a
+	// token with a bad URL makes the API refuse to boot (fail-closed).
+	AIServiceURL   string // e.g. http://ai:8000; the /v1/ai prefix is stripped
+	AIServiceToken string // shared service-to-service secret; never commit
 }
 
 func getEnv(key, fallback string) string {
@@ -156,5 +161,7 @@ func Load() Config {
 		}(),
 		ChatInternalURL:   getEnv("CHAT_INTERNAL_URL", "http://chat:4000"),
 		ChatInternalToken: getEnv("CHAT_INTERNAL_TOKEN", ""),
+		AIServiceURL:      getEnv("AI_SERVICE_URL", "http://ai:8000"),
+		AIServiceToken:    getEnv("AI_SERVICE_TOKEN", ""),
 	}
 }

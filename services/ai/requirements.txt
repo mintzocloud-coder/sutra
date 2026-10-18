@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Pinned runtime dependencies for the Sutra AI service (E1). Kept minimal:
+# FastAPI for the HTTP surface, uvicorn to serve it, langgraph for the
+# agent graphs. CI installs from this file on every push.
+fastapi==0.143.3
+uvicorn==0.54.0
+langgraph==1.2.16

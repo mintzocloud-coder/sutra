@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Build context for the sutra-ai image: source only. The installed
+# dependency tree is rebuilt from requirements.txt every time.
+__pycache__/
+*.pyc
+*.pyo
+tests/
+.pytest_cache/

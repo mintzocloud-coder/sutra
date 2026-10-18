@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/mintzocloud-coder/sutra/services/api/internal/aiproxy"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/config"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/db"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/feed"
@@ -47,8 +48,9 @@ func methodGuard(allowed []string, h http.Handler) http.HandlerFunc {
 // feedSvc may be nil (unit tests): the feed route is then unregistered
 // and post handlers run without fan-out hooks. mediaSvc may likewise be
 // nil: the media routes are unregistered and the post media gate is off.
-// rt may be nil: realtime event hooks are then unregistered.
-func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, mediaSvc *media.Service, rt realtime.Publisher, log *slog.Logger) http.Handler {
+// rt may be nil: realtime event hooks are then unregistered. aiProxy may
+// be nil: the /v1/ai/* proxy routes are then unregistered.
+func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, mediaSvc *media.Service, rt realtime.Publisher, aiProxy *aiproxy.Proxy, log *slog.Logger) http.Handler {
 	auth := middleware.RequireAuth(verifier, log, middleware.AuthOptions{
 		Bypass:        cfg.AuthBypass,
 		BypassSubject: cfg.BypassSubject,
@@ -176,6 +178,17 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedS
 	v1.Handle("/v1/users/{id}/posts", methodGuard([]string{http.MethodGet},
 		posts.UserPostsHandler(postsSvc, pool, log)))
 
+	// AI core (E1): /v1/ai/* proxies to the Python AI service. Runs
+	// behind the same RequireAuth as everything else under /v1/, so the
+	// proxy always knows the verified subject (forwarded as
+	// X-Sutra-Subject). Both spellings route to the proxy so a bare
+	// GET /v1/ai lands on the AI service's root instead of the 404
+	// catch-all below.
+	if aiProxy != nil {
+		v1.Handle("/v1/ai/", aiProxy.Handler())
+		v1.Handle("/v1/ai", aiProxy.Handler())
+	}
+
 	v1.Handle("/", middleware.NotFoundHandler())
 	mux.Handle("/v1/", auth(v1))
 
@@ -290,7 +303,22 @@ func main() {
 		log.Info("realtime events enabled", "chat", cfg.ChatInternalURL)
 	}
 
-	handler := newHandler(cfg, pool, verifier, feedSvc, mediaSvc, rtPub, log)
+	// AI core (E1): proxy /v1/ai/* to the Python AI service. Empty token
+	// = the proxy answers 503 on those paths (dev default); a token with
+	// a bad URL is a configuration bug — refuse to boot rather than serve
+	// a silently broken AI surface.
+	aiProxy, err := aiproxy.NewProxy(cfg.AIServiceURL, cfg.AIServiceToken, log)
+	if err != nil {
+		log.Error("invalid AI proxy config — refusing to start", "err", err)
+		os.Exit(1)
+	}
+	if aiProxy.Enabled() {
+		log.Info("ai proxy enabled", "ai", cfg.AIServiceURL)
+	} else {
+		log.Warn("AI_SERVICE_TOKEN empty — /v1/ai/* disabled (503 service_unavailable)")
+	}
+
+	handler := newHandler(cfg, pool, verifier, feedSvc, mediaSvc, rtPub, aiProxy, log)
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: handler}
 
 	go func() {

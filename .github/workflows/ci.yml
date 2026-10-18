@@ -43,6 +43,10 @@ jobs:
       - name: Build transcode worker image
         # Gates D4b: the worker image (Go + FFmpeg) must build on every push.
         run: docker build -f services/api/Dockerfile.worker services/api
+      - name: Build AI service image
+        # Gates E1: the Python AI service image must build on every push
+        # (pip install of the pinned requirements runs inside).
+        run: docker build -f services/ai/Dockerfile services/ai
 
   smoke:
     name: Full-stack smoke test

@@ -64,6 +64,50 @@ paths:
         '429':
           $ref: '#/components/responses/RateLimited'
 
+  /v1/ai/healthz:
+    get:
+      tags: [ai]
+      summary: AI service liveness (proxied)
+      description: |
+        Proxied to the Python AI service's own /healthz (the /v1/ai prefix
+        is stripped by the Go proxy). Requires the caller's JWT (same as
+        every /v1/* route); the proxy adds the internal service Bearer
+        token and forwards the verified subject as X-Sutra-Subject.
+        With AI_SERVICE_TOKEN empty the proxy answers 503
+        (service_unavailable); with the AI service down it answers 503 +
+        Retry-After. Full /v1/ai/* coverage (chat, translate, ...) lands
+        in E6 — see docs/ai-core.md for the roadmap.
+      operationId: aiHealthz
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: AI service alive (proxied payload)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, service]
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  service:
+                    type: string
+                    example: sutra-ai
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          description: AI service not configured or unreachable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /readyz:
     get:
       tags: [system]

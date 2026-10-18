@@ -901,13 +901,46 @@ CONFLICT RULE: issue #19 (pgvector embeddings pipeline) is reserved for
 Hacktoberfest contributors — the worker MUST NOT implement it. E5 uses
 non-ML signals only; vector embeddings plug in later via #19.
 
-- [ ] **E1. Python AI service scaffold**
+- [x] **E1. Python AI service scaffold**
       New `services/ai` (FastAPI): /healthz, AG-UI protocol endpoint
       skeleton, LangGraph graph stub with one echo node, Ollama added to
       docker-compose.yml (dev model pull documented), vLLM noted for prod
       in docs/ai-core.md. Go API proxies /v1/ai/* → ai service (internal
       service token). Implements issue #18 → close it when done.
       Accept: compose boots ai service; smoke hits /v1/ai/healthz 200.
+      DONE 2026-10-18 ~11:55 IST: `services/ai` — `app/main.py` (FastAPI:
+      /healthz + POST /ag-ui/run SSE streaming real AG-UI 1.0 events
+      RUN_STARTED → STEP_STARTED/FINISHED → TEXT_MESSAGE_START/CONTENT/END
+      → RUN_FINISHED/RUN_ERROR, RunAgentInput model, constant-time
+      service-token auth, fail-closed boot without AI_SERVICE_TOKEN),
+      `app/graph.py` (real compiled LangGraph StateGraph START→echo→END;
+      the endpoint consumes graphs only via run_stream() so E2's agent
+      slots in untouched), `app/config.py` (PORT/AI_SERVICE_TOKEN/
+      OLLAMA_BASE_URL/AI_MODEL), pinned requirements.txt
+      (fastapi/uvicorn/langgraph), hardened Dockerfile (multi-stage,
+      non-root, HEALTHCHECK), docs/ai-core.md (architecture, AG-UI event
+      model, LangGraph design, Ollama dev pull command, vLLM prod note,
+      env tables, E2–E5 roadmap, #19 conflict restated). Compose: `ai`
+      service (build, host 8000 for dev debugging) + `ollama` service
+      (ollama-data volume; model pull documented, not booted in smoke —
+      E1's echo graph never calls a model). Go: new `internal/aiproxy`
+      (ReverseProxy, /v1/ai prefix strip, Bearer service token +
+      X-Sutra-Subject, FlushInterval -1 for SSE, 503 service_unavailable
+      envelope + Retry-After on outage, disabled→503 when token empty,
+      fail-closed boot on bad URL with token set), config
+      AI_SERVICE_URL/AI_SERVICE_TOKEN + compose api env, routes wired in
+      main.go (behind RequireAuth). CI compose job builds the ai image;
+      OpenAPI gains /v1/ai/healthz (redocly 0 warnings); smoke.sh E1
+      section (ephemeral AI_SERVICE_TOKEN, boot ai, /v1/ai/healthz 200
+      via proxy with Hydra JWT, 401 without token, full AG-UI echo
+      round-trip RUN_STARTED→RUN_FINISHED).
+      VERIFIED: py_compile on all 4 app files; gofmt clean;
+      `go build`+`go vet` green; full `go test ./...` green (5 new
+      aiproxy tests: fail-closed URL, disabled 503 envelope, header/path
+      forwarding incl. bare-prefix→/, upstream-down 503+Retry-After);
+      bash -n, compose/CI YAML parse, SPDX checker, redocly lint all
+      clean. Full compose boot + smoke run are CI-gated (no docker on
+      this VM) via the extended smoke job. Next: E2 personal AI chat.
 
 - [ ] **E2. Personal AI chat**
       POST /v1/ai/chat (SSE streaming): LangGraph agent with PG-backed
@@ -984,3 +1017,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-18 ~10:35 IST: D5 part 2 done — Elixir chat side of realtime events (see D5 task note): UserChannel (own-topic-only join auth), Router + InternalEventsController (constant-time Bearer auth, strict envelope validation, 202+broadcast fan-out, shared error envelope), runtime.exs CHAT_INTERNAL_TOKEN config, compose chat env, smoke.sh live endpoint checks (401/401/422/202), docs dedupe precision. 16 new tests (6 channel + 10 controller). Syntax-checked all files; full mix test CI-gated (Elixir 1.18). **D5 COMPLETE.** Next: D6 Wave-1 hardening pass.
 - 2026-10-18 ~10:55 IST: D6 part 1 done — follow velocity abuse guard (internal/social: DefaultFollowVelocityCap 200/h via FOLLOW_VELOCITY_PER_HOUR, FollowWithCap, 429 follow_velocity_limited + Retry-After; idempotent retries bypass the check — caught by new tests, design fixed). Tests: 2 new suites green on real PG16; full `go build`+`go vet`+`go test ./...` green; gofmt clean; redocly lint 0 warnings. OpenAPI + production.md updated. D6 stays open (env-table backfill, benchmarks.md, full smoke green remain). Pushed.
 - 2026-10-18 ~11:25 IST: D6 part 2 done — production.md env-table backfill (13 API rows + chat CHAT_INTERNAL_TOKEN, all cross-checked against config.go/runtime.exs; fixed stale "Hydra lands with issue #4" line), smoke.sh D6 velocity section (1/hour caps → post/follow 429s with envelope codes + Retry-After, idempotent retry → 200, defaults restored), compose velocity env passthroughs, new internal/social/bench_test.go (5 pure benches; CI bench step extended) + benchmarks.md update. Verified: go build+vet+test green, benches run, bash -n + YAML parse clean; full smoke + CI green CI-gated. **D6 COMPLETE — Phase D (Wave 1) complete.**
+- 2026-10-18 ~11:55 IST: E1 done — Python AI service scaffold (see E1 task note): FastAPI app (fail-closed /healthz + AG-UI 1.0 SSE endpoint over a real LangGraph echo graph), pinned deps, hardened Dockerfile, docs/ai-core.md; compose ai + ollama services; Go internal/aiproxy (/v1/ai/* behind RequireAuth, service token + X-Sutra-Subject, SSE flush, 503 envelopes) + AI_SERVICE_URL/TOKEN config; CI builds the ai image; OpenAPI /v1/ai/healthz (redocly clean); smoke.sh E1 section (ephemeral token, proxy 200/401 checks, AG-UI echo round-trip). Verified: py_compile, go build+vet+test green (5 new proxy tests), bash/YAML/SPDX/redocly clean; full boot + smoke CI-gated. Next: E2 personal AI chat.

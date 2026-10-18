@@ -1,6 +1,10 @@
 # services/ai — Python intelligence layer
 
-**Status:** 🟡 Scaffold — Wave-2 research decided the components; implementation follows Wave-1.
+**Status:** 🟢 E1 scaffold live — FastAPI (`app/main.py`), AG-UI 1.0 endpoint
+skeleton (`POST /ag-ui/run`, SSE), real LangGraph echo graph
+(`app/graph.py`: `START → echo → END`), Go API proxy at `/v1/ai/*`
+(internal service token), Ollama in compose (dev), vLLM noted for prod.
+See `docs/ai-core.md`. The model, memory, and tools land in E2–E5.
 
 ## What lives here (off the hot path — never in a request cycle)
 

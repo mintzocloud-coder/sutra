@@ -88,6 +88,33 @@ services:
         condition: service_completed_successfully
 
   # Sutra services
+  # AI core (E1): the Python intelligence layer. Never serves user clients
+  # directly — the Go API proxies /v1/ai/* to it with AI_SERVICE_TOKEN
+  # (see docs/ai-core.md). The service fails closed at boot without the
+  # token; scripts/smoke.sh generates an ephemeral one, production must
+  # set a long random secret. Exposed on host 8000 for local debugging;
+  # a production override should drop the ports mapping.
+  ai:
+    build: ./services/ai
+    ports: ["8000:8000"]
+    environment:
+      PORT: "8000"
+      AI_SERVICE_TOKEN: ${AI_SERVICE_TOKEN:-}
+      OLLAMA_BASE_URL: "http://ollama:11434"
+      AI_MODEL: "qwen3:8b"
+    # No depends_on: the API degrades /v1/ai/* to 503 when the token is
+    # empty or the service is down, so boot order must not couple them.
+
+  # Dev model runtime for the AI service (E2 wires the model in; E1's echo
+  # graph doesn't call it yet). Pull a model once after first boot:
+  #   docker compose exec ollama ollama pull qwen3:8b
+  # Production replaces this with vLLM (docs/ai-core.md) — the service
+  # talks OpenAI-compatible chat completions either way.
+  ollama:
+    image: ollama/ollama:latest
+    ports: ["11434:11434"]
+    volumes: [ollama-data:/root/.ollama]
+
   chat:
     build: ./services/chat
     ports: ["4000:4000"]
@@ -166,6 +193,13 @@ services:
       # follower:new delivery. Never commit a real token here.
       CHAT_INTERNAL_URL: "http://chat:4000"
       CHAT_INTERNAL_TOKEN: ${CHAT_INTERNAL_TOKEN:-}
+      # AI core (E1): the Python AI service. The API proxies /v1/ai/* to
+      # AI_SERVICE_URL with AI_SERVICE_TOKEN as the Bearer credential
+      # (same value as the ai service's). Empty token = /v1/ai/* returns
+      # 503 ai_unavailable; a token with a bad URL refuses boot. Never
+      # commit a real token here.
+      AI_SERVICE_URL: "http://ai:8000"
+      AI_SERVICE_TOKEN: ${AI_SERVICE_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -209,3 +243,4 @@ services:
 volumes:
   pgdata:
   weeddata:
+  ollama-data:

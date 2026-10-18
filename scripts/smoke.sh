@@ -75,6 +75,11 @@ export SECRET_KEY_BASE="${SECRET_KEY_BASE:-$(openssl rand -base64 48)}"
 # environment only, never written to disk or committed. Both services
 # read it from the environment (compose ${CHAT_INTERNAL_TOKEN:-}).
 export CHAT_INTERNAL_TOKEN="${CHAT_INTERNAL_TOKEN:-$(openssl rand -hex 32)}"
+# E1: shared service-to-service secret for the API->AI proxy (/v1/ai/*).
+# Ephemeral per smoke run, environment only, never written or committed.
+# Both services read it from the environment (compose ${AI_SERVICE_TOKEN:-});
+# the ai service refuses to boot without it (fail-closed).
+export AI_SERVICE_TOKEN=$(openssl rand -hex 16)
 export AUTH_BYPASS=1
 
 cleanup() {
@@ -107,8 +112,8 @@ wait_for() { # wait_for <secs> <description> <command...>
 }
 
 echo "smoke: building service images"
-docker compose build --quiet api chat transcode-worker 2>/dev/null \
-  || docker compose build api chat transcode-worker
+docker compose build --quiet api chat transcode-worker ai 2>/dev/null \
+  || docker compose build api chat transcode-worker ai
 
 echo "smoke: starting postgres, valkey, seaweedfs"
 docker compose up -d postgres valkey seaweedfs
@@ -214,6 +219,37 @@ pass "api /v1/me 200 with hydra-issued JWT (subject 'sutra-smoke', RS256 verifie
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$API_URL/v1/me")" = "401" ] \
   || fail "/v1/me without token did not 401 — bypass still on?"
 pass "api /v1/me 401 without token (bypass confirmed off)"
+
+# --- AI core round-trip (E1) -------------------------------------------------
+# The Python AI service boots behind its fail-closed service token; the Go
+# API proxies /v1/ai/* to it with the same token plus the verified JWT
+# subject (X-Sutra-Subject). Ollama is NOT booted here — E1's echo graph
+# never calls a model (the pull command is documented in docs/ai-core.md).
+echo "smoke: starting ai service (E1)"
+docker compose up -d ai
+wait_for 120 "ai /healthz" curl -sf http://localhost:8000/healthz
+pass "ai service up (fail-closed boot with ephemeral AI_SERVICE_TOKEN)"
+
+ai_health="$(curl -sf -H "Authorization: Bearer $access_token" "$API_URL/v1/ai/healthz")" \
+  || fail "/v1/ai/healthz through the Go proxy did not return 200"
+printf '%s' "$ai_health" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["service"]=="sutra-ai", d' \
+  || fail "/v1/ai/healthz did not return the ai service payload — proxy miswired?"
+pass "api /v1/ai/healthz 200 through the proxy (hydra JWT, subject forwarded)"
+
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$API_URL/v1/ai/healthz")" = "401" ] \
+  || fail "/v1/ai/healthz without token did not 401 — auth bypass leaked?"
+pass "api /v1/ai/* 401 without token (Go auth still gates the proxy)"
+
+ag_ui_out="$(curl -sf -N -H "Authorization: Bearer $access_token" -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"smoke ping"}]}' "$API_URL/v1/ai/ag-ui/run")" \
+  || fail "POST /v1/ai/ag-ui/run through the proxy failed"
+printf '%s' "$ag_ui_out" | grep -q '"type":"RUN_STARTED"' \
+  || fail "AG-UI stream missing RUN_STARTED"
+printf '%s' "$ag_ui_out" | grep -q '"type":"RUN_FINISHED"' \
+  || fail "AG-UI stream missing RUN_FINISHED"
+printf '%s' "$ag_ui_out" | grep -q 'smoke ping' \
+  || fail "AG-UI echo graph did not reflect the message"
+pass "AG-UI skeleton streams RUN_STARTED->echo->RUN_FINISHED through the proxy"
 # NOTE: the api is intentionally left running WITHOUT the bypass from here
 # on — the more production-faithful state. Nothing later in this script
 # needs the bypass (chat keeps its own for the websocket round-trip).
