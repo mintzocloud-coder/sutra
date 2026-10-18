@@ -146,4 +146,75 @@ defmodule SutraChatWeb.InternalEventsControllerTest do
       payload: %{"follower_id" => "aaa"}
     }
   end
+
+  test "accepts shipment:update and fans it out to the buyer topic", %{conn: conn} do
+    :ok = SutraChatWeb.Endpoint.subscribe("user:buyer-123")
+
+    conn =
+      post_event(
+        conn,
+        envelope(%{
+          "topics" => ["user:buyer-123"],
+          "event" => "shipment:update",
+          "dedupe_key" => "shipment:s1:in_transit:1729219200",
+          "payload" => %{
+            "shipment_id" => "s1",
+            "order_id" => "o1",
+            "status" => "in_transit",
+            "tracking_number" => "DLV123456789",
+            "cod_expected_paise" => 99900,
+            "updated_at" => "2026-10-18T12:00:00Z"
+          }
+        })
+      )
+
+    assert %{"status" => "accepted", "event" => "shipment:update", "topics" => 1} =
+             json_response(conn, 202)
+
+    assert_receive %Phoenix.Socket.Broadcast{
+      topic: "user:buyer-123",
+      event: "shipment:update",
+      payload: %{"shipment_id" => "s1", "status" => "in_transit"}
+    }
+  end
+
+  test "rejects shipment:update with a non-integer cod_expected_paise", %{conn: conn} do
+    conn =
+      post_event(
+        conn,
+        envelope(%{
+          "event" => "shipment:update",
+          "dedupe_key" => "shipment:s1:in_transit:1729219200",
+          "payload" => %{
+            "shipment_id" => "s1",
+            "order_id" => "o1",
+            "status" => "in_transit",
+            "cod_expected_paise" => "99900",
+            "updated_at" => "2026-10-18T12:00:00Z"
+          }
+        })
+      )
+
+    assert %{"error" => %{"code" => "invalid_payload"}} = json_response(conn, 422)
+  end
+
+  test "rejects shipment:update with a missing required field", %{conn: conn} do
+    conn =
+      post_event(
+        conn,
+        envelope(%{
+          "event" => "shipment:update",
+          "dedupe_key" => "shipment:s1:in_transit:1729219200",
+          "payload" => %{
+            "shipment_id" => "s1",
+            "order_id" => "o1",
+            # status missing
+            "cod_expected_paise" => 99900,
+            "updated_at" => "2026-10-18T12:00:00Z"
+          }
+        })
+      )
+
+    assert %{"error" => %{"code" => "invalid_payload"}} = json_response(conn, 422)
+  end
 end

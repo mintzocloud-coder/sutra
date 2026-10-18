@@ -110,6 +110,34 @@ Payload:
 
 `dedupe_key`: `follow:<follower-uuid>:<followee-uuid>`.
 
+### `shipment:update` (F5)
+
+Fired when a shipment's lifecycle status or COD money changes (Wave 3
+commerce; the F6 saga is the producer — published after the DB write
+commits, never before). Recipient: the **buyer's** `user:<subject>`
+topic — buyers can never subscribe to another user's shipments.
+
+Payload:
+
+```json
+{
+  "shipment_id": "<uuid>",
+  "order_id": "<uuid>",
+  "status": "out_for_delivery",
+  "tracking_number": "DLV123456789",
+  "cod_expected_paise": 99900,
+  "cod_collected_paise": 99900,
+  "updated_at": "2026-10-19T00:00:00Z"
+}
+```
+
+`status` is one of the 8 `logistics.TrackingStatus` wire values;
+`cod_collected_paise` is omitted until the courier reports (a missing
+field is not a zero collection). The chat validates required fields +
+`cod_expected_paise` as a non-negative integer and rejects anything
+else with 422; it treats the fields as opaque and never interprets
+them. `dedupe_key`: `shipment:<shipment-id>:<status>:<updated-at-unix>`.
+
 ### Reserved names (do not use)
 
 `post:deleted`, `post:like`, `post:reply`, `follow:request`,

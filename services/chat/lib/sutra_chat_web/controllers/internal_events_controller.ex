@@ -20,13 +20,18 @@ defmodule SutraChatWeb.InternalEventsController do
   """
   use SutraChatWeb, :controller
 
-  @known_events ~w(post:new follower:new)
+  @known_events ~w(post:new follower:new shipment:update)
   @topic_re ~r/\Auser:[^:]+\z/
 
   # post:new payload: everything a client needs to render the
   # notification without a follow-up fetch.
   @post_new_required ~w(post_id author_id text created_at)
   @follower_new_required ~w(follower_id created_at)
+  # shipment:update payload: cod_expected_paise is validated separately
+  # (integer, not string — see check_shipment_money/1), everything else
+  # must be a string. The chat never needs the numeric field to render;
+  # the API guarantees it is an integer ≥ 0 on the wire.
+  @shipment_update_required ~w(shipment_id order_id status updated_at)
 
   def create(conn, _params) do
     with :ok <- check_auth(conn),
@@ -122,6 +127,20 @@ defmodule SutraChatWeb.InternalEventsController do
 
   defp check_payload("follower:new", payload),
     do: check_required(payload, @follower_new_required)
+
+  defp check_payload("shipment:update", payload) do
+    with {:ok, payload} <- check_required(payload, @shipment_update_required),
+         :ok <- check_shipment_money(payload) do
+      {:ok, payload}
+    end
+  end
+
+  defp check_shipment_money(%{"cod_expected_paise" => paise})
+       when is_integer(paise) and paise >= 0,
+       do: :ok
+
+  defp check_shipment_money(_),
+    do: {:error, "invalid_payload", "cod_expected_paise must be a non-negative integer"}
 
   defp check_required(payload, keys) do
     missing = Enum.reject(keys, &is_binary(Map.get(payload, &1)))

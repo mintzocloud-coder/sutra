@@ -94,6 +94,16 @@ func TestEnvelopeValidation(t *testing.T) {
 			t.Fatalf("case %d should fail validation", i)
 		}
 	}
+	// shipment:update is a known event and validates like the others.
+	ship := Envelope{
+		Topics:    []string{"user:buyer-sub"},
+		Event:     EventShipmentUpdate,
+		DedupeKey: "shipment:s1:delivered:1729219200",
+		Payload:   ShipmentUpdatePayload{ShipmentID: "s1", OrderID: "o1", Status: "delivered"},
+	}
+	if err := ship.validate(); err != nil {
+		t.Fatalf("shipment:update envelope: %v", err)
+	}
 }
 
 func TestChunkTopics(t *testing.T) {
@@ -399,5 +409,62 @@ func TestPublishHelpersDisabledAreNoOps(t *testing.T) {
 	}
 	if err := PublishFollowerNew(ctx, pool, follower, author, disabled); err != nil {
 		t.Fatalf("PublishFollowerNew disabled: %v", err)
+	}
+	// Zero buyer id + empty payload: disabled short-circuits before any
+	// field or DB check, so it must still return nil.
+	if err := PublishShipmentUpdate(ctx, pool, pgtype.UUID{}, ShipmentUpdatePayload{}, disabled); err != nil {
+		t.Fatalf("PublishShipmentUpdate disabled: %v", err)
+	}
+}
+
+func TestPublishShipmentUpdateEndToEnd(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	buyer, buyerSub := rtUser(t, pool, "buyer")
+
+	srv, calls := fakeChat(t, http.StatusAccepted)
+	rt, err := NewPublisher(srv.URL, "tok", testLog())
+	if err != nil {
+		t.Fatalf("NewPublisher: %v", err)
+	}
+	now := time.Now().UTC()
+	collected := int64(99900)
+	payload := ShipmentUpdatePayload{
+		ShipmentID:        "s1",
+		OrderID:           "o1",
+		Status:            "delivered",
+		TrackingNumber:    "DLV123",
+		CODEExpectedPaise: 99900,
+		CODCollectedPaise: &collected,
+		UpdatedAt:         now,
+	}
+	if err := PublishShipmentUpdate(ctx, pool, buyer, payload, rt); err != nil {
+		t.Fatalf("PublishShipmentUpdate: %v", err)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(*calls))
+	}
+	env := (*calls)[0].envelope
+	if env.Event != EventShipmentUpdate {
+		t.Fatalf("event = %q", env.Event)
+	}
+	if len(env.Topics) != 1 || env.Topics[0] != "user:"+buyerSub {
+		t.Fatalf("topics = %v (want user:%s)", env.Topics, buyerSub)
+	}
+	wantKey := "shipment:s1:delivered:" + fmt.Sprint(now.Unix())
+	if env.DedupeKey != wantKey {
+		t.Fatalf("dedupe = %q (want %q)", env.DedupeKey, wantKey)
+	}
+	pl, ok := env.Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("payload type %T", env.Payload)
+	}
+	if pl["status"] != "delivered" || pl["cod_expected_paise"] != float64(99900) {
+		t.Fatalf("payload = %+v", pl)
+	}
+
+	// Missing identifiers are rejected before any network traffic.
+	if err := PublishShipmentUpdate(ctx, pool, buyer, ShipmentUpdatePayload{Status: "delivered"}, rt); err == nil {
+		t.Fatalf("empty shipment payload should fail")
 	}
 }

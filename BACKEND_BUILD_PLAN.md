@@ -1625,10 +1625,34 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
     YAML parses, SPDX checker green. LIVE binary proof:
     LOGISTICS_PROVIDER=bogus → "invalid logistics config — refusing
     to start" before any DB touch; bad LOGISTICS_ENV → same refusal.
-    F5 STAYS OPEN: part 2 = docs/logistics.md + COD remittance
-    tracking fields (shipments/order model) + shipment events via
-    /internal/events → user:<id> topics + production.md env rows +
-    smoke section.
+  - [x] F5 part 2a DONE 2026-10-19 ~00:30 IST: shipments data model +
+    shipment realtime event. Migration 0012_shipments.sql (shipments:
+    order_id → orders RESTRICT, provider/awb/tracking_number, status
+    CHECK = the 8 TrackingStatus wire values — cross-verified equal
+    to logistics.go; cod_expected_paise ≥ 0, cod_collected_paise
+    NULL-until-reported, remittance_status pending/remitted/na +
+    remitted_at stamp CHECK, set_updated_at trigger, partial
+    reconciliation index); Go realtime: EventShipmentUpdate
+    ("shipment:update") + ShipmentUpdatePayload + PublishShipmentUpdate
+    (buyer-subject resolution, validates ids before any DB/net,
+    dedupe key shipment:<id>:<status>:<unix>), Envelope.validate
+    accepts the new event, disabled-WARN names it; Elixir
+    InternalEventsController: shipment:update known-event +
+    check_payload clause (string fields required, cod_expected_paise
+    validated non-negative integer) + 3 new controller tests (202
+    fan-out to buyer topic, 422 non-integer money, 422 missing field);
+    docs/logistics.md (stub status, seam contract, 8-status table,
+    migration-0012 remittance model, shipment:update payload +
+    producer/dedupe rules, post-investors checklist, env table,
+    failure modes); docs/realtime-events.md event-catalog entry.
+    VERIFIED: gofmt/build/vet clean; full `go test ./...` green
+    (3 new Go suites; migration live-apply CI-gated — no PG/docker on
+    this VM); SQL CHECK values machine-matched to the Go enum; SPDX
+    green. Elixir mix test CI-gated (Elixir 1.18; no Elixir on this
+    VM).
+    F5 STAYS OPEN: part 2b = production.md LOGISTICS_*/shipment env
+    rows + smoke.sh F5 section (shipment-update event round-trip
+    202/422 matrix) → then F5 [x].
 - [ ] F6: Order saga + Wave-3 hardening — NATS JetStream order events, Go
   saga orchestrator (reserve inventory → confirm → ship, compensating
   actions on failure), rate limits on commerce endpoints, docs/commerce.md,
@@ -1640,6 +1664,18 @@ All boxes ticked, CI green, `scripts/smoke.sh` passes, docs complete.
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-19 ~00:30 IST: F5 part 2a done — shipments data model +
+  shipment realtime event (see F5 task note): migration
+  0012_shipments.sql (shipments + COD remittance fields; status CHECK
+  machine-matched to the 8 TrackingStatus wire values), Go
+  realtime.EventShipmentUpdate + PublishShipmentUpdate (buyer topic,
+  dedupe key, best-effort), Elixir InternalEventsController
+  shipment:update + 3 controller tests, docs/logistics.md +
+  realtime-events.md catalog entry. Verified: gofmt/build/vet clean,
+  full go test ./... green, SPDX green; migration live-apply + mix
+  test CI-gated (no PG/Elixir/docker on this VM). F5 stays open:
+  part 2b = production.md env rows + smoke.sh F5 section. Pushed.
 
 - 2026-10-18 ~23:55 IST: F5 part 1 done — logistics gateway seam
   (internal/logistics: Provider interface CreateShipment/Track/Cancel,

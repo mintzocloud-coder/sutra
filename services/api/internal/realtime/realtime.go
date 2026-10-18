@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Package realtime publishes social events (new posts, new followers) to
-// the chat service, which fans them out on Phoenix `user:<subject>` topics.
+// Package realtime publishes domain events (new posts, new followers,
+// shipment updates) to the chat service, which fans them out on Phoenix
+// `user:<subject>` topics.
 // It is the Go-side half of the D5 contract — the chat side (the internal
 // HTTP endpoint, topic join auth, broadcast) is defined in
 // docs/realtime-events.md and lands with the Elixir work.
@@ -20,6 +21,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +37,11 @@ import (
 const (
 	EventPostNew     = "post:new"
 	EventFollowerNew = "follower:new"
+	// EventShipmentUpdate is a Wave-3 commerce event: the API publishes it
+	// when a shipment's lifecycle status (or its COD money) changes, and
+	// the chat fans it out on the BUYER's user:<subject> topic. F6's saga
+	// orchestrator is the producer; this package only owns the wire shape.
+	EventShipmentUpdate = "shipment:update"
 )
 
 // internalPath is the chat service's internal event endpoint. It is fixed
@@ -78,6 +85,21 @@ type FollowerNewPayload struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
+// ShipmentUpdatePayload is the EventShipmentUpdate payload: everything a
+// buyer-side client needs to render an order-tracking update without a
+// follow-up fetch. COD money fields are best-effort mirror state — the
+// shipments table (migration 0012) is the source of truth; the event is
+// a notification hint, same as post:new / follower:new.
+type ShipmentUpdatePayload struct {
+	ShipmentID        string    `json:"shipment_id"`
+	OrderID           string    `json:"order_id"`
+	Status            string    `json:"status"` // one of the 8 TrackingStatus wire values
+	TrackingNumber    string    `json:"tracking_number,omitempty"`
+	CODEExpectedPaise int64     `json:"cod_expected_paise"`
+	CODCollectedPaise *int64    `json:"cod_collected_paise,omitempty"` // nil = not reported yet
+	UpdatedAt         time.Time `json:"updated_at"`
+}
+
 // Publisher sends event envelopes to the chat service.
 type Publisher interface {
 	// Publish delivers env to the chat internal endpoint, chunking topics
@@ -113,7 +135,7 @@ type httpPublisher struct {
 // refuse to boot (fail-closed) rather than silently drop events.
 func NewPublisher(baseURL, token string, log *slog.Logger) (Publisher, error) {
 	if token == "" {
-		log.Warn("realtime: no CHAT_INTERNAL_TOKEN configured — realtime events disabled (post:new / follower:new will not be delivered)")
+		log.Warn("realtime: no CHAT_INTERNAL_TOKEN configured — realtime events disabled (post:new / follower:new / shipment:update will not be delivered)")
 		return disabledPublisher{}, nil
 	}
 	u, err := url.Parse(strings.TrimRight(baseURL, "/"))
@@ -183,7 +205,7 @@ func (e Envelope) validate() error {
 		}
 	}
 	switch e.Event {
-	case EventPostNew, EventFollowerNew:
+	case EventPostNew, EventFollowerNew, EventShipmentUpdate:
 	default:
 		return fmt.Errorf("realtime: unknown event %q", e.Event)
 	}
@@ -321,5 +343,33 @@ func PublishFollowerNew(ctx context.Context, pool *db.Pool, follower, followee p
 			CreatedAt:      time.Now().UTC(),
 		},
 		DedupeKey: "follow:" + follower.String() + ":" + followee.String(),
+	})
+}
+
+// PublishShipmentUpdate emits EventShipmentUpdate to the BUYER's user
+// topic after a shipment's lifecycle status (or its COD money) changes.
+// The F6 saga orchestrator is the producer: it publishes after the DB
+// write commits, never before, so an event always describes committed
+// state. The dedupe key is (shipment, status, updated-at-second): a
+// retried saga step re-publishes the same key and clients dedupe on it
+// (Wave 1 clients carry the key in local state; Wave 2's inbox dedupes
+// server-side). Errors are best-effort — returned to the saga, never to
+// an end-user request.
+func PublishShipmentUpdate(ctx context.Context, pool *db.Pool, buyerID pgtype.UUID, p ShipmentUpdatePayload, rt Publisher) error {
+	if !rt.Enabled() {
+		return nil
+	}
+	if p.ShipmentID == "" || p.OrderID == "" || p.Status == "" {
+		return fmt.Errorf("realtime: shipment payload needs shipment_id, order_id and status")
+	}
+	subject, err := subjectByID(ctx, pool, buyerID)
+	if err != nil {
+		return err
+	}
+	return rt.Publish(ctx, Envelope{
+		Topics:    []string{"user:" + subject},
+		Event:     EventShipmentUpdate,
+		Payload:   p,
+		DedupeKey: "shipment:" + p.ShipmentID + ":" + p.Status + ":" + strconv.FormatInt(p.UpdatedAt.Unix(), 10),
 	})
 }
