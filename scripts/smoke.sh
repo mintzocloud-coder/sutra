@@ -53,6 +53,18 @@
 #     draft → list → activate), variant add (duplicate SKU 409), inventory
 #     (0 → +100; −150 refuses 409 insufficient_stock), then archive
 #     variant + product.
+#   - The F2 product-search round-trip: Meilisearch boots with an ephemeral
+#     per-run master key, the api is recreated with SEARCH_MASTER_KEY set
+#     (bypass explicitly off — the production auth path); a throwaway
+#     Hydra identity lists 3 products (P1 with two variants, to prove
+#     min_price_paise = cheapest ACTIVE variant) → activate → poll
+#     /v1/search until the async index catches up → hit fields asserted
+#     (status/seller/category/min_price/sort keys) → typo tolerance
+#     (kurtha → kurta) → seller/category/price filters → keyset
+#     pagination walk (limit=2, next_cursor terminates, no dupes) →
+#     400 param matrix → archive all → hits vanish from the index. The
+#     api is then restored searchless and /v1/search → 503
+#     search_unavailable + Retry-After is proven.
 # The chat release fails closed at boot without a real SECRET_KEY_BASE, so
 # this script generates an ephemeral one (kept in the environment only,
 # never written to disk or committed).
@@ -93,6 +105,11 @@ export CHAT_INTERNAL_TOKEN="${CHAT_INTERNAL_TOKEN:-$(openssl rand -hex 32)}"
 # the ai service refuses to boot without it (fail-closed).
 export AI_SERVICE_TOKEN=$(openssl rand -hex 16)
 export AUTH_BYPASS=1
+# F2: Meilisearch product search. The meilisearch container and the API's
+# search client share one ephemeral master key per smoke run (environment
+# only, never written or committed); the api enables indexing only when
+# SEARCH_MASTER_KEY is set (empty = searchless, loud WARN at boot).
+export SMOKE_MEILI_KEY="$(openssl rand -hex 16)"
 
 cleanup() {
   if [ "${SMOKE_KEEP_UP:-0}" != "1" ]; then
@@ -1119,6 +1136,242 @@ pass "inventory: 0 → +100 = 100; −150 → 409 insufficient_stock"
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')" = "archived" ] \
   || fail "DELETE product did not archive"
 pass "variant + product archived (cleanup)"
+
+# --- Product search round-trip (F2 part 2b) --------------------------------
+# Meilisearch boots with the ephemeral per-run master key; the api is
+# recreated with SEARCH_MASTER_KEY set and AUTH_BYPASS explicitly off (the
+# production auth path). A throwaway Hydra identity lists 3 products —
+# P1 gets two variants so the hit's min_price_paise = cheapest ACTIVE
+# variant is asserted. Indexing is async (Meilisearch 202s then indexes in
+# the background), so every visibility assertion polls with a deadline.
+echo "smoke: product search round-trip (F2)"
+echo "smoke: starting meilisearch"
+MEILI_MASTER_KEY="$SMOKE_MEILI_KEY" docker compose up -d meilisearch
+wait_for 60 "meilisearch /health" curl -sf http://localhost:7700/health
+pass "meilisearch up (CE v1.38.0, /health 200)"
+
+echo "smoke: recreating api with SEARCH_MASTER_KEY set (bypass off)"
+AUTH_BYPASS= SEARCH_MASTER_KEY="$SMOKE_MEILI_KEY" docker compose up -d --no-deps api
+wait_for 90 "api /healthz (search enabled)" curl -sf "$API_URL/healthz"
+
+search_client="sutra-smoke-s-$(date +%s)"
+echo "smoke: creating hydra oauth2 client '$search_client'"
+SMOKE_HYDRA_CLIENT_S_SECRET="$(openssl rand -hex 16)"
+if ! docker compose run --rm hydra hydra create client \
+    --endpoint http://hydra:4445 \
+    --id "$search_client" \
+    --secret "$SMOKE_HYDRA_CLIENT_S_SECRET" \
+    --grant-type client_credentials \
+    --grant-type urn:ietf:params:oauth:grant-type:jwt-bearer \
+    --response-type token \
+    --scope openid \
+    --audience sutra-api \
+    --token-endpoint-auth-method client_secret_basic \
+    >/tmp/sutra-hydra-client-s.out 2>&1; then
+  cat /tmp/sutra-hydra-client-s.out >&2
+  fail "hydra oauth2 client '$search_client' creation failed"
+else
+  pass "hydra oauth2 client '$search_client' created"
+fi
+
+token_s_json="$(curl -sf -u "$search_client:$SMOKE_HYDRA_CLIENT_S_SECRET" \
+  --data-urlencode 'grant_type=client_credentials' \
+  --data-urlencode 'audience=sutra-api' \
+  --data-urlencode 'scope=openid' \
+  http://localhost:4444/oauth2/token)" || fail "hydra token request for '$search_client' failed"
+token_s="$(printf '%s' "$token_s_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
+
+s_slug="smoke-search-s-$(date +%s)"
+seller_s="$(curl -sf -X POST \
+  -H "Authorization: Bearer $token_s" -H 'Content-Type: application/json' \
+  -d "{\"store_name\":\"Smoke Search Store\",\"store_slug\":\"$s_slug\"}" \
+  "$API_URL/v1/sellers")" || fail "search: seller registration failed"
+seller_s_id="$(printf '%s' "$seller_s" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+
+mkproduct() { # mkproduct <title> <description> → prints product id
+  curl -sf -X POST -H "Authorization: Bearer $token_s" -H 'Content-Type: application/json' \
+    -d "{\"title\":\"$1\",\"description\":\"$2\",\"category_slug\":\"audio\"}" \
+    "$API_URL/v1/products" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])'
+}
+p1="$(mkproduct "Searchable Kurta Red" "handwoven cotton kurta, crimson")" \
+  || fail "search: product 1 create failed"
+p2="$(mkproduct "Searchable Kurta Blue" "handwoven cotton kurta, indigo")" \
+  || fail "search: product 2 create failed"
+p3="$(mkproduct "Searchable Salwar" "soft cotton salwar pants")" \
+  || fail "search: product 3 create failed"
+
+addvar() { # addvar <product_id> <sku> <price_paise>
+  curl -sf -X POST -H "Authorization: Bearer $token_s" -H 'Content-Type: application/json' \
+    -d "{\"sku\":\"$2\",\"price_paise\":$3}" \
+    "$API_URL/v1/products/$1/variants" >/dev/null
+}
+addvar "$p1" "SMOKE-S-001" 249900 || fail "search: P1 variant 1 failed"
+addvar "$p1" "SMOKE-S-002" 149900 || fail "search: P1 variant 2 failed"
+addvar "$p2" "SMOKE-S-003" 199900 || fail "search: P2 variant failed"
+addvar "$p3" "SMOKE-S-004" 99900  || fail "search: P3 variant failed"
+
+for pid in "$p1" "$p2" "$p3"; do
+  curl -sf -X PATCH -H "Authorization: Bearer $token_s" -H 'Content-Type: application/json' \
+    -d '{"status":"active"}' "$API_URL/v1/products/$pid" >/dev/null \
+    || fail "search: activating $pid failed"
+done
+pass "search: 3 products listed, variants added, all active"
+
+echo "smoke: waiting for the 3 products to land in the index"
+python3 - "$API_URL" "$token_s" "$p1,$p2,$p3" <<'PYEOF' || fail "search: products did not appear in the index"
+import json, sys, time, urllib.request
+api, token, want = sys.argv[1], sys.argv[2], set(sys.argv[3].split(","))
+deadline = time.time() + 120
+while True:
+    req = urllib.request.Request(api + "/v1/search?q=searchable&limit=50",
+                                 headers={"Authorization": "Bearer " + token})
+    try:
+        page = json.load(urllib.request.urlopen(req, timeout=10))
+    except Exception:
+        page = {"hits": []}
+    got = {h["id"] for h in page.get("hits", [])}
+    if want <= got:
+        break
+    if time.time() > deadline:
+        print("smoke FAIL: indexed ids %s, wanted %s" % (got, want), file=sys.stderr)
+        sys.exit(1)
+    time.sleep(2)
+PYEOF
+pass "search: all 3 products indexed (async indexing caught up)"
+
+# Hit shape: status/seller/category from the catalog row, min_price_paise =
+# the cheapest ACTIVE variant (P1: 149900, not 249900), numeric sort keys.
+hit1="$(curl -sf -G -H "Authorization: Bearer $token_s" \
+  --data-urlencode 'q=searchable' --data-urlencode 'limit=50' \
+  "$API_URL/v1/search")" || fail "search: q=searchable failed"
+HIT1="$hit1" python3 - "$p1" "$p2" "$p3" "$seller_s_id" <<'PYEOF' || fail "search: hit fields wrong"
+import json, os, sys
+page = json.loads(os.environ["HIT1"])
+by_id = {h["id"]: h for h in page["hits"]}
+p1, p2, p3, sid = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+h1, h2, h3 = by_id[p1], by_id[p2], by_id[p3]
+assert h1["title"] == "Searchable Kurta Red", h1
+assert h1["status"] == "active" and h1["seller_id"] == sid and h1["category_slug"] == "audio", h1
+assert h1["min_price_paise"] == 149900, ("min price is not the cheapest variant", h1)
+assert h2["min_price_paise"] == 199900 and h3["min_price_paise"] == 99900, page
+assert isinstance(h1["sort_seq"], int) and isinstance(h1["updated_at_unix"], int), h1
+PYEOF
+pass "search: hit shape (status/seller/category/min_price=cheapest variant/sort keys)"
+
+# Typo tolerance: "kurtha" (one substitution, 6 chars ≥ oneTypo threshold).
+typo_ids="$(curl -sf -G -H "Authorization: Bearer $token_s" \
+  --data-urlencode 'q=kurtha' --data-urlencode 'limit=50' \
+  "$API_URL/v1/search" \
+  | python3 -c 'import json,sys; print(" ".join(h["id"] for h in json.load(sys.stdin)["hits"]))')"
+case " $typo_ids " in
+  *" $p1 "*|*" $p2 "*) pass "search: typo tolerance (kurtha → kurta hits P1/P2)" ;;
+  *) fail "search: typo query kurtha matched none of P1/P2 (got: $typo_ids)" ;;
+esac
+
+# Facet filters: seller_id, category_slug, price band.
+count_hits() { # count_hits <param>... → prints hit count
+  local urlargs=() p
+  for p in "$@"; do urlargs+=(--data-urlencode "$p"); done
+  curl -sf -G -H "Authorization: Bearer $token_s" \
+    --data-urlencode 'q=searchable' --data-urlencode "limit=50" \
+    "${urlargs[@]}" "$API_URL/v1/search" \
+    | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["hits"]))'
+}
+[ "$(count_hits "seller_id=$seller_s_id")" = "3" ] \
+  || fail "search: seller_id filter did not return 3"
+[ "$(count_hits "seller_id=00000000-0000-0000-0000-000000000000")" = "0" ] \
+  || fail "search: unknown seller_id filter leaked hits"
+[ "$(count_hits "category_slug=audio")" = "3" ] \
+  || fail "search: category_slug=audio filter did not return 3"
+[ "$(count_hits "category_slug=laptops")" = "0" ] \
+  || fail "search: category_slug=laptops filter leaked hits"
+[ "$(count_hits "max_price_paise=100000")" = "1" ] \
+  || fail "search: price band max=100000 did not return exactly P3"
+[ "$(count_hits "min_price_paise=150000" "max_price_paise=200000")" = "1" ] \
+  || fail "search: price band 150000–200000 did not return exactly P2"
+pass "search: seller/category/price filters"
+
+# Keyset pagination: limit=2 walks 2 → 1, exact ids, no dupes, terminates.
+pg1="$(curl -sf -G -H "Authorization: Bearer $token_s" \
+  --data-urlencode 'q=searchable' --data-urlencode 'limit=2' \
+  "$API_URL/v1/search")" || fail "search: page 1 failed"
+c1="$(printf '%s' "$pg1" | python3 -c 'import json,sys; p=json.load(sys.stdin); print(" ".join(h["id"] for h in p["hits"]), p.get("next_cursor",""))')"
+c1_ids="$(printf '%s' "$c1" | cut -d' ' -f1,2)"
+c1_cur="$(printf '%s' "$c1" | cut -d' ' -f3)"
+[ -n "$c1_cur" ] || fail "search: page 1 has no next_cursor"
+[ "$c1_ids" = "$p3 $p2" ] || fail "search: page 1 order wrong (got: $c1_ids)"
+pg2="$(curl -sf -G -H "Authorization: Bearer $token_s" \
+  --data-urlencode 'q=searchable' --data-urlencode 'limit=2' \
+  --data-urlencode "cursor=$c1_cur" \
+  "$API_URL/v1/search")" || fail "search: page 2 failed"
+PG2="$pg2" python3 - "$p1" <<'PYEOF' || fail "search: page 2 wrong"
+import json, os, sys
+page = json.loads(os.environ["PG2"])
+ids = [h["id"] for h in page["hits"]]
+assert ids == [sys.argv[1]], ids
+assert not page.get("next_cursor"), "page 2 should be the last page"
+PYEOF
+pass "search: keyset pagination (2 + 1, no dupes, terminates)"
+
+# 400 param matrix — malformed known params are 400 with stable codes.
+s_body="/tmp/sutra-search-body.json"
+expect400() { # expect400 <description> <expected_code> <query-string>
+  code="$(curl -s -o "$s_body" -w '%{http_code}' -G -H "Authorization: Bearer $token_s" \
+    --data-urlencode 'q=searchable' --data-urlencode "$3" "$API_URL/v1/search")"
+  [ "$code" = "400" ] || fail "search: $1 did not return 400 (got $code)"
+  got="$(python3 -c 'import json; print(json.load(open("'"$s_body"'"))["error"]["code"])')"
+  [ "$got" = "$2" ] || fail "search: $1 envelope code is $got, want $2"
+}
+expect400 "limit=999" "invalid_limit" "limit=999"
+expect400 "bad cursor" "invalid_cursor" "cursor=not-a-cursor"
+expect400 "min>max price" "invalid_price_range" "min_price_paise=200&max_price_paise=100"
+expect400 "bad status" "invalid_status" "status=hidden"
+pass "search: 400 param matrix (invalid_limit/invalid_cursor/invalid_price_range/invalid_status)"
+
+# Delete propagation: archive all three → hits vanish from the index.
+for pid in "$p1" "$p2" "$p3"; do
+  [ "$(curl -sf -X DELETE -H "Authorization: Bearer $token_s" \
+    "$API_URL/v1/products/$pid" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')" = "archived" ] \
+    || fail "search: archiving $pid failed"
+done
+echo "smoke: waiting for the archived products to leave the index"
+python3 - "$API_URL" "$token_s" <<'PYEOF' || fail "search: archived products still in the index"
+import json, sys, time, urllib.request
+api, token = sys.argv[1], sys.argv[2]
+deadline = time.time() + 120
+while True:
+    req = urllib.request.Request(api + "/v1/search?q=searchable&limit=50",
+                                 headers={"Authorization": "Bearer " + token})
+    try:
+        page = json.load(urllib.request.urlopen(req, timeout=10))
+    except Exception:
+        page = {"hits": []}
+    if not page.get("hits"):
+        break
+    if time.time() > deadline:
+        print("smoke FAIL: still indexed: %s" % [h["id"] for h in page["hits"]], file=sys.stderr)
+        sys.exit(1)
+    time.sleep(2)
+PYEOF
+pass "search: archive → documents leave the index (cleanup)"
+
+# Restore the api to searchless defaults; prove the 503 contract on the way:
+# with no SEARCH_MASTER_KEY the proxy is disabled → 503 search_unavailable
+# + Retry-After (never a 500 — search is a dependency, not a bug).
+echo "smoke: restoring api to searchless defaults"
+docker compose up -d --no-deps api
+wait_for 90 "api /healthz (searchless)" curl -sf "$API_URL/healthz"
+s503_hdr="/tmp/sutra-search-503-hdr.txt"
+s503_code="$(curl -s -o "$s_body" -D "$s503_hdr" -w '%{http_code}' \
+  -H "Authorization: Bearer $token_s" -G --data-urlencode 'q=searchable' \
+  "$API_URL/v1/search")"
+[ "$s503_code" = "503" ] || fail "search: unconfigured search did not return 503 (got $s503_code)"
+grep -qi '^Retry-After: [1-9]' "$s503_hdr" \
+  || fail "search: 503 missing Retry-After header"
+[ "$(python3 -c 'import json; print(json.load(open("'"$s_body"'"))["error"]["code"])')" = "search_unavailable" ] \
+  || fail "search: 503 envelope code is not search_unavailable"
+pass "search: unconfigured → 503 search_unavailable + Retry-After"
 
 # --- Chat websocket round-trip --------------------------------------------
 wait_for 90 "chat websocket listener" \

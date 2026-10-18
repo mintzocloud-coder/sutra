@@ -41,6 +41,7 @@ Doppler, cloud provider). Never in the image, never in a commit.
 | `RELEASE_COOKIE` | Chat clustering: Erlang distribution cookie, shared by all chat nodes (B5) | `openssl rand -base64 24` |
 | `CLUSTER_SECRET` | Chat clustering: signs gossip payloads (B5) | `openssl rand -base64 24` |
 | `HYDRA_*` | OIDC issuer URL + client creds (issue #4); until Hydra lands, `JWT_AUDIENCE` just needs to be consistent across api + chat | — |
+| `MEILI_MASTER_KEY` | Meilisearch master key; must equal the API's `SEARCH_MASTER_KEY` (compose dev default `sutra-dev-master-key` is **not** production-safe) | `openssl rand -hex 32` |
 
 Create a gitignored `.env` (compose reads it automatically):
 
@@ -50,6 +51,10 @@ SECRET_KEY_BASE="$(openssl rand -base64 48)"
 POSTGRES_PASSWORD="$(openssl rand -base64 24)"
 RELEASE_COOKIE="$(openssl rand -base64 24)"
 CLUSTER_SECRET="$(openssl rand -base64 24)"
+MEILI_MASTER_KEY="$(openssl rand -hex 32)"
+# SEARCH_MASTER_KEY must EQUAL MEILI_MASTER_KEY (the API's Bearer credential
+# for the v1 REST calls); generate once, paste the same value on both lines.
+SEARCH_MASTER_KEY="$(openssl rand -hex 32)"
 PHX_HOST=api.sutra.example.com
 HYDRA_ISSUER=https://hydra.sutra.example.com   # placeholder until issue #4
 JWT_AUDIENCE=sutra-api
@@ -95,6 +100,8 @@ CORS_ORIGINS=https://app.sutra.example.com
 | `TRANSCODE_SWEEP_INTERVAL` | `5m` | Interval at which the worker sweeps stuck `uploaded` rows back onto the stream (D4b) |
 | `CHAT_INTERNAL_URL` | `http://chat:4000` | Base URL of the chat service's internal event endpoint (D5) |
 | `CHAT_INTERNAL_TOKEN` | *(unset)* | Service-to-service Bearer token for `POST /internal/events`; empty **disables** the realtime publisher with a loud WARN (D5) |
+| `SEARCH_URL` | `http://meilisearch:7700` | Meilisearch base URL for product search (F2) |
+| `SEARCH_MASTER_KEY` | *(unset = search disabled)* | Must equal `MEILI_MASTER_KEY`; empty ⇒ indexing no-ops with a loud WARN and `GET /v1/search` 503s. A key with a bad URL refuses boot (fail-closed). See `docs/search.md` |
 | `SHUTDOWN_TIMEOUT` | `10` | Graceful-shutdown seconds |
 | `AUTH_BYPASS` | *(unset)* | Dev-only identity hatch — **never in prod** |
 

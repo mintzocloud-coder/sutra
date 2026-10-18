@@ -1430,8 +1430,30 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
       fields) + 2 new catalog integration tests (hook fires 3× with
       the parent id; updated_at bumps on add+update). Migration 0009
       proven applied (ledger v9, column present).
-    - [ ] F2 part 2b: docs/search.md, OpenAPI, smoke.sh section,
-      production.md SEARCH_* env rows.
+    - [x] F2 part 2b DONE 2026-10-18 ~21:05 IST: docs/search.md, OpenAPI,
+      smoke.sh section, production.md SEARCH_* env rows. docs/search.md
+      (new): index contract (UID products, ensure-once, document shape,
+      active→index / draft+archived→delete, variant writes rebuild the
+      parent doc), read contract (params, numeric (updated_at,sort_seq)
+      keyset paging + why search_seq, filters, typo settings, 400 code
+      table, 503 contract), failure-mode table, env reference, ops
+      (meili_data backup, index rebuild). OpenAPI: /v1/search path
+      (commerce tag, 8 params, 200/400/401/429/503+Retry-After/500) +
+      SearchProductHit/SearchPage schemas — redocly lint valid,
+      0 warnings. smoke.sh: new F2 round-trip — meilisearch boots with
+      an ephemeral per-run key, api recreated with SEARCH_MASTER_KEY
+      (bypass off): 3 products listed (P1 two variants → min_price =
+      cheapest ACTIVE variant), activated, poll-to-indexed; hit fields,
+      typo tolerance (kurtha→kurta), seller/category/price filters,
+      keyset walk limit=2 (exact order [P3,P2]+[P1], terminates),
+      400 matrix, archive → poll-to-vanished; api restored searchless
+      and the 503 search_unavailable + Retry-After contract proven.
+      production.md: SEARCH_URL/SEARCH_MASTER_KEY API rows +
+      MEILI_MASTER_KEY secret row + .env example (keys must match).
+      VERIFIED: bash -n clean, all 4 embedded python heredocs compile,
+      redocly 0 warnings, SPDX checker green, YAML parse clean.
+      Full compose + smoke run is CI-gated (no docker on this VM).
+      **F2 COMPLETE — next: F3 (cart/checkout/orders).**
 - [ ] F3: Cart + checkout + orders — cart API (add/update/remove,
   idempotent), checkout → order creation, order state machine
   (created → confirmed → shipped → delivered / cancelled / returned),
@@ -1455,6 +1477,16 @@ All boxes ticked, CI green, `scripts/smoke.sh` passes, docs complete.
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-18 ~21:05 IST: F2 part 2b done — docs/search.md (index + read
+  contracts, keyset-on-numbers rationale, failure modes, env table, ops)
+  + OpenAPI /v1/search path + SearchProductHit/SearchPage schemas
+  (redocly valid, 0 warnings) + smoke.sh full search round-trip (ephemeral
+  Meilisearch key; 3 products + variant-min-price proof; poll-to-indexed;
+  typo/filters/keyset/400-matrix/archive-vanish; 503 search_unavailable
+  proven on restore) + production.md SEARCH_*/MEILI_MASTER_KEY rows +
+  .env example. Verified: bash -n, 4 python heredocs compile, SPDX green;
+  full run CI-gated. **F2 COMPLETE — next: F3.** Pushed.
 
 - 2026-10-18 ~20:35 IST: F2 part 2a done — variant-triggered reindex
   (variant writes bump products.updated_at + fire AfterProductWrite

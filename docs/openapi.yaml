@@ -2222,6 +2222,134 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /v1/search:
+    get:
+      tags: [commerce]
+      summary: Product search (storefront)
+      description: |
+        The read half of F2 (Wave-3 product search), a dependency-aware
+        proxy over self-hosted Meilisearch CE. Queries are ranked by
+        Meilisearch's default rules on `q` (title outranks description,
+        typo tolerance on); results within equal relevance come newest
+        first (`updated_at desc, sort_seq desc` — `sort_seq` is the
+        numeric keyset tie-breaker because Meilisearch range filters
+        work on numbers only; see `docs/search.md`).
+        Paging is a true keyset: pass the previous page's `next_cursor`
+        as `cursor`; stop when `next_cursor` is absent. `status`
+        defaults to `active` — a defense-in-depth second gate, since
+        drafts/archived listings already leave the index on write.
+        Indexing is async: a just-activated product may take a moment
+        to appear (poll in integration tests). Search being down is a
+        dependency outage, never a bug: expect 503
+        `search_unavailable` + `Retry-After`, not 500.
+      operationId: searchProducts
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: false
+          description: Full-text query over title + description (≤ 200 chars). Empty = newest-first browse order.
+          schema:
+            type: string
+            maxLength: 200
+        - name: seller_id
+          in: query
+          required: false
+          description: Filter to one seller's storefront.
+          schema:
+            type: string
+            format: uuid
+        - name: category_slug
+          in: query
+          required: false
+          description: Filter to one category, e.g. `audio`.
+          schema:
+            type: string
+            pattern: '^[a-z0-9-]{1,64}$'
+        - name: status
+          in: query
+          required: false
+          description: Document status gate; defaults to `active`.
+          schema:
+            type: string
+            enum: [active, draft, archived]
+            default: active
+        - name: min_price_paise
+          in: query
+          required: false
+          description: Price band over the document's `min_price_paise` (cheapest active variant). Non-negative integer.
+          schema:
+            type: integer
+            minimum: 0
+        - name: max_price_paise
+          in: query
+          required: false
+          description: Upper bound of the price band; must be ≥ min_price_paise.
+          schema:
+            type: integer
+            minimum: 0
+        - name: limit
+          in: query
+          required: false
+          description: Page size, 1–50.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque cursor from the previous page's `next_cursor`. Malformed cursors are 400.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: One page of search hits
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchPage'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: |
+            Malformed param (`invalid_query`, `invalid_seller_id`,
+            `invalid_category_slug`, `invalid_status`, `invalid_min_price`,
+            `invalid_max_price`, `invalid_price_range`, `invalid_limit`,
+            `invalid_cursor`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          description: |
+            Search unavailable — disabled (no master key) or the
+            Meilisearch cluster is down. Retry after the `Retry-After`
+            window.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema:
+                type: integer
+        '500':
+          $ref: '#/components/responses/InternalError'
+
 components:
   parameters:
     UserId:
@@ -2983,6 +3111,66 @@ components:
             409 `insufficient_stock` when it would drive quantity below
             zero.
           example: 100
+
+    SearchProductHit:
+      type: object
+      required: [id, title, description, seller_id, status, updated_at_unix, sort_seq]
+      description: |
+        One Meilisearch `products` index document (F2). The search view
+        of a product: cheapest active variant's price as `min_price_paise`
+        (the storefront's "from ₹X" badge), numeric `sort_seq` as the
+        keyset tie-breaker.
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Product id (index primary key).
+        title:
+          type: string
+          description: Searchable; outranks description.
+        description:
+          type: string
+          description: Searchable.
+        seller_id:
+          type: string
+          format: uuid
+        category_slug:
+          type: string
+          description: From the category tree; absent when uncategorized.
+          example: audio
+        status:
+          type: string
+          enum: [active, draft, archived]
+        min_price_paise:
+          type: integer
+          description: |
+            Cheapest ACTIVE variant's price (integer paise); absent when
+            no active variants exist.
+          example: 149900
+        updated_at_unix:
+          type: integer
+          description: Product `updated_at` as unix seconds — sort key.
+        sort_seq:
+          type: integer
+          description: |
+            `products.search_seq` identity value — numeric tie-breaker
+            for keyset paging (Meilisearch range filters are
+            numbers-only).
+    SearchPage:
+      type: object
+      required: [hits]
+      properties:
+        hits:
+          type: array
+          description: Ordered `updated_at_unix desc, sort_seq desc` (relevance first within equal order).
+          items:
+            $ref: '#/components/schemas/SearchProductHit'
+        next_cursor:
+          type: string
+          description: |
+            Opaque base64url cursor over the last hit's
+            `(updated_at_unix, sort_seq)`; pass as `cursor` for the
+            next page. Absent on the last page.
 
     ErrorEnvelope:
       type: object
