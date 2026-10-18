@@ -52,7 +52,7 @@ services:
   # issuer now. See docs/identity.md. DEV SECRETS below are placeholders;
   # production must override them (docs/production.md).
   hydra-migrate:
-    image: oryd/hydra:v26.4.2
+    image: oryd/hydra:v26.2.0
     environment:
       DSN: "postgres://sutra:sutra@postgres:5432/sutra?sslmode=disable"
     command: migrate sql -e --yes
@@ -61,7 +61,7 @@ services:
         condition: service_healthy
 
   hydra:
-    image: oryd/hydra:v26.4.2
+    image: oryd/hydra:v26.2.0
     # --dev: development defaults (no TLS requirement). Production serves
     # behind TLS termination with an explicit config file instead.
     command: serve all --dev
@@ -83,7 +83,7 @@ services:
         condition: service_completed_successfully
 
   kratos-migrate:
-    image: oryd/kratos:v26.4.2
+    image: oryd/kratos:v26.2.0
     environment:
       DSN: "postgres://sutra:sutra@postgres:5432/sutra?sslmode=disable"
     command: migrate sql -e --yes --config /etc/config/kratos/kratos.yml
@@ -94,7 +94,7 @@ services:
         condition: service_healthy
 
   kratos:
-    image: oryd/kratos:v26.4.2
+    image: oryd/kratos:v26.2.0
     command: serve --config /etc/config/kratos/kratos.yml
     ports: ["4433:4433", "4434:4434"]
     environment:

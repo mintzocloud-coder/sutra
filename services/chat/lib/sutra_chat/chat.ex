@@ -103,8 +103,15 @@ defmodule SutraChat.Chat do
   defp upsert_message(changeset) do
     fields = Ecto.Changeset.apply_changes(changeset)
 
+    # Postgrex encodes uuid parameters as 16-byte binaries — the string form
+    # Ecto.UUID.generate/0 returns is rejected by the encoder
+    # (DBConnection.EncodeError: "expected a binary of 16 bytes"), so dump
+    # the id to its binary form before passing it to the raw upsert.
+    uuid = Ecto.UUID.generate()
+    {:ok, id_param} = Ecto.UUID.dump(uuid)
+
     params = [
-      Ecto.UUID.generate(),
+      id_param,
       fields.room_id,
       fields.sender_subject,
       fields.client_msg_id,
@@ -116,6 +123,11 @@ defmodule SutraChat.Chat do
     # client retries; see docs/delivery-semantics.md.
     %{rows: [[id, room_id, sender_subject, client_msg_id, body, inserted_at, inserted_new]]} =
       Ecto.Adapters.SQL.query!(Repo, @upsert_sql, params)
+
+    # RETURNING decodes uuid as a 16-byte binary too — load it back to the
+    # canonical string form the :binary_id schema field (and channel
+    # clients via ack_payload) expect.
+    {:ok, id} = Ecto.UUID.load(id)
 
     message = %Message{
       id: id,

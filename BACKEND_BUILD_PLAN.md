@@ -553,8 +553,11 @@ every run. Gated items stay gated: real SMS/DLT stays post-incorporation
       Accept: smoke.sh extended — dev token from Hydra → GET /v1/me 200;
       docs/identity.md describes the DLT-gated path.
       DONE 2026-10-18: compose gains `hydra-migrate`/`hydra` +
-      `kratos-migrate`/`kratos` (images pinned `oryd/hydra:v26.4.2` +
-      `oryd/kratos:v26.4.2`, latest per Ory changelog 2026-10-15);
+      `kratos-migrate`/`kratos` (images pinned `oryd/hydra:v26.2.0` +
+      `oryd/kratos:v26.2.0` — the latest REAL releases per the GitHub
+      releases API (both published 2026-03-20); the earlier v26.4.2 pin
+      never existed on Docker Hub and broke the smoke job's hydra pull,
+      fixed 2026-10-19);
       Hydra `serve all --dev` with explicit `URLS_SELF_ISSUER=
       http://hydra:4444` (matches API/chat `HYDRA_ISSUER`), Kratos serves
       `services/identity/kratos/kratos.yml` (dev config, email+password,
@@ -1680,6 +1683,24 @@ All boxes ticked, CI green, `scripts/smoke.sh` passes, docs complete.
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-19 ~01:25 IST: CI-RED TRIAGE — both red jobs root-caused and
+  fixed in this run: (1) elixir-chat 7 failures: `Chat.upsert_message/1`
+  passed the string form of `Ecto.UUID.generate()` as the `$1::uuid`
+  param of the hand-written upsert — Postgrex's uuid encoder only
+  accepts 16-byte binaries → DBConnection.EncodeError on every channel
+  send test. Fixed canonically: `Ecto.UUID.dump/1` before `query!`,
+  `Ecto.UUID.load/1` on the RETURNING id (conflict path included —
+  the existing row's id comes back binary too). chat.ex syntax-checked
+  on local Elixir 1.14; deps aren't compiled locally so full `mix test`
+  stays CI-gated (1.18). (2) smoke job: `oryd/hydra:v26.4.2` does not
+  exist on Docker Hub (manifest unknown) — the D1 pin was fabricated
+  ("latest per Ory changelog" was wrong). GitHub releases API says the
+  latest real release of ory/hydra AND ory/kratos is v26.2.0 (published
+  2026-03-20; matches the Sept-2026 dev.to deployment guide). All four
+  compose pins + the docs/identity.md table corrected to v26.2.0.
+  compose YAML parses clean. Pushed; CI-green confirmation lands with
+  the next run's CI check.
 
 - 2026-10-19 ~00:30 IST: F5 part 2a done — shipments data model +
   shipment realtime event (see F5 task note): migration

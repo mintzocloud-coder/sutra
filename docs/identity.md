@@ -35,10 +35,10 @@ hypothetical; now `docker compose up` boots it.
 
 | Service         | Image (pinned)        | Ports       | Notes                                      |
 |-----------------|-----------------------|-------------|--------------------------------------------|
-| `hydra-migrate` | `oryd/hydra:v26.4.2`  | —           | one-shot: `migrate sql -e --yes`           |
-| `hydra`         | `oryd/hydra:v26.4.2`  | 4444 / 4445 | `serve all --dev`; public / admin           |
-| `kratos-migrate`| `oryd/kratos:v26.4.2` | —           | one-shot: `migrate sql -e --yes --config …` |
-| `kratos`        | `oryd/kratos:v26.4.2` | 4433 / 4434 | `serve --config …`; public / admin          |
+| `hydra-migrate` | `oryd/hydra:v26.2.0`  | —           | one-shot: `migrate sql -e --yes`           |
+| `hydra`         | `oryd/hydra:v26.2.0`  | 4444 / 4445 | `serve all --dev`; public / admin           |
+| `kratos-migrate`| `oryd/kratos:v26.2.0` | —           | one-shot: `migrate sql -e --yes --config …` |
+| `kratos`        | `oryd/kratos:v26.2.0` | 4433 / 4434 | `serve --config …`; public / admin          |
 
 Both share the `sutra` Postgres database with the API and chat services.
 Table namespaces do not collide (Hydra's tables are `hydra_*`-prefixed;
