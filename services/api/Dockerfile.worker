@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Sutra transcode worker — production image (D4b).
+#   - Multi-stage: compile in the Go toolchain image, ship only the static
+#     binary PLUS the FFmpeg toolchain the worker shells out to
+#     (internal/transcode: FFmpegTranscoder needs `ffmpeg` and `ffprobe`
+#     on PATH — ffprobe reads the source resolution, ffmpeg builds the
+#     HLS ladder and the poster frame).
+#   - Minimal base (alpine) + the ffmpeg apk package, non-root runtime
+#     user. The Go binary is PID 1 (exec-form ENTRYPOINT), so SIGTERM
+#     reaches the worker directly and its signal.Notify path drains
+#     in-flight transcodes on orchestrator stops.
+# Liveness: the worker TTL-refreshes `worker:transcode:heartbeat` in
+# Valkey every loop; orchestrators probe that key (a dead worker stops
+# refreshing within 3x its block window). The in-image HEALTHCHECK is a
+# process-level backstop only.
+
+# ---- build stage -----------------------------------------------------------
+FROM golang:1.22-alpine AS build
+WORKDIR /src
+
+# Copy module metadata first so `go mod download` stays cached unless deps change.
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+# Static binary (CGO off → no libc dependency), reproducible (-trimpath),
+# stripped (-s -w) to keep the shipped image small.
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /transcode-worker ./cmd/transcode-worker
+
+# ---- runtime stage ---------------------------------------------------------
+FROM alpine:3.20
+
+# FFmpeg 8.x series (probe + transcode + poster extraction) plus a
+# non-root user for the worker process. ffmpeg in apk's community repo
+# is all the worker needs — no codecs are added beyond what ffprobe
+# and the default H.264/AAC muxing require, because the HLS outputs
+# are intentionally vanilla (broad device compatibility).
+RUN apk add --no-cache ffmpeg && \
+    addgroup -S app && adduser -S -G app app
+
+COPY --from=build --chown=app:app /transcode-worker /transcode-worker
+
+# Working directory for clip downloads and intermediate renditions.
+# Alpine's /tmp is world-writable, but an explicit dir owned by `app`
+# keeps uploads isolated from the container's temp namespace.
+RUN mkdir -p /tmp/transcode-work && chown app:app /tmp/transcode-work
+ENV TMPDIR=/tmp/transcode-work
+
+USER app
+
+# Backstop only: if the process itself dies, the orchestrator should
+# restart the container. The REAL liveness signal is the Valkey
+# heartbeat key (`worker:transcode:heartbeat`, TTL'd by the worker),
+# which also covers the "process alive but not working" case that a
+# process check cannot see.
+HEALTHCHECK --interval=60s --timeout=3s --start-period=30s --retries=3 \
+  CMD pidof transcode-worker || exit 1
+
+ENTRYPOINT ["/transcode-worker"]

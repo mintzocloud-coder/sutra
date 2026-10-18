@@ -753,6 +753,25 @@ every run. Gated items stay gated: real SMS/DLT stays post-incorporation
       PART 2 NEXT: Dockerfile.worker (FFmpeg), compose service, CI
       compose-build gate, docs/video-pipeline.md, smoke.sh full clip
       round-trip.
+      PART 2 DONE 2026-10-18 ~09:05 IST: `services/api/Dockerfile.worker`
+      — multi-stage (golang:1.22-alpine build → alpine:3.20 runtime with
+      the `ffmpeg` apk package, the only binaries the worker shells out
+      to), non-root `app` user, own TMPDIR work dir, SIGTERM-friendly
+      exec-form entrypoint, HEALTHCHECK as a process backstop (real
+      liveness = the worker:transcode:heartbeat Valkey key). Compose gains
+      the `transcode-worker` service (build from Dockerfile.worker,
+      DB/Valkey/SeaweedFS env, depends_on postgres+valkey healthy and
+      seaweedfs started; consumer group splits jobs across replicas).
+      CI `compose` job now builds the worker image on every push.
+      New docs/video-pipeline.md: lifecycle diagram, media statuses,
+      worker design (consumer group, ACK-after-resolve, exponential
+      backoff→dead-letter, duplicate-delivery no-ops, stuck-row sweep,
+      heartbeat liveness, fail-closed), ladder table (720p/480p/360p,
+      never upscale), outputs, failure-mode table, env reference, ops
+      notes. VERIFIED: compose + CI YAML parse clean, SPDX checker
+      green; image build + end-to-end boot are CI-gated (no docker on
+      this VM). NEXT: smoke.sh full clip round-trip (upload intent →
+      PUT sample clip → complete → poll to ready), then D4b [x].
       Background Go worker (cmd/transcode-worker or new package):
       FFmpeg 8.1 → HLS multi-rendition + poster frame; consumes the
       `media:transcode` Valkey stream (consumer group), backoff

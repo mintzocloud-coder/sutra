@@ -152,6 +152,40 @@ services:
       valkey:
         condition: service_healthy
 
+  # Transcode worker (D4b): background HLS video pipeline. Drains the
+  # `media:transcode` Valkey stream (fed by the API's media registry),
+  # pulls each source clip from SeaweedFS, builds per-rendition HLS
+  # packages + a poster frame with FFmpeg, uploads the outputs back,
+  # and flips the media row to ready (or failed after TRANSCODE_MAX_ATTEMPTS,
+  # with the job parked on the media:transcode:dead stream). Runs one
+  # replica in dev; scale replicas freely — the consumer group
+  # (TRANSCODE_GROUP/transcode-workers, TRANSCODE_CONSUMER=hostname by
+  # default) distributes jobs across them. Like the API it refuses to boot
+  # without PostgreSQL and Valkey; SeaweedFS is warn-only at startup
+  # (a dead volume server fails individual jobs through the retry/DLQ
+  # machinery instead of the whole worker).
+  transcode-worker:
+    build:
+      context: ./services/api
+      dockerfile: Dockerfile.worker
+    environment:
+      DATABASE_URL: "postgres://sutra:sutra@postgres:5432/sutra?sslmode=disable"
+      VALKEY_ADDR: "valkey:6379"
+      # Object storage: master for dir/assign, volume base for reads.
+      SEAWEEDFS_MASTER_ADDR: "seaweedfs:9333"
+      MEDIA_PUBLIC_BASE_URL: "http://seaweedfs:8080"
+      # Tuning knobs (internal/config defaults apply when unset):
+      # TRANSCODE_GROUP / TRANSCODE_CONSUMER / TRANSCODE_MAX_ATTEMPTS /
+      # TRANSCODE_BACKOFF_BASE / TRANSCODE_BACKOFF_MAX /
+      # TRANSCODE_SWEEP_INTERVAL
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      seaweedfs:
+        condition: service_started
+
 volumes:
   pgdata:
   weeddata:
