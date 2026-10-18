@@ -23,6 +23,7 @@ import (
 	"github.com/mintzocloud-coder/sutra/services/api/internal/db"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/engagement"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/feed"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/logistics"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/media"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/middleware"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/oidc"
@@ -405,6 +406,29 @@ func main() {
 	log.Warn("payments: running with the fail-closed stub — real payment processing is DISABLED until the post-investors Cashfree onboarding (see docs/payments.md)")
 	if cfg.CashfreeAppID != "" || cfg.CashfreeSecret != "" {
 		log.Warn("payments: CASHFREE_* credentials are set but no real provider is wired — they are IGNORED; online payments cannot process")
+	}
+
+	// Logistics seam (F5): fail fast on an unknown LOGISTICS_PROVIDER so a
+	// misconfigured partner name refuses to boot instead of silently
+	// booking nothing. Until a logistics partner is onboarded
+	// post-investors the only provider is the fail-closed stub (see
+	// internal/logistics): every operation — CreateShipment, Track,
+	// Cancel — is an explicit typed error, never a booking. The
+	// constructed provider is discarded for now and consumed by the
+	// shipment-booking routes landing in F5 part 2. Real keys MUST come
+	// from the LOGISTICS_* environment; they are never committed and
+	// never logged.
+	if _, err := logistics.NewProvider(cfg.LogisticsProvider, logistics.ProviderConfig{
+		APIKey: cfg.LogisticsAPIKey,
+		Secret: cfg.LogisticsSecret,
+		Env:    cfg.LogisticsEnv,
+	}); err != nil {
+		log.Error("invalid logistics config — refusing to start", "err", err)
+		os.Exit(1)
+	}
+	log.Warn("logistics: running with the fail-closed stub — shipment booking is DISABLED until a logistics partner is onboarded post-investors (see docs/logistics.md)")
+	if cfg.LogisticsAPIKey != "" || cfg.LogisticsSecret != "" {
+		log.Warn("logistics: LOGISTICS_* credentials are set but no real provider is wired — they are IGNORED; no shipments can be booked")
 	}
 
 	// Database: connect (fail fast if unreachable) then apply pending

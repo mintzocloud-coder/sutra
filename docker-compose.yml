@@ -257,6 +257,17 @@ services:
       CASHFREE_APP_ID: ${CASHFREE_APP_ID:-}
       CASHFREE_SECRET_KEY: ${CASHFREE_SECRET_KEY:-}
       CASHFREE_ENV: ${CASHFREE_ENV:-}
+      # Logistics (F5 part 1): logistics-gateway seam. Only "stub" boots
+      # until a logistics partner is onboarded post-investors — any other
+      # LOGISTICS_PROVIDER makes the API refuse to boot (fail-closed), and
+      # every operation on the stub is a typed error, never a booking.
+      # LOGISTICS_API_KEY/SECRET/ENV are the future live credentials:
+      # loaded, never logged, never committed; the stub ignores them
+      # (and warns loudly if they are set).
+      LOGISTICS_PROVIDER: "stub"
+      LOGISTICS_API_KEY: ${LOGISTICS_API_KEY:-}
+      LOGISTICS_SECRET: ${LOGISTICS_SECRET:-}
+      LOGISTICS_ENV: ${LOGISTICS_ENV:-}
     depends_on:
       postgres:
         condition: service_healthy

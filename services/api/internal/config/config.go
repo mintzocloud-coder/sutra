@@ -80,6 +80,16 @@ type Config struct {
 	CashfreeAppID    string // CASHFREE_APP_ID; unset = no live creds
 	CashfreeSecret   string // CASHFREE_SECRET_KEY; never logged, never committed
 	CashfreeEnv      string // "sandbox" | "prod"; "" = unset
+	// Logistics (F5): logistics-gateway seam. LOGISTICS_PROVIDER is
+	// "stub" until a logistics partner is onboarded post-investors
+	// (see internal/logistics, docs/logistics.md); any other value
+	// makes the API refuse to boot (fail-closed). LOGISTICS_* are the
+	// future live credentials — loaded, never logged, never in repo;
+	// the stub ignores them (and warns loudly if they are set).
+	LogisticsProvider string // logistics partner name; "stub" until onboarding
+	LogisticsAPIKey   string // LOGISTICS_API_KEY; unset = no live creds
+	LogisticsSecret   string // LOGISTICS_SECRET; never logged, never committed
+	LogisticsEnv      string // "sandbox" | "prod"; "" = unset
 }
 
 func getEnv(key, fallback string) string {
@@ -205,5 +215,9 @@ func Load() Config {
 		CashfreeAppID:     getEnv("CASHFREE_APP_ID", ""),
 		CashfreeSecret:    getEnv("CASHFREE_SECRET_KEY", ""),
 		CashfreeEnv:       getEnv("CASHFREE_ENV", ""),
+		LogisticsProvider: getEnv("LOGISTICS_PROVIDER", "stub"),
+		LogisticsAPIKey:   getEnv("LOGISTICS_API_KEY", ""),
+		LogisticsSecret:   getEnv("LOGISTICS_SECRET", ""),
+		LogisticsEnv:      getEnv("LOGISTICS_ENV", ""),
 	}
 }

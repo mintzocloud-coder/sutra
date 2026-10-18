@@ -1605,9 +1605,30 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
     matches the real main.go WARN string byte-for-byte. No Go
     changes — go build/vet/CI unaffected. Full smoke run CI-gated
     (no docker on this VM).
-- [ ] F5: Logistics gateway — internal/logistics interface (CreateShipment,
-  Track, Cancel) + stub provider, shipment events → Elixir realtime
-  (user:<id> topics), COD remittance tracking fields, docs/logistics.md.
+- [ ] F5: Logistics gateway — internal/logistics interface (CreateShipment, Track, Cancel) + stub provider, shipment events → Elixir realtime (user:<id> topics), COD remittance tracking fields, docs/logistics.md.
+  - [x] F5 part 1 DONE 2026-10-18 ~23:55 IST: `internal/logistics`
+    package mirroring the F4 payments seam — Provider interface
+    (CreateShipment/Track/Cancel, integer-paise money, COD-first v1:
+    ShipmentParams carries COD + CODAmountPaise, TrackingUpdate reports
+    CODCollectedPaise for the part-2 remittance reconciliation),
+    normalized TrackingStatus lifecycle (8 statuses, enum-stability
+    test pins the wire values), ErrLogisticsDisabled + StubProvider
+    (every method → typed error, never a booking/fake delivery),
+    NewProvider ("stub"/"" only; "delhivery"/"shiprocket"/typos →
+    fail-closed errUnknownProvider naming the post-investors gate;
+    bad LOGISTICS_ENV → boot-time error). Config: LOGISTICS_PROVIDER/
+    API_KEY/SECRET/ENV (loaded, never logged, never in repo). main.go
+    fail-closed startup wiring + loud DISABLED WARN + creds-set-but-
+    ignored WARN; compose api env gains the four passthroughs
+    (LOGISTICS_PROVIDER pinned "stub"). VERIFIED: gofmt/build/vet
+    clean; 7 new tests green; full `go test ./...` green; compose
+    YAML parses, SPDX checker green. LIVE binary proof:
+    LOGISTICS_PROVIDER=bogus → "invalid logistics config — refusing
+    to start" before any DB touch; bad LOGISTICS_ENV → same refusal.
+    F5 STAYS OPEN: part 2 = docs/logistics.md + COD remittance
+    tracking fields (shipments/order model) + shipment events via
+    /internal/events → user:<id> topics + production.md env rows +
+    smoke section.
 - [ ] F6: Order saga + Wave-3 hardening — NATS JetStream order events, Go
   saga orchestrator (reserve inventory → confirm → ship, compensating
   actions on failure), rate limits on commerce endpoints, docs/commerce.md,
