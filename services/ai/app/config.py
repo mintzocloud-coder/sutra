@@ -65,6 +65,25 @@ class Settings:
     # is never hardcoded — a rollout is a new YAML file + this knob.
     prompt_version: str = _get_env("AI_PROMPT_VERSION", "v1")
 
+    # Language bridge (E4). TRANSLATE_BACKEND: "indictrans2" (real AI4Bharat
+    # checkpoints, MIT) or "stub" (deterministic test double, smoke/CI).
+    # The stub is never a silent fallback — an unknown value refuses boot.
+    translate_backend: str = _get_env("TRANSLATE_BACKEND", "indictrans2")
+    # Model family: "dist-200M" (fast, CPU-viable) or "1B" (better quality).
+    translate_model_size: str = _get_env("TRANSLATE_MODEL_SIZE", "dist-200M")
+    # Local checkpoint cache so deploys download once.
+    translate_model_dir: str = _get_env(
+        "TRANSLATE_MODEL_DIR", "/srv/ai/models/translate")
+    translate_requests_per_minute: int = _get_int("TRANSLATE_RPM", 30)
+    translate_max_input_chars: int = _get_int("TRANSLATE_MAX_INPUT_CHARS", 4000)
+    # Translation cache TTL: 30 days. Translations are deterministic per
+    # (backend, src, tgt, text), so long TTLs are safe.
+    translate_cache_ttl_seconds: int = _get_int("TRANSLATE_CACHE_TTL", 2592000)
+
+    # Valkey: translation cache + per-user translate rate limits (E4).
+    # REQUIRED — the service refuses to boot without it (fail-closed).
+    valkey_addr: str = _get_env("VALKEY_ADDR", "valkey:6379")
+
     @property
     def service_token(self) -> str:
         """Shared secret with the Go API proxy (AI_SERVICE_TOKEN).

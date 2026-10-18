@@ -1082,6 +1082,36 @@ non-ML signals only; vector embeddings plug in later via #19.
       (hash, target); per-user rate limit. Feed endpoint gains
       ?translate=xx convenience (best-effort, never blocks feed read).
       Accept: translation round-trip test (CI-gated model download).
+      E4 PART 1 DONE 2026-10-18 ~14:25 IST (Python endpoint + contract):
+      new `app/translate.py` — TranslateBackend protocol, StubBackend
+      (deterministic `[tgt] text` marker, smoke/CI only),
+      IndicTrans2Backend (lazy torch/transformers/IndicTransToolkit;
+      per-direction checkpoints verified live on HuggingFace:
+      en-indic/indic-en dist-200M MIT, indic-indic dist-320M —
+      its card lacks a machine-readable license, flagged in docs;
+      missing stack → 503 translate_unavailable, never a silent stub),
+      Unicode script auto-detection (ASCII→en, Devanagari→hi, …;
+      undetectable → 422, never a guess), Valkey cache
+      `sutra:translate:v1:<backend>:<sha256>[:48]` (30d TTL, backend
+      namespaced), Valkey per-user fixed-window rate limit
+      (TRANSLATE_RPM, 429 + Retry-After), same-language no-op,
+      TranslateError typed codes. `POST /translate` in main.py (Bearer
+      service token + X-Sutra-Subject, guards eager → JSON envelopes);
+      no Go change needed — /v1/ai/* already proxied. Config:
+      TRANSLATE_BACKEND/SIZE/DIR/RPM/MAX_INPUT_CHARS/CACHE_TTL +
+      VALKEY_ADDR (fail-closed at boot); compose ai env; redis==8.1.0
+      added to requirements.txt (same pin as caption worker);
+      docs/language-bridge.md (checkpoints, license caveat, cache,
+      guards, failure table, feed part-2 plan, Wave-2 out-of-scope);
+      OpenAPI /v1/ai/translate (redocly 0 warnings).
+      VERIFIED: py_compile clean; 20 pytest green + 1 skipped
+      (CI-gated real-model round-trip marked TRANSLATE_TEST_REAL_MODEL)
+      — incl. fail-closed 503 when the model stack is absent, cache
+      hit/miss, rate-limit 429, script-detection matrix, validation
+      matrix; SPDX checker + compose/OpenAPI YAML clean.
+      E4 PART 2 NEXT: feed ?translate=xx convenience (Go, best-effort),
+      smoke.sh translate round-trip (stub), production.md TRANSLATE_*
+      env rows, full E4 [x].
 
 - [ ] **E5. Recommendations v1 (non-ML)**
       Home-feed ranking v1: score = recency decay + follow-graph boost +

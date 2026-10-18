@@ -13,6 +13,10 @@ Routes:
                      token budget. Streams AG-UI events as SSE. Requires the
                      service token AND X-Sutra-Subject (the verified user id
                      the Go proxy forwards; the AI service never sees JWTs).
+  POST /translate  — E4 language bridge (the Go proxy serves this as
+                     /v1/ai/translate): IndicTrans2 translation between en
+                     and Indic languages, Valkey-cached by (hash, target),
+                     per-user rate-limited. JSON response (not SSE).
 
 Event model follows the AG-UI 1.0 vocabulary (RUN_STARTED, STEP_STARTED /
 STEP_FINISHED, TEXT_MESSAGE_START / TEXT_MESSAGE_CONTENT /
@@ -35,6 +39,7 @@ from pydantic import BaseModel, Field
 from . import chat as chat_mod
 from . import db as db_mod
 from . import graph as agent_graph
+from . import translate as translate_mod
 from .config import settings
 
 log = logging.getLogger("sutra-ai")
@@ -70,8 +75,11 @@ async def lifespan(app: FastAPI):
     pool = await asyncio.to_thread(db_mod.open_pool, settings.database_url)
     app.state.pool = pool
     app.state.chat = await asyncio.to_thread(chat_mod.new_service, pool, settings)
-    log.info("sutra-ai ready (prompt=%s model=%s stub=%s)",
-             settings.prompt_version, settings.model, settings.model_stub)
+    app.state.translate = await asyncio.to_thread(
+        translate_mod.new_service, settings)
+    log.info("sutra-ai ready (prompt=%s model=%s stub=%s translate=%s)",
+             settings.prompt_version, settings.model, settings.model_stub,
+             settings.translate_backend)
     yield
     pool.close()
 
@@ -121,6 +129,16 @@ class ChatInput(BaseModel):
 
     thread_id: str | None = Field(default=None, max_length=128)
     messages: list[Message] = Field(default_factory=list)
+
+
+class TranslateInput(BaseModel):
+    """E4 language-bridge input. source="auto" resolves via Unicode
+    script detection (ASCII -> en, Devanagari -> hi, ...); pass an
+    explicit ISO code when the text mixes scripts or detection fails."""
+
+    text: str = Field(default="")
+    source: str = Field(default="auto")
+    target: str = Field(default="en")
 
 
 @app.get("/healthz")
@@ -205,6 +223,39 @@ def chat(
     # anything failing from here on becomes RUN_ERROR inside the SSE,
     # matching /ag-ui/run semantics.
     return StreamingResponse(frames, media_type="text/event-stream")
+
+
+@app.post("/translate")
+def translate(
+    body: TranslateInput,
+    request: Request,
+    _: None = Depends(require_service_token),
+) -> dict:
+    """E4 language bridge: translate text between en and Indic languages.
+
+    The Go proxy authenticates the user (JWT) and forwards the verified
+    subject as X-Sutra-Subject; without it the request is refused. All
+    guards (validation, per-user rate limit) run before the model:
+    rejections are JSON error envelopes, never partial output. Response:
+    {"text","source","target","cached","model"} — cached=true means the
+    Valkey (hash, target) entry served this request with no model call.
+    """
+    subject = request.headers.get("x-sutra-subject", "").strip()
+    if not subject:
+        return _envelope(401, "unauthorized",
+                         "missing X-Sutra-Subject — call through the Go API proxy")
+    service: translate_mod.TranslationService = request.app.state.translate
+    try:
+        result = service.translate(subject, body.text, body.source, body.target)
+    except translate_mod.TranslateError as err:
+        return _envelope(err.status_code, err.code, err.message, err.retry_after)
+    return {
+        "text": result.text,
+        "source": result.source,
+        "target": result.target,
+        "cached": result.cached,
+        "model": result.model,
+    }
 
 
 @app.exception_handler(HTTPException)

@@ -108,6 +108,96 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/ai/translate:
+    post:
+      tags: [ai]
+      summary: Translate text (IndicTrans2, proxied)
+      description: |
+        Proxied to the Python AI service's /translate (the /v1/ai prefix is
+        stripped by the Go proxy). Requires the caller's JWT; the proxy adds
+        the internal service Bearer token and forwards the verified subject
+        as X-Sutra-Subject. Translates post/comment-sized text between en
+        and Indic languages (hi, gu, ta, bn, te, kn, ml, mr, pa, or, as,
+        ur, ne) via AI4Bharat IndicTrans2 checkpoints (MIT). Results are
+        cached in Valkey by (content-hash, target) for 30 days — `cached`
+        tells you whether this response came from cache. `source: "auto"`
+        resolves via Unicode script detection (ASCII -> en, Devanagari ->
+        hi, ...); pass an explicit ISO code when detection fails. Per-user
+        rate limit (TRANSLATE_RPM, default 30/min) -> 429
+        `translate_rate_limited` with Retry-After. With AI_SERVICE_TOKEN
+        empty or the AI service down the proxy answers 503
+        (service_unavailable); a missing IndicTrans2 runtime answers 503
+        `translate_unavailable` (fail-closed, never a silent stub).
+        Contract: docs/language-bridge.md.
+      operationId: aiTranslate
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+                  description: Text to translate (max 4000 chars)
+                  example: Hello, how are you?
+                source:
+                  type: string
+                  description: ISO 639-1 source code, or "auto"
+                  default: auto
+                  example: auto
+                target:
+                  type: string
+                  description: ISO 639-1 target code
+                  default: en
+                  example: hi
+      responses:
+        '200':
+          description: Translation result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [text, source, target, cached, model]
+                properties:
+                  text:
+                    type: string
+                    example: नमस्ते, आप कैसे हैं?
+                  source:
+                    type: string
+                    description: Resolved ISO 639-1 source code
+                    example: en
+                  target:
+                    type: string
+                    example: hi
+                  cached:
+                    type: boolean
+                    description: True when served from the Valkey cache
+                  model:
+                    type: string
+                    description: Backend that produced the text
+                    example: indictrans2
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: Invalid input (empty_text, text_too_long, invalid_language)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          description: AI service not configured/unreachable, or the IndicTrans2 runtime is not installed (translate_unavailable)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /readyz:
     get:
       tags: [system]

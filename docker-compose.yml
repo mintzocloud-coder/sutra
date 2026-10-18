@@ -110,6 +110,12 @@ services:
       AI_CHAT_RPM: "${AI_CHAT_RPM:-20}"
       AI_MAX_HISTORY: "${AI_MAX_HISTORY:-30}"
       AI_PROMPT_VERSION: "${AI_PROMPT_VERSION:-v1}"
+      # Language bridge (E4): Valkey cache + rate limits are REQUIRED —
+      # the ai service refuses to boot without VALKEY_ADDR reachable.
+      VALKEY_ADDR: "valkey:6379"
+      TRANSLATE_BACKEND: "${TRANSLATE_BACKEND:-indictrans2}"
+      TRANSLATE_MODEL_SIZE: "${TRANSLATE_MODEL_SIZE:-dist-200M}"
+      TRANSLATE_RPM: "${TRANSLATE_RPM:-30}"
     # No depends_on: the API degrades /v1/ai/* to 503 when the token is
     # empty or the service is down, so boot order must not couple them.
     # (The ai service itself refuses to boot without DATABASE_URL — it
