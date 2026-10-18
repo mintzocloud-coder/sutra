@@ -845,6 +845,27 @@ every run. Gated items stay gated: real SMS/DLT stays post-incorporation
       OpenAPI regenerated for all new routes, production.md and
       benchmarks.md updated, full smoke.sh green on the new flows.
       Accept: CI green, smoke green, docs complete. **Phase D complete.**
+      D6 PART 1 DONE 2026-10-18 ~10:55 IST: follow velocity abuse guard —
+      new `internal/social` `DefaultFollowVelocityCap` (200/h,
+      `FOLLOW_VELOCITY_PER_HOUR` env, config wired through main.go),
+      `FollowWithCap` (rolling trailing-hour count, RetryAfter computed
+      from the oldest follow in the window, best-effort under
+      concurrency like posts), `FollowVelocityLimitedError` →
+      HTTP 429 `follow_velocity_limited` + Retry-After (mirrors
+      posts handler). Key design fix caught by the new tests: idempotent
+      retries of EXISTING edges bypass the velocity check entirely
+      (early SELECT) — a sender that never got its ack must be able to
+      retry, so a retry can never turn into a 429. Tests: 2 new
+      (service-level: cap 2 → 3rd rejected with Cap/RetryAfter asserted,
+      retry free at cap, <=0 → default; HTTP: 201 then 429 with envelope
+      code + Retry-After, retry → 200). OpenAPI follow-POST description
+      extended (429 ref already present — redocly 0 warnings);
+      production.md env table gains POST_VELOCITY_PER_HOUR (was missing)
+      + FOLLOW_VELOCITY_PER_HOUR.
+      D6 REMAINING: env-table backfill for D4b/D5 envs (TRANSCODE_*,
+      CHAT_INTERNAL_*, OTP_PROVIDER, FANOUT_THRESHOLD, TIMELINE_MAX,
+      SeaweedFS addrs), benchmarks.md update, smoke.sh full green on
+      new flows → then D6 [x].
 
 ## Done when
 
@@ -881,3 +902,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-18 ~09:30 IST: D4b part 3 done — smoke.sh full clip round-trip (upload intent → PUT → complete → poll to ready → 201 media post). bash -n + SPDX green, clip-minting proven live; end-to-end CI-gated. **D4b complete.** Next: D5 realtime post events.
 - 2026-10-18 ~10:00 IST: D5 part 1 done — Go-side realtime publisher (`internal/realtime`): Envelope (topics/event/payload/dedupe_key), HTTPPublisher (Bearer service token, 5s timeout, 500-topic chunking, envelope validation, 2xx-required), disabled no-op publisher when CHAT_INTERNAL_TOKEN empty (loud WARN), NewPublisher fail-closed on bad URL with token set (proven live: refuses boot); PublishPostNew (follower-subject resolution mirroring feed's celebrity threshold — no realtime fan-out for celebrity posts, same as pull-on-read) + PublishFollowerNew (new edges only) helpers; wired in main.go — post:new fires detached after successful fan-out (never delays the 201), follower:new via new social.FollowHooks; config CHAT_INTERNAL_URL/CHAT_INTERNAL_TOKEN + compose api env; new docs/realtime-events.md (endpoint contract, topic model + join-auth rule, event catalog post:new/follower:new + reserved names, best-effort delivery semantics, celebrity policy, config table, client guidance). VERIFIED: go build+vet+gofmt clean, full `go test ./...` green on real PG16 (8 pure + 4 integration suites); live binary end-to-end vs a stub chat server — follow → `follower:new` to `user:<followee-subject>`, post → `post:new` to `user:<follower-subject>`, both with Bearer auth + dedupe keys; fail-closed boot refusal proven. NOTE: VM lost apt Go mid-run — installed Go 1.22.12 tarball to ~/golang (persists across VM replacements; add to PATH in future runs). NEXT: D5 part 2 — Elixir chat side: POST /internal/events endpoint with constant-time token check, `user:<id>` topic join auth, channel tests (topic auth + event shape), smoke.sh round-trip.
 - 2026-10-18 ~10:35 IST: D5 part 2 done — Elixir chat side of realtime events (see D5 task note): UserChannel (own-topic-only join auth), Router + InternalEventsController (constant-time Bearer auth, strict envelope validation, 202+broadcast fan-out, shared error envelope), runtime.exs CHAT_INTERNAL_TOKEN config, compose chat env, smoke.sh live endpoint checks (401/401/422/202), docs dedupe precision. 16 new tests (6 channel + 10 controller). Syntax-checked all files; full mix test CI-gated (Elixir 1.18). **D5 COMPLETE.** Next: D6 Wave-1 hardening pass.
+- 2026-10-18 ~10:55 IST: D6 part 1 done — follow velocity abuse guard (internal/social: DefaultFollowVelocityCap 200/h via FOLLOW_VELOCITY_PER_HOUR, FollowWithCap, 429 follow_velocity_limited + Retry-After; idempotent retries bypass the check — caught by new tests, design fixed). Tests: 2 new suites green on real PG16; full `go build`+`go vet`+`go test ./...` green; gofmt clean; redocly lint 0 warnings. OpenAPI + production.md updated. D6 stays open (env-table backfill, benchmarks.md, full smoke green remain). Pushed.

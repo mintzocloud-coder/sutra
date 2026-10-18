@@ -118,7 +118,7 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedS
 			}()
 		}
 	}
-	v1.Handle("/v1/users/{id}/follow", social.FollowHandler(pool, followHooks, log))
+	v1.Handle("/v1/users/{id}/follow", social.FollowHandler(pool, cfg.FollowVelocityCap, followHooks, log))
 	v1.Handle("/v1/users/{id}/followers", methodGuard([]string{http.MethodGet},
 		social.FollowersHandler(pool, log)))
 	v1.Handle("/v1/users/{id}/following", methodGuard([]string{http.MethodGet},

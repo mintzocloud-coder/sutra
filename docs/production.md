@@ -74,6 +74,8 @@ CORS_ORIGINS=https://app.sutra.example.com
 | `RATE_LIMIT_BURST` | `200` | Per-IP burst (A5) |
 | `CORS_ORIGINS` | *(empty = disabled)* | Comma-separated allowlist or `*` (A5) |
 | `CORS_MAX_AGE` | `86400` | Preflight cache seconds |
+| `POST_VELOCITY_PER_HOUR` | `30` | Rolling per-author post cap; over the cap → 429 `post_velocity_limited` + Retry-After (D3) |
+| `FOLLOW_VELOCITY_PER_HOUR` | `200` | Rolling per-user new-follow cap; over the cap → 429 `follow_velocity_limited` + Retry-After (D6) |
 | `SHUTDOWN_TIMEOUT` | `10` | Graceful-shutdown seconds |
 | `AUTH_BYPASS` | *(unset)* | Dev-only identity hatch — **never in prod** |
 

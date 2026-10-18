@@ -83,13 +83,17 @@ func clientErr(err error) bool {
 			return true
 		}
 	}
-	return false
+	// FollowVelocityLimitedError is a distinct typed error, not a
+	// sentinel — matched with errors.As like posts.VelocityLimitedError.
+	var fvel *FollowVelocityLimitedError
+	return errors.As(err, &fvel)
 }
 
 // socialError maps package errors to envelope responses; unexpected
 // errors are logged by the caller and answered 500.
 func socialError(w http.ResponseWriter, r *http.Request, log *slog.Logger, op string, err error) {
 	if clientErr(err) {
+		var fvel *FollowVelocityLimitedError
 		switch {
 		case errors.Is(err, ErrUserNotFound):
 			middleware.WriteJSONError(w, r, http.StatusNotFound,
@@ -112,6 +116,17 @@ func socialError(w http.ResponseWriter, r *http.Request, log *slog.Logger, op st
 		case errors.Is(err, ErrBadAvatarURL):
 			middleware.WriteJSONError(w, r, http.StatusUnprocessableEntity,
 				"invalid_avatar_url", "avatar_url must be an http(s) URL")
+		case errors.As(err, &fvel):
+			// Tell the client exactly when to retry: the wait until
+			// the oldest follow in the rolling window ages out. A flat
+			// 429 would make clients poll blindly.
+			secs := int(fvel.RetryAfter / 1e9)
+			if secs < 1 {
+				secs = 1
+			}
+			w.Header().Set("Retry-After", strconv.Itoa(secs))
+			middleware.WriteJSONError(w, r, http.StatusTooManyRequests,
+				"follow_velocity_limited", "too many new follows: slow down and retry")
 		}
 		return
 	}
@@ -205,7 +220,10 @@ func UserHandler(pool *db.Pool, log *slog.Logger) http.HandlerFunc {
 // FollowHandler serves POST and DELETE /v1/users/{id}/follow.
 // POST is idempotent: 201 on a new edge, 200 when it already existed.
 // DELETE is idempotent: 204 whether or not the edge existed.
-func FollowHandler(pool *db.Pool, hooks FollowHooks, log *slog.Logger) http.HandlerFunc {
+// POST is guarded by a rolling per-user velocity cap (followCapPerHour,
+// <=0 selects DefaultFollowVelocityCap): over the cap is 429
+// follow_velocity_limited with a Retry-After header.
+func FollowHandler(pool *db.Pool, followCapPerHour int, hooks FollowHooks, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost, http.MethodDelete:
@@ -223,7 +241,7 @@ func FollowHandler(pool *db.Pool, hooks FollowHooks, log *slog.Logger) http.Hand
 		}
 
 		if r.Method == http.MethodPost {
-			isNew, err := Follow(r.Context(), pool, follower, followee)
+			isNew, err := FollowWithCap(r.Context(), pool, follower, followee, followCapPerHour)
 			if err != nil {
 				socialError(w, r, log, "follow", err)
 				return

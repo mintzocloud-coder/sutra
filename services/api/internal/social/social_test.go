@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -364,6 +365,108 @@ func TestFollowIntegration(t *testing.T) {
 	}
 }
 
+// TestFollowVelocityCapIntegration proves the D6 abuse guard: a rolling
+// per-user cap on new follow edges. Over the cap, FollowWithCap returns
+// *FollowVelocityLimitedError with a usable RetryAfter; idempotent
+// retries of existing edges never consume budget.
+func TestFollowVelocityCapIntegration(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	a := provisionUser(t, pool, "A")
+	b := provisionUser(t, pool, "B")
+	c := provisionUser(t, pool, "C")
+	aid, _ := ParseUserID(a)
+	bid, _ := ParseUserID(b)
+	cid, _ := ParseUserID(c)
+
+	const capPerHour = 2
+	if _, err := FollowWithCap(ctx, pool, aid, bid, capPerHour); err != nil {
+		t.Fatalf("follow 1: %v", err)
+	}
+	if _, err := FollowWithCap(ctx, pool, aid, cid, capPerHour); err != nil {
+		t.Fatalf("follow 2: %v", err)
+	}
+
+	// Third NEW follow is over the cap.
+	d := provisionUser(t, pool, "D")
+	did, _ := ParseUserID(d)
+	_, err := FollowWithCap(ctx, pool, aid, did, capPerHour)
+	var fvel *FollowVelocityLimitedError
+	if !errors.As(err, &fvel) {
+		t.Fatalf("follow 3 err = %v, want *FollowVelocityLimitedError", err)
+	}
+	if fvel.Cap != capPerHour {
+		t.Fatalf("vel.Cap = %d, want %d", fvel.Cap, capPerHour)
+	}
+	if fvel.RetryAfter < time.Second {
+		t.Fatalf("vel.RetryAfter = %v, want >= 1s", fvel.RetryAfter)
+	}
+
+	// Idempotent retry of an EXISTING edge does not consume budget and
+	// never errors, even at the cap: the count query only counts rows.
+	isNew, err := FollowWithCap(ctx, pool, aid, bid, capPerHour)
+	if err != nil || isNew {
+		t.Fatalf("retry at cap = (%v, %v), want (false, nil)", isNew, err)
+	}
+
+	// <=0 selects the default cap.
+	e := provisionUser(t, pool, "E")
+	eid, _ := ParseUserID(e)
+	if _, err := FollowWithCap(ctx, pool, aid, eid, 0); err != nil {
+		t.Fatalf("default cap follow: %v", err)
+	}
+}
+
+// TestFollowVelocityCapHTTP proves the HTTP surface of the D6 guard:
+// over-cap POST follow answers 429 with the follow_velocity_limited
+// envelope code and a Retry-After header; idempotent retries of the
+// existing edge still succeed (200) at the cap.
+func TestFollowVelocityCapHTTP(t *testing.T) {
+	pool := testPool(t)
+	subA := uniqueSubject(t)
+	b := provisionUser(t, pool, "B")
+	c := provisionUser(t, pool, "C")
+	srv := testServer(t, pool, subA, 1)
+
+	post := func(target string) (int, map[string]any, http.Header) {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, srv.URL+"/v1/users/"+target+"/follow", nil)
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("Do: %v", err)
+		}
+		defer resp.Body.Close()
+		var v map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return resp.StatusCode, v, resp.Header
+	}
+
+	status, _, _ := post(b)
+	if status != http.StatusCreated {
+		t.Fatalf("POST follow 1 = %d, want 201", status)
+	}
+	status, body, header := post(c)
+	if status != http.StatusTooManyRequests {
+		t.Fatalf("POST follow 2 = %d, want 429", status)
+	}
+	errObj, _ := body["error"].(map[string]any)
+	if errObj == nil || errObj["code"] != "follow_velocity_limited" {
+		t.Fatalf("envelope = %v, want code follow_velocity_limited", body)
+	}
+	if header.Get("Retry-After") == "" {
+		t.Fatal("missing Retry-After header on 429")
+	}
+	status, _, _ = post(b)
+	if status != http.StatusOK {
+		t.Fatalf("POST follow retry at cap = %d, want 200", status)
+	}
+}
+
 func TestFollowListsIntegration(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
@@ -480,7 +583,7 @@ func TestFollowListsIntegration(t *testing.T) {
 // with the same mux patterns as cmd/api/main.go so {id} path values are
 // exercised.
 
-func testServer(t *testing.T, pool *db.Pool, subject string) *httptest.Server {
+func testServer(t *testing.T, pool *db.Pool, subject string, followCapPerHour int) *httptest.Server {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	auth := middleware.RequireAuth(oidc.NewVerifier("", "", ""), log,
@@ -500,7 +603,7 @@ func testServer(t *testing.T, pool *db.Pool, subject string) *httptest.Server {
 	}
 	mux.Handle("/v1/me/profile", allow([]string{http.MethodPatch}, ProfileHandler(pool, log)))
 	mux.Handle("/v1/users/{id}", allow([]string{http.MethodGet}, UserHandler(pool, log)))
-	mux.Handle("/v1/users/{id}/follow", FollowHandler(pool, FollowHooks{}, log))
+	mux.Handle("/v1/users/{id}/follow", FollowHandler(pool, followCapPerHour, FollowHooks{}, log))
 	mux.Handle("/v1/users/{id}/followers", allow([]string{http.MethodGet}, FollowersHandler(pool, log)))
 	mux.Handle("/v1/users/{id}/following", allow([]string{http.MethodGet}, FollowingHandler(pool, log)))
 
@@ -539,8 +642,8 @@ func doJSON(t *testing.T, method, url, body string) (int, map[string]any) {
 func TestSocialHTTPIntegration(t *testing.T) {
 	pool := testPool(t)
 	subA, subB := uniqueSubject(t), uniqueSubject(t)
-	srvA := testServer(t, pool, subA)
-	srvB := testServer(t, pool, subB)
+	srvA := testServer(t, pool, subA, 0)
+	srvB := testServer(t, pool, subB, 0)
 
 	// A claims a handle via PATCH.
 	aliceHandle := uniqueHandle(t, "httpalice")

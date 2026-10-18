@@ -307,7 +307,11 @@ paths:
       description: |
         Creates the follow edge caller → user. Idempotent: the first call
         is 201, repeats are 200 — retries never error. Following yourself
-        is 422 `cannot_follow_self`; an unknown user is 404.
+        is 422 `cannot_follow_self`; an unknown user is 404. A rolling
+        per-user velocity cap applies (default 200 new follows/hour,
+        `FOLLOW_VELOCITY_PER_HOUR`): over the cap is 429
+        `follow_velocity_limited` with a Retry-After header telling the
+        client when the oldest follow in the window ages out.
       operationId: followUser
       security:
         - bearerAuth: []

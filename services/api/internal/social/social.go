@@ -341,15 +341,102 @@ func textOrNull(s *string) pgtype.Text {
 	return pgtype.Text{String: *s, Valid: true}
 }
 
+// DefaultFollowVelocityCap is the default rolling per-user cap on NEW
+// follow edges (D6 abuse guard). Follows are cheaper than posts, so the
+// default is generous — but an abuse script still cannot mass-follow
+// thousands of users per hour from one account. Configured via
+// FOLLOW_VELOCITY_PER_HOUR.
+const DefaultFollowVelocityCap = 200
+
+// FollowVelocityLimitedError is returned when a user exceeds their
+// rolling per-hour follow cap. It carries the wait until the oldest
+// follow in the window ages out so the handler can answer a useful
+// Retry-After header (same contract as posts.VelocityLimitedError).
+type FollowVelocityLimitedError struct {
+	RetryAfter time.Duration
+	Cap        int
+}
+
+func (e *FollowVelocityLimitedError) Error() string {
+	return "social: follow velocity cap exceeded"
+}
+
+// checkFollowVelocity counts the follower's new edges in the trailing
+// hour. Idempotent retries of existing edges never add rows, so they
+// don't consume budget — the cap only bites real new follows. The check
+// is best-effort under concurrency: two racing follows may both pass,
+// exactly like the posts velocity cap in internal/posts.
+func checkFollowVelocity(ctx context.Context, pool *db.Pool, follower pgtype.UUID, capPerHour int) error {
+	var (
+		count  int64
+		oldest pgtype.Timestamptz
+	)
+	err := pool.QueryRow(ctx, `
+		SELECT count(*), min(created_at)
+		FROM follows
+		WHERE follower_id = $1
+		  AND created_at > now() - interval '1 hour'`,
+		follower).Scan(&count, &oldest)
+	if err != nil {
+		return err
+	}
+	if count < int64(capPerHour) {
+		return nil
+	}
+	retryAfter := time.Second
+	if oldest.Valid {
+		wait := oldest.Time.Add(time.Hour).Sub(time.Now().UTC())
+		if wait > retryAfter {
+			// Round up so the client never retries a second early.
+			retryAfter = wait.Truncate(time.Second) + time.Second
+		}
+	}
+	return &FollowVelocityLimitedError{RetryAfter: retryAfter, Cap: capPerHour}
+}
+
 // Follow creates the follower → followee edge. It returns true when the
 // edge is new (caller should answer 201) and false when it already
-// existed (idempotent retry → 200). Following a missing user is
-// ErrUserNotFound (FK); following yourself is ErrSelfFollow (checked
-// here and enforced by the DB CHECK as backstop).
+// existed (idempotent retry → 200). Uses DefaultFollowVelocityCap.
 func Follow(ctx context.Context, pool *db.Pool, follower, followee pgtype.UUID) (bool, error) {
+	return FollowWithCap(ctx, pool, follower, followee, DefaultFollowVelocityCap)
+}
+
+// FollowWithCap is Follow with an explicit rolling per-hour cap on new
+// edges; capPerHour <= 0 selects DefaultFollowVelocityCap. Idempotent
+// retries of EXISTING edges bypass the velocity check: a sender that
+// never got its ack must be able to retry safely (at-least-once
+// contract), so a retry can never turn into a 429. Following a missing
+// user is ErrUserNotFound (FK); following yourself is ErrSelfFollow
+// (checked here and enforced by the DB CHECK as backstop).
+func FollowWithCap(ctx context.Context, pool *db.Pool, follower, followee pgtype.UUID, capPerHour int) (bool, error) {
 	if follower == followee {
 		return false, ErrSelfFollow
 	}
+	if capPerHour <= 0 {
+		capPerHour = DefaultFollowVelocityCap
+	}
+	// Existing edge: idempotent retry, never consumes budget and never
+	// velocity-limited. The final INSERT ... ON CONFLICT DO NOTHING
+	// remains the serialization point for racing creates.
+	var exists bool
+	err := pool.QueryRow(ctx,
+		`SELECT true FROM follows WHERE follower_id = $1 AND followee_id = $2`,
+		follower, followee).Scan(&exists)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return false, err
+	}
+	if exists {
+		return false, nil
+	}
+	if err := checkFollowVelocity(ctx, pool, follower, capPerHour); err != nil {
+		return false, err
+	}
+	return followEdge(ctx, pool, follower, followee)
+}
+
+// followEdge performs the actual INSERT ... ON CONFLICT DO NOTHING for
+// a follow edge (no velocity check — callers go through FollowWithCap).
+func followEdge(ctx context.Context, pool *db.Pool, follower, followee pgtype.UUID) (bool, error) {
 	var createdAt time.Time
 	err := pool.QueryRow(ctx,
 		`INSERT INTO follows (follower_id, followee_id)
