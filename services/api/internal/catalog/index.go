@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // F2 (part 1): the search-indexing seam of the catalog.
 //
-// Product lifecycle events (create/update/archive) feed the
-// Meilisearch product index through ProductHooks. The hooks fire
-// AFTER the database write commits — indexing is best-effort and
-// lives outside the request's error path, so a down search cluster
-// can never turn a 201 into a 500. (Variant price changes reindex
-// the parent product in F2 part 2.)
+// Product lifecycle events (create/update/archive, including
+// variant writes — add/update/archive all rebuild the parent
+// product's document) feed the Meilisearch product index through
+// ProductHooks. The hooks fire AFTER the database write commits —
+// indexing is best-effort and lives outside the request's error path,
+// so a down search cluster can never turn a 201 into a 500.
 package catalog
 
 import (
@@ -38,9 +38,12 @@ func (h ProductHooks) productWritten(ctx context.Context, productID string) {
 }
 
 // BuildProductDoc assembles the search document for one product: the
-// product row, its category slug, and the cheapest ACTIVE variant's
-// price (the storefront's "from ₹X"). ErrProductNotFound when the row
-// is gone — the caller then deletes the document from the index.
+// product row, its category slug, the cheapest ACTIVE variant's
+// price (the storefront's "from ₹X"), and search_seq — the numeric
+// tie-breaker that makes /v1/search keyset paging total (Meilisearch
+// range filters are numbers-only, so the uuid PK can't do it).
+// ErrProductNotFound when the row is gone — the caller then deletes
+// the document from the index.
 func (s *Service) BuildProductDoc(ctx context.Context, productID pgtype.UUID) (*search.ProductDoc, error) {
 	var (
 		id       pgtype.UUID
@@ -50,14 +53,15 @@ func (s *Service) BuildProductDoc(ctx context.Context, productID pgtype.UUID) (*
 		status   string
 		updated  pgtype.Timestamptz
 		slug     sql.NullString
+		seq      int64
 	)
 	err := s.pool.QueryRow(ctx, `
 		SELECT p.id, p.seller_id, p.title, p.description, p.status,
-		       p.updated_at, c.slug
+		       p.updated_at, c.slug, p.search_seq
 		FROM products p
 		LEFT JOIN categories c ON c.id = p.category_id
 		WHERE p.id = $1`, productID).
-		Scan(&id, &sellerID, &title, &desc, &status, &updated, &slug)
+		Scan(&id, &sellerID, &title, &desc, &status, &updated, &slug, &seq)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, ErrProductNotFound
@@ -77,6 +81,7 @@ func (s *Service) BuildProductDoc(ctx context.Context, productID pgtype.UUID) (*
 		SellerID:      sellerID.String(),
 		Status:        status,
 		UpdatedAtUnix: updated.Time.Unix(),
+		SortSeq:       seq,
 	}
 	if slug.Valid {
 		doc.CategorySlug = slug.String

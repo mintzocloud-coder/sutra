@@ -600,6 +600,13 @@ func (s *Service) AddVariant(ctx context.Context, userID, productID pgtype.UUID,
 		`INSERT INTO inventory (variant_id) VALUES ($1)`, variantID); err != nil {
 		return nil, err
 	}
+	// A variant write can change the listing's "from ₹X" price, so the
+	// product's updated_at moves with it: the search document's sort
+	// key stays truthful and the reindex hook rebuilds a current doc.
+	if _, err := tx.Exec(ctx,
+		`UPDATE products SET updated_at = now() WHERE id = $1`, productID); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
@@ -666,6 +673,13 @@ func (s *Service) UpdateVariant(ctx context.Context, userID, variantID pgtype.UU
 			pgErr.ConstraintName == "product_variants_sku_unique" {
 			return nil, ErrSKUExists
 		}
+		return nil, err
+	}
+	// Same reasoning as AddVariant: the listing changed, so its
+	// updated_at (and therefore its search sort key) moves.
+	// ArchiveVariant funnels through here, so it is covered too.
+	if _, err := s.pool.Exec(ctx,
+		`UPDATE products SET updated_at = now() WHERE id = $1`, v.ProductID); err != nil {
 		return nil, err
 	}
 	return updated, nil

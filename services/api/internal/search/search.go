@@ -53,6 +53,11 @@ type ProductDoc struct {
 	Status        string `json:"status"`
 	MinPricePaise *int64 `json:"min_price_paise,omitempty"`
 	UpdatedAtUnix int64  `json:"updated_at_unix"`
+	// SortSeq is the products.search_seq identity value: the numeric
+	// tie-breaker for /v1/search keyset paging. Meilisearch range
+	// filters (<, <=, >, >=) work on numbers only (official data-types
+	// doc), so the uuid id cannot serve as the cursor tie-breaker.
+	SortSeq int64 `json:"sort_seq"`
 }
 
 // Client talks to one Meilisearch instance. The zero client is never
@@ -147,9 +152,11 @@ func (c *Client) ensureIndex(ctx context.Context) error {
 	settings := map[string]any{
 		// Title outranks description, always.
 		"searchableAttributes": []string{"title", "description"},
-		// F2 part 2's /v1/search filters + sorts on these.
-		"filterableAttributes": []string{"seller_id", "category_slug", "status", "min_price_paise"},
-		"sortableAttributes":   []string{"min_price_paise", "updated_at_unix"},
+		// /v1/search filters + sorts on these. sort_seq is the
+		// numeric keyset tie-breaker (see ProductDoc); updated_at_unix
+		// must be filterable too for the cursor's range clause.
+		"filterableAttributes": []string{"seller_id", "category_slug", "status", "min_price_paise", "updated_at_unix", "sort_seq"},
+		"sortableAttributes":   []string{"min_price_paise", "updated_at_unix", "sort_seq"},
 		// Explicit typo tolerance: the storefront's killer feature for
 		// Indic-script transliteration typos ("kurta" vs "kurtha").
 		// Defaults are sane; the block documents the intent for ops.

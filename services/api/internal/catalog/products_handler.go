@@ -250,7 +250,7 @@ func DeleteProductHandler(pool *db.Pool, svc *Service, hooks ProductHooks, log *
 // AddVariantHandler serves POST /v1/products/{id}/variants: the owner
 // adds one purchasable SKU (price in integer paise). The inventory row
 // (quantity 0) is created with it.
-func AddVariantHandler(pool *db.Pool, svc *Service, log *slog.Logger) http.HandlerFunc {
+func AddVariantHandler(pool *db.Pool, svc *Service, hooks ProductHooks, log *slog.Logger) http.HandlerFunc {
 	allowed := map[string]bool{"sku": true, "price_paise": true, "mrp_paise": true, "attributes": true, "status": true}
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := social.CallerUUID(w, r, pool, log)
@@ -308,13 +308,16 @@ func AddVariantHandler(pool *db.Pool, svc *Service, log *slog.Logger) http.Handl
 			catalogError(w, r, log, "add variant", err)
 			return
 		}
+		// The new variant can change the listing's price — rebuild the
+		// parent product's search document (best-effort, detached).
+		hooks.productWritten(r.Context(), id.String())
 		writeJSON(w, http.StatusCreated, v)
 	}
 }
 
 // UpdateVariantHandler serves PATCH /v1/variants/{id}: owner-only
 // partial edit. mrp_paise explicit null clears the MRP.
-func UpdateVariantHandler(pool *db.Pool, svc *Service, log *slog.Logger) http.HandlerFunc {
+func UpdateVariantHandler(pool *db.Pool, svc *Service, hooks ProductHooks, log *slog.Logger) http.HandlerFunc {
 	allowed := map[string]bool{"sku": true, "price_paise": true, "mrp_paise": true, "attributes": true, "status": true}
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := social.CallerUUID(w, r, pool, log)
@@ -377,13 +380,16 @@ func UpdateVariantHandler(pool *db.Pool, svc *Service, log *slog.Logger) http.Ha
 			catalogError(w, r, log, "update variant", err)
 			return
 		}
+		// Price/status edits change the search document — rebuild the
+		// parent product's doc (best-effort, detached).
+		hooks.productWritten(r.Context(), v.ProductID)
 		writeJSON(w, http.StatusOK, v)
 	}
 }
 
 // DeleteVariantHandler serves DELETE /v1/variants/{id}: owner-only
 // archive (variants are never hard-deleted — orders reference them).
-func DeleteVariantHandler(pool *db.Pool, svc *Service, log *slog.Logger) http.HandlerFunc {
+func DeleteVariantHandler(pool *db.Pool, svc *Service, hooks ProductHooks, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := social.CallerUUID(w, r, pool, log)
 		if !ok {
@@ -400,6 +406,9 @@ func DeleteVariantHandler(pool *db.Pool, svc *Service, log *slog.Logger) http.Ha
 			catalogError(w, r, log, "archive variant", err)
 			return
 		}
+		// Archiving can remove the cheapest variant — rebuild the
+		// parent product's search document (best-effort, detached).
+		hooks.productWritten(r.Context(), v.ProductID)
 		writeJSON(w, http.StatusOK, v)
 	}
 }
@@ -491,10 +500,10 @@ func ProductMux(pool *db.Pool, svc *Service, hooks ProductHooks, log *slog.Logge
 }
 
 // VariantMux serves /v1/variants/{id}: PATCH and DELETE (owner-only).
-func VariantMux(pool *db.Pool, svc *Service, log *slog.Logger) http.HandlerFunc {
+func VariantMux(pool *db.Pool, svc *Service, hooks ProductHooks, log *slog.Logger) http.HandlerFunc {
 	return methodMux(map[string]http.HandlerFunc{
-		http.MethodPatch:  UpdateVariantHandler(pool, svc, log),
-		http.MethodDelete: DeleteVariantHandler(pool, svc, log),
+		http.MethodPatch:  UpdateVariantHandler(pool, svc, hooks, log),
+		http.MethodDelete: DeleteVariantHandler(pool, svc, hooks, log),
 	})
 }
 

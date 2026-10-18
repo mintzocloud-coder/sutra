@@ -1400,6 +1400,38 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
     → parent product doc rebuild), GET /v1/search proxy (filters,
     typo tolerance, keyset paging), docs/search.md, OpenAPI, smoke.sh
     section, production.md SEARCH_* env rows.
+    - [x] F2 part 2a DONE 2026-10-18 ~20:35 IST: variant-triggered
+      reindex + GET /v1/search proxy + tests. Variant writes now
+      rebuild the parent doc: AddVariant/UpdateVariant bump
+      products.updated_at in the write (so the doc's sort key stays
+      truthful), and Add/Update/DeleteVariant handlers fire
+      hooks.productWritten with the parent product id (main.go passes
+      prodHooks to AddVariantHandler + VariantMux). New migration
+      0009 (products.search_seq identity column): the numeric
+      tie-breaker for keyset paging — Meilisearch range filters work
+      on NUMBERS only (official docs), so the uuid id can't serve as
+      the cursor tie-breaker (research-verified before coding).
+      New internal/search/query.go: ParseSearchParams (q/seller_id/
+      category_slug/status/price-range/limit 1-50/cursor validation),
+      opaque base64url cursors {u:updated_at_unix, s:sort_seq},
+      buildFilter (facet ANDs + keyset clause
+      `updated_at_unix < u OR (updated_at_unix = u AND sort_seq < s)`),
+      Client.Search (POST /indexes/products/search, limit+1 probe,
+      fixed sort updated_at desc + sort_seq desc, 5s bound), 
+      SearchHandler (400s via ParamError codes, 503+Retry-After when
+      unconfigured or upstream-down — never 500). Index settings
+      extended: sort_seq + updated_at_unix filterable, sort_seq
+      sortable. Route: GET /v1/search (behind RequireAuth like all
+      /v1/). VERIFIED: gofmt/build/vet clean; full `go test ./...`
+      green on real PG16 — 12 new search tests (params matrix,
+      cursor round-trip, filter keyset clause, request shape vs stub,
+      cursor following, last-page no-cursor, disabled 503+Retry-After,
+      400 codes, upstream-down 503, success page, settings keyset
+      fields) + 2 new catalog integration tests (hook fires 3× with
+      the parent id; updated_at bumps on add+update). Migration 0009
+      proven applied (ledger v9, column present).
+    - [ ] F2 part 2b: docs/search.md, OpenAPI, smoke.sh section,
+      production.md SEARCH_* env rows.
 - [ ] F3: Cart + checkout + orders — cart API (add/update/remove,
   idempotent), checkout → order creation, order state machine
   (created → confirmed → shipped → delivered / cancelled / returned),
@@ -1423,6 +1455,18 @@ All boxes ticked, CI green, `scripts/smoke.sh` passes, docs complete.
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-18 ~20:35 IST: F2 part 2a done — variant-triggered reindex
+  (variant writes bump products.updated_at + fire AfterProductWrite
+  with the parent product id) + GET /v1/search proxy (param
+  validation, opaque (updated_at, sort_seq) cursors, numeric keyset
+  paging — Meilisearch range filters are numbers-only per official
+  docs, hence migration 0009's search_seq identity column; 503+
+  Retry-After on unconfigured/upstream-down, never 500). Verified:
+  gofmt/build/vet clean, full go test ./... green on real PG16 (12
+  search + 2 catalog integration tests new), SPDX checker green,
+  migration 0009 applied (ledger v9). F2 part 2b next: docs/search.md
+  + OpenAPI + smoke.sh section + production.md SEARCH_* rows. Pushed.
 
 - 2026-10-18 ~19:55 IST: F2 part 1 done — Meilisearch CE in compose
   (pinned v1.38.0, MIT) + stdlib-only Go search client (fail-closed /
