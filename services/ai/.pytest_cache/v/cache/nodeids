@@ -1,0 +1,14 @@
+[
+  "tests/test_chat.py::test_as_tuples_handles_both_shapes",
+  "tests/test_chat.py::test_chat_graph_empty_history",
+  "tests/test_chat.py::test_chat_graph_recall_generate_persist",
+  "tests/test_chat.py::test_estimate_messages_adds_framing",
+  "tests/test_chat.py::test_estimate_tokens_basics",
+  "tests/test_chat.py::test_last_user_text_picks_latest",
+  "tests/test_chat.py::test_load_system_prompt_missing_version",
+  "tests/test_chat.py::test_load_system_prompt_v1",
+  "tests/test_chat.py::test_stub_client_no_user_message",
+  "tests/test_chat.py::test_stub_client_streams_and_marks_itself",
+  "tests/test_chat.py::test_validate_rejects_empty",
+  "tests/test_chat.py::test_validate_rejects_oversize"
+]

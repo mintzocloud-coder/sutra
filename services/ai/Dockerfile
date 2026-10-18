@@ -16,6 +16,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /srv/ai
 COPY --from=builder /install /install
 COPY app ./app
+COPY migrations ./migrations
+COPY prompts ./prompts
 
 RUN groupadd -r app && useradd -r -g app app \
     && chown -R app:app /srv/ai

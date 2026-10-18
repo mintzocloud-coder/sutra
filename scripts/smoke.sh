@@ -250,6 +250,65 @@ printf '%s' "$ag_ui_out" | grep -q '"type":"RUN_FINISHED"' \
 printf '%s' "$ag_ui_out" | grep -q 'smoke ping' \
   || fail "AG-UI echo graph did not reflect the message"
 pass "AG-UI skeleton streams RUN_STARTED->echo->RUN_FINISHED through the proxy"
+
+# --- Personal AI chat round-trip (E2) ---------------------------------------
+# The stub model stands in for sarvam-30B (CI has no GPU/model to pull);
+# DATABASE_URL comes from the compose file itself. Exercises: the full
+# AG-UI turn (recall->generate->persist), thread memory across two turns,
+# PG persistence, and both guard 429 paths (budget + rate limit).
+echo "smoke: personal AI chat round-trip (E2)"
+AI_MODEL_STUB=1 docker compose up -d --no-deps ai
+wait_for 120 "ai /healthz (stub model)" curl -sf http://localhost:8000/healthz
+
+chat_out="$(curl -sf -N -H "Authorization: Bearer $access_token" -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"smoke chat ping"}]}' "$API_URL/v1/ai/chat")" \
+  || fail "POST /v1/ai/chat through the proxy failed"
+printf '%s' "$chat_out" | grep -q '"type":"RUN_STARTED"' \
+  || fail "chat stream missing RUN_STARTED"
+printf '%s' "$chat_out" | grep -q '"type":"TEXT_MESSAGE_START"' \
+  || fail "chat stream missing TEXT_MESSAGE_START"
+printf '%s' "$chat_out" | grep -q 'AI_MODEL_STUB=1' \
+  || fail "chat stream missing the stub-model marker"
+printf '%s' "$chat_out" | grep -q '"type":"RUN_FINISHED"' \
+  || fail "chat stream missing RUN_FINISHED"
+thread_id="$(printf '%s' "$chat_out" | grep -o '"threadId":"[^"]*"' | head -1 | cut -d'"' -f4)"
+[ -n "$thread_id" ] || fail "chat RUN_STARTED carried no threadId"
+# Second turn on the same thread: proves per-user conversation memory.
+curl -sf -N -H "Authorization: Bearer $access_token" -H 'Content-Type: application/json' \
+  -d "{\"thread_id\":\"$thread_id\",\"messages\":[{\"role\":\"user\",\"content\":\"smoke chat pong\"}]}" \
+  "$API_URL/v1/ai/chat" | grep -q '"type":"RUN_FINISHED"' \
+  || fail "second chat turn on thread $thread_id failed"
+mem="$(docker compose exec -T postgres psql -U sutra -d sutra -tAc \
+  "SELECT count(*) FROM ai_messages m JOIN ai_threads t ON t.id = m.thread_id WHERE t.subject = 'sutra-smoke' AND t.client_thread_id = '$thread_id'")"
+[ "$mem" = "4" ] || fail "expected 4 persisted chat messages, found '$mem'"
+pass "personal AI chat streams a full AG-UI turn; thread memory persists (4 rows)"
+
+# Daily token-budget 429 path (budget=1 token: any real turn exceeds it).
+AI_MODEL_STUB=1 AI_DAILY_TOKEN_BUDGET=1 docker compose up -d --no-deps ai
+wait_for 120 "ai /healthz (budget=1)" curl -sf http://localhost:8000/healthz
+budget_code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $access_token" \
+  -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":"x"}]}' \
+  "$API_URL/v1/ai/chat")"
+[ "$budget_code" = "429" ] || fail "budget-exhausted chat did not 429 (got $budget_code)"
+pass "daily token budget 429 path (ai_budget_exhausted)"
+
+# Per-user rate-limit 429 path (rpm=1; loop until a 429 to survive a
+# minute-boundary rollover between the two requests).
+AI_MODEL_STUB=1 AI_CHAT_RPM=1 docker compose up -d --no-deps ai
+wait_for 120 "ai /healthz (rpm=1)" curl -sf http://localhost:8000/healthz
+rate_code="200"
+for _ in 1 2 3 4; do
+  rate_code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $access_token" \
+    -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":"ping"}]}' \
+    "$API_URL/v1/ai/chat")"
+  [ "$rate_code" = "429" ] && break
+done
+[ "$rate_code" = "429" ] || fail "rate-limited chat never 429d (last got $rate_code)"
+pass "per-user rate limit 429 path (ai_rate_limited)"
+
+# Restore the default ai configuration for the rest of the run.
+docker compose up -d --no-deps ai
+wait_for 120 "ai /healthz (defaults restored)" curl -sf http://localhost:8000/healthz
 # NOTE: the api is intentionally left running WITHOUT the bypass from here
 # on — the more production-faithful state. Nothing later in this script
 # needs the bypass (chat keeps its own for the websocket round-trip).

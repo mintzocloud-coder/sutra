@@ -1,33 +1,43 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""FastAPI entrypoint for the Sutra AI service (E1).
+"""FastAPI entrypoint for the Sutra AI service.
 
 Routes:
   GET  /healthz    — liveness, no auth (container healthchecks).
-  POST /ag-ui/run  — AG-UI protocol endpoint (skeleton): accepts a
-                     RunAgentInput, streams AG-UI BaseEvents as SSE.
-                     Requires the shared service Bearer token.
+  POST /ag-ui/run  — AG-UI protocol endpoint (E1 skeleton): accepts a
+                     RunAgentInput, streams AG-UI BaseEvents as SSE over the
+                     echo graph. Requires the shared service Bearer <redacted>
+  POST /chat       — E2 personal-AI chat (the Go proxy serves this as
+                     /v1/ai/chat): LangGraph agent (recall -> generate ->
+                     persist) with PG-backed per-user conversation memory,
+                     versioned system prompt, per-user rate limit and daily
+                     token budget. Streams AG-UI events as SSE. Requires the
+                     service token AND X-Sutra-Subject (the verified user id
+                     the Go proxy forwards; the AI service never sees JWTs).
 
 Event model follows the AG-UI 1.0 vocabulary (RUN_STARTED, STEP_STARTED /
 STEP_FINISHED, TEXT_MESSAGE_START / TEXT_MESSAGE_CONTENT /
-TEXT_MESSAGE_END, RUN_FINISHED, RUN_ERROR). E1 emits the chat-shaped
-subset over the echo graph; E2 adds tool calls, state snapshots, and the
-real model behind the same envelope.
+TEXT_MESSAGE_END, RUN_FINISHED, RUN_ERROR).
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import secrets
 import uuid
+from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from . import chat as chat_mod
+from . import db as db_mod
 from . import graph as agent_graph
 from .config import settings
 
-app = FastAPI(title="sutra-ai", version="0.1.0")
+log = logging.getLogger("sutra-ai")
 
 
 def _new_id(prefix: str) -> str:
@@ -40,6 +50,35 @@ def _event(event_type: str, **fields: Any) -> str:
     return f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
 
 
+def _envelope(status_code: int, code: str, message: str,
+              retry_after: int | None = None) -> JSONResponse:
+    headers = {"Retry-After": str(retry_after)} if retry_after else None
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": {"code": code, "message": message}},
+        headers=headers,
+    )
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup: run AI migrations (advisory-locked, idempotent), open the
+    pool (fail-fast), load the versioned system prompt, build the chat
+    graph. Any failure here refuses to boot — a chat service without its
+    memory/budget tables or its persona must not serve traffic."""
+    await asyncio.to_thread(db_mod.run_migrations, settings.database_url)
+    pool = await asyncio.to_thread(db_mod.open_pool, settings.database_url)
+    app.state.pool = pool
+    app.state.chat = await asyncio.to_thread(chat_mod.new_service, pool, settings)
+    log.info("sutra-ai ready (prompt=%s model=%s stub=%s)",
+             settings.prompt_version, settings.model, settings.model_stub)
+    yield
+    pool.close()
+
+
+app = FastAPI(title="sutra-ai", version="0.2.0", lifespan=lifespan)
+
+
 def require_service_token(authorization: str | None = Header(default=None)) -> None:
     """The Go API proxy is the only allowed caller.
 
@@ -50,7 +89,7 @@ def require_service_token(authorization: str | None = Header(default=None)) -> N
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"error": {"code": "unauthorized", "message": "missing bearer token"}},
+            detail={"error": {"code": "unauthorized", "message": "missing bearer <redacted>"}},
         )
     presented = authorization[len("Bearer ") :]
     if not secrets.compare_digest(presented, settings.service_token):
@@ -73,6 +112,15 @@ class RunAgentInput(BaseModel):
     run_id: str = Field(default_factory=lambda: _new_id("run"))
     messages: list[Message] = Field(default_factory=list)
     state: dict[str, Any] = Field(default_factory=dict)
+
+
+class ChatInput(BaseModel):
+    """E2 personal-AI chat input. thread_id is the client's conversation
+    key (scoped to the user); omit it to start a new thread — the minted
+    id comes back in RUN_STARTED's threadId."""
+
+    thread_id: str | None = Field(default=None, max_length=128)
+    messages: list[Message] = Field(default_factory=list)
 
 
 @app.get("/healthz")
@@ -126,6 +174,39 @@ def ag_ui_run(
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+@app.post("/chat")
+def chat(
+    body: ChatInput,
+    request: Request,
+    _: None = Depends(require_service_token),
+) -> StreamingResponse:
+    """E2 personal-AI chat: one LangGraph turn, streamed as AG-UI SSE.
+
+    The Go proxy authenticates the user (JWT) and forwards the verified
+    subject as X-Sutra-Subject; without it the request is refused — the
+    AI service must never attribute memory/budget to an unknown caller.
+    Guards (validation, per-user rate limit, daily token budget) run
+    before streaming: rejections are JSON 429s with Retry-After, never
+    truncated streams.
+    """
+    subject = request.headers.get("x-sutra-subject", "").strip()
+    if not subject:
+        return _envelope(401, "unauthorized",
+                         "missing X-Sutra-Subject — call through the Go API proxy")
+    service: chat_mod.ChatService = request.app.state.chat
+    try:
+        frames = service.stream_turn(
+            subject, body.thread_id,
+            [{"role": m.role, "content": m.content} for m in body.messages],
+        )
+    except chat_mod.ChatError as err:
+        return _envelope(err.status_code, err.code, err.message, err.retry_after)
+    # Guards already passed (stream_turn raises eagerly on rejection), so
+    # anything failing from here on becomes RUN_ERROR inside the SSE,
+    # matching /ag-ui/run semantics.
+    return StreamingResponse(frames, media_type="text/event-stream")
+
+
 @app.exception_handler(HTTPException)
 async def _http_exception_handler(_request, exc: HTTPException) -> JSONResponse:
     # FastAPI's default handler would return {"detail": ...}; normalize to
@@ -154,8 +235,8 @@ def main() -> None:
         host="0.0.0.0",
         port=settings.port,
         log_level="info",
-        # One worker: the graphs hold in-process state until E2 moves
-        # conversation memory to PostgreSQL. Scale via replicas, not workers.
+        # One worker: the pool + guards are process-local by design and
+        # PG-backed, so replicas (not workers) are the scale unit.
         workers=1,
     )
 

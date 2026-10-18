@@ -1,10 +1,14 @@
 # services/ai — Python intelligence layer
 
-**Status:** 🟢 E1 scaffold live — FastAPI (`app/main.py`), AG-UI 1.0 endpoint
-skeleton (`POST /ag-ui/run`, SSE), real LangGraph echo graph
-(`app/graph.py`: `START → echo → END`), Go API proxy at `/v1/ai/*`
-(internal service token), Ollama in compose (dev), vLLM noted for prod.
-See `docs/ai-core.md`. The model, memory, and tools land in E2–E5.
+**Status:** 🟢 E2 personal-AI chat live — `POST /chat` (Go proxy:
+`/v1/ai/chat`): LangGraph agent (`recall → generate → persist`) with
+PG-backed per-user conversation memory, versioned-YAML system prompt
+(`prompts/system/v1.yaml`), per-user rate limit + daily token budget
+(both 429 with Retry-After), AG-UI 1.0 SSE streaming. Model: Sarvam-30B
+default via Ollama dev / vLLM prod (OpenAI-compatible); `AI_MODEL_STUB=1`
+for smoke/CI. E1's echo graph remains on `POST /ag-ui/run`.
+See `docs/ai-core.md`. Tools, recsys, and the language bridge land in
+E3–E5.
 
 ## What lives here (off the hot path — never in a request cycle)
 
