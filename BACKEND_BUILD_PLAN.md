@@ -1787,6 +1787,24 @@ Then report to founder: production-ready backend live on main.
 
 ## Log
 
+- 2026-10-19 ~05:15 IST: CI-RED TRIAGE ATTEMPT #4 — pulled the real smoke
+  logs for 4f296972 (job 117818635706) via the Actions logs API: ROOT CAUSE
+  = smoke.sh probed Kratos health on the WRONG PORT. `kratos-1` + `hydra-1`
+  both started and both migrate one-shots exited 0 (triage #3's dedicated-DB
+  fix worked), but `curl -sf http://localhost:4433/health/alive` timed out
+  for the full 120s — 4433 is the PUBLIC API; Ory Kratos serves /health/*
+  on the ADMIN API (4434) ONLY (verified against the official quickstart
+  docs: /health/alive is admin-routed, public router 404s it). This was
+  masked until now by the earlier migrate failure. Fix: probe 4434 in
+  smoke.sh + the docs/identity.md first-boot snippet (with a comment stating
+  the admin-port rule); also corrected kratos.yml's stale file-level dsn
+  to the /kratos database (compose env DSN already pointed there and wins
+  via koanf env precedence, so hygiene-only). VERIFIED: bash -n clean,
+  three files cross-checked. Full compose smoke run is CI-gated (no docker
+  on this VM) — CI-green confirmation lands with the next run's CI check.
+  NEXT: F6 part 3 (commerce rate limits, docs/commerce.md, production.md
+  NATS_* backfill, smoke.sh NATS round-trip), then Phase F complete.
+
 - 2026-10-19 ~04:55 IST: F6 part 2b done — saga orchestrator engine +
   durable JetStream consumer (see F6 task note): orders roleSystem +
   TransitionSystem/GetSystem, internal/saga/engine.go (started→

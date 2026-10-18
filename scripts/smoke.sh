@@ -192,8 +192,11 @@ if ! docker compose up -d hydra kratos; then
 fi
 wait_for 120 "hydra openid-configuration" \
   curl -sf http://localhost:4444/.well-known/openid-configuration
+# In Ory Kratos, /health/alive is served by the ADMIN API (4434), never the
+# public API (4433) — probing 4433 always 404s and wedges the wait.
+# (Fixed 2026-10-19: the 4433 probe timed out smoke CI since triage #3.)
 wait_for 120 "kratos /health/alive" \
-  curl -sf http://localhost:4433/health/alive
+  curl -sf http://localhost:4434/health/alive
 pass "hydra + kratos up (identity plane live)"
 
 echo "smoke: running chat database migrations"

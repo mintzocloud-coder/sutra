@@ -15,7 +15,7 @@
 #     or recovery emails are sent in dev. Wiring a real mailer is a
 #     post-incorporation step alongside SMS/DLT (see docs/identity.md).
 
-dsn: postgres://sutra:sutra@postgres:5432/sutra?sslmode=disable
+dsn: postgres://sutra:sutra@postgres:5432/kratos?sslmode=disable
 
 serve:
   public:

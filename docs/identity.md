@@ -59,7 +59,7 @@ future — it is *not* a login identifier yet).
 ```bash
 docker compose up -d hydra kratos   # pulls in the migrate one-shots first
 curl -s http://localhost:4444/.well-known/openid-configuration | head -5
-curl -s http://localhost:4433/health/alive   # "ok"
+curl -s http://localhost:4434/health/alive   # "ok" — admin port; /health/* is admin-API only
 ```
 
 `scripts/smoke.sh` does all of this and then proves the full loop (below).
