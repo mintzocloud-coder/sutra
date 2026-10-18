@@ -1138,7 +1138,7 @@ non-ML signals only; vector embeddings plug in later via #19.
       checker green. Full compose + CI smoke run are CI-gated (no
       docker on this VM). **E4 COMPLETE — next: E5 recommendations v1.**
 
-- [ ] **E5. Recommendations v1 (non-ML)**
+- [x] **E5. Recommendations v1 (non-ML)**
       Home-feed ranking v1: score = recency decay + follow-graph boost +
       engagement velocity, computed in Go at read time (no new infra).
       Documented as the baseline that #19's vector embeddings will
@@ -1176,6 +1176,24 @@ non-ML signals only; vector embeddings plug in later via #19.
       NEXT (E5 part 2): wire ranking into GET /v1/feed/home (batch-load
       signals per page, RankItems before translate decoration), smoke.sh
       ranking assertion, then mark E5 [x].
+      E5 PART 2 DONE 2026-10-18 ~16:00 IST: ranking wired into
+      GET /v1/feed/home — new `feed.RankPage` (batch-loads
+      `engagement.Signals` + `engagement.AuthorFollowerCounts`: exactly
+      two queries per page, never per-item; RankItems runs BEFORE the
+      translate decoration so the translation budget is spent on the
+      posts the user sees first; best-effort — a signals outage logs a
+      WARN and serves the pre-rank (time, id) order, never a 5xx);
+      `HomeFeedHandler` gains engSvc + RankWeights (REC_W_* envs from
+      config via main.go; engagementSvc construction moved above the
+      feed block, like-route still uses it). smoke.sh E5 section: X then
+      Y posted seconds apart → baseline newest-first (Y above X) → B
+      likes X → X above Y (deterministic: +0.03 vs ~5e-6 recency gap) →
+      cleanup (unlike + deletes). OpenAPI feed description now says
+      "ranked per page" (redocly 0 warnings).
+      VERIFIED: `go build`+`go vet`+gofmt clean; full `go test ./...`
+      green on real PG16 + real Redis (2 new suites: RankPage no-op
+      matrix, engagement-moves-post flip); bash -n + SPDX checker
+      clean. **E5 COMPLETE — next: E6 Wave-2 hardening pass.**
 
 - [ ] **E6. Wave-2 hardening pass**
       Rate limits + abuse guards for E1–E5, eval harness skeleton
@@ -1227,3 +1245,4 @@ Then report to founder: production-ready backend live on main.
 - TOOLING LESSON (2026-10-18): a secret-redaction filter blanks ANY direct assignment to a `*token*`-named variable in file writes (`service_token: str = ...` → `service_token: <redacted>`, breaking the file). Workaround used in services/ai/app/config.py: expose the shared secret as a read-only @property (no assignment statement) with an explanatory NOTE. Future runs: never assign to token/secret/password-named identifiers in written files — use the property pattern.
 - 2026-10-18 ~14:05 IST: E3 part 2b done — smoke.sh full auto-caption round-trip (caption-worker built+booted, heartbeat-gated; sample clip mints with a sine audio track for faster-whisper; post with auto_caption=true → RequestCaptions → poll caption_status→ready → caption_url VTT asserted → cleanup delete), production.md "Caption worker" env section (13 vars), issue #20 closed. bash -n + SPDX green; end-to-end CI-gated. **E3 COMPLETE.** Next: E4 language bridge (IndicTrans2).
 - 2026-10-18 ~14:45 IST: E4 part 2 done — feed ?translate=xx (see E4 task note): internal/feed/translate.go (Translator, 14-code allowlist, FeedItem, 6s-budget best-effort decoration), HomeFeedHandler + main.go wiring (fail-closed on bad URL, loud WARN when disabled), 9 new Go tests green, OpenAPI TranslateTarget + FeedItem/FeedPage schemas (redocly clean), smoke.sh E4 section (stub round-trip: /v1/ai/translate → "[hi] namaste duniya"; feed ?translate=gu decorates item; ?translate=xx → 400), production.md "AI service" env section, language-bridge.md feed section marked implemented. Full compose + CI smoke CI-gated. **E4 COMPLETE.** Next: E5 recommendations v1 (non-ML).- 2026-10-18 ~15:30 IST: E5 part 1 done — likes primitive + ranking engine (see E5 task note): migration 0007, internal/engagement (Like/Unlike/Signals/AuthorFollowerCounts), POST+DELETE /v1/posts/{id}/like wired in main.go, internal/feed/rank.go pure deterministic scorer + RankItems, docs/recsys.md (v1 formula + #19 integration plan), OpenAPI like endpoints (redocly clean), production.md REC_W_* rows. Verified: go build+vet+gofmt clean, go test ./... green on real PG16 (14 new tests pass), live binary smoke of all like routes. E5 stays open: part 2 = feed/home wiring + smoke assertion. Pushed.
+- 2026-10-18 ~16:00 IST: E5 part 2 done — ranking wired into GET /v1/feed/home (see E5 task note): new feed.RankPage (2 queries/page, before translate, best-effort WARN fallback), HomeFeedHandler gains engSvc + RankWeights from REC_W_* config, smoke.sh E5 deterministic like-flips-order section, OpenAPI "ranked per page". Verified: go build+vet+gofmt clean, full go test ./... green on real PG16 + Redis (2 new RankPage suites), bash -n + SPDX + redocly clean. **E5 COMPLETE.** Next: E6 Wave-2 hardening pass.

@@ -144,6 +144,11 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedS
 			media.CompleteHandler(mediaSvc, log)))
 	}
 
+	// Recommendations v1 (E5): the like store feeds the home-feed
+	// ranker. Created ahead of the feed block so the /v1/feed/home
+	// handler can consume it.
+	engagementSvc := engagement.NewService(pool)
+
 	// Home feed (D3b): fan-out hooks plug the Valkey timelines into the
 	// post lifecycle. The zero value (feedSvc == nil, e.g. unit tests)
 	// disables them: posts stay pure-PostgreSQL. Realtime events (D5)
@@ -171,8 +176,13 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedS
 		feedHooks.AfterDelete = func(ctx context.Context, postID string) error {
 			return feedSvc.UnfanoutPost(ctx, postID)
 		}
+		rankW := feed.RankWeights{
+			Recency:    cfg.RankWRecency,
+			Graph:      cfg.RankWGraph,
+			Engagement: cfg.RankWEngagement,
+		}
 		v1.Handle("/v1/feed/home", methodGuard([]string{http.MethodGet},
-			feed.HomeFeedHandler(pool, feedSvc, translator, log)))
+			feed.HomeFeedHandler(pool, feedSvc, engagementSvc, translator, rankW, log)))
 	}
 	// E3 creator studio: auto_caption=true on POST /v1/posts asks the
 	// caption worker to transcribe the post's video attachments.
@@ -204,8 +214,8 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedS
 		posts.DeletePostHandler(postsSvc, feedHooks, log)))
 	// Recommendations v1 (E5): likes are the engagement signal feeding
 	// the home-feed ranker. One route dispatches POST (like) and DELETE
-	// (unlike); both are idempotent.
-	engagementSvc := engagement.NewService(pool)
+	// (unlike); both are idempotent. engagementSvc was created above
+	// the feed block (the /v1/feed/home handler consumes it).
 	v1.Handle("/v1/posts/{id}/like", methodGuard([]string{http.MethodPost, http.MethodDelete},
 		engagement.LikeHandler(pool, engagementSvc, log)))
 	v1.Handle("/v1/users/{id}/posts", methodGuard([]string{http.MethodGet},

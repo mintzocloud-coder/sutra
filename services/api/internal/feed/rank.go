@@ -2,9 +2,13 @@
 package feed
 
 import (
+	"context"
+	"fmt"
 	"math"
 	"sort"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/mintzocloud-coder/sutra/services/api/internal/engagement"
 )
@@ -89,6 +93,58 @@ type RankSignals struct {
 	AuthorFollowers int64
 	// Likes signals feed the engagement-velocity term.
 	Likes engagement.PostSignals
+}
+
+// RankPage reorders page.Items in place by v1 RankScore, batch-loading
+// the page's engagement signals: exactly two queries per page
+// (`engagement.Signals` for like counts, `engagement.AuthorFollowerCounts`
+// for follower counts), never per-item. It mutates the page in place —
+// the caller owns the page by then — so the translate decoration step
+// that follows sees the ranked order.
+//
+// eng == nil or a page with fewer than 2 items is a no-op. A
+// signal-load error is returned to the caller; ranking must never turn
+// a working feed into a 5xx, so callers log the error and serve the
+// pre-rank (time, id) order.
+func RankPage(ctx context.Context, eng *engagement.Service, page *FeedPage, w RankWeights) error {
+	if eng == nil || page == nil || len(page.Items) < 2 {
+		return nil
+	}
+	postIDs := make([]pgtype.UUID, 0, len(page.Items))
+	seen := make(map[string]bool, len(page.Items))
+	authorIDs := make([]pgtype.UUID, 0, len(page.Items))
+	for _, it := range page.Items {
+		var pid pgtype.UUID
+		if err := pid.Scan(it.ID); err != nil || !pid.Valid {
+			return fmt.Errorf("feed: rank: bad post id %q", it.ID)
+		}
+		postIDs = append(postIDs, pid)
+		if !seen[it.AuthorID] {
+			seen[it.AuthorID] = true
+			var aid pgtype.UUID
+			if err := aid.Scan(it.AuthorID); err != nil || !aid.Valid {
+				return fmt.Errorf("feed: rank: bad author id %q", it.AuthorID)
+			}
+			authorIDs = append(authorIDs, aid)
+		}
+	}
+	sigs, err := eng.Signals(ctx, postIDs)
+	if err != nil {
+		return fmt.Errorf("feed: rank: load like signals: %w", err)
+	}
+	counts, err := eng.AuthorFollowerCounts(ctx, authorIDs)
+	if err != nil {
+		return fmt.Errorf("feed: rank: load follower counts: %w", err)
+	}
+	signals := make(map[string]RankSignals, len(page.Items))
+	for _, it := range page.Items {
+		signals[it.ID] = RankSignals{
+			AuthorFollowers: counts[it.AuthorID], // absent = zero
+			Likes:           sigs[it.ID],         // absent = zero
+		}
+	}
+	page.Items = RankItems(page.Items, signals, time.Now(), w)
+	return nil
 }
 
 // RankScore computes the v1 score in [0,1]: weighted sum of three

@@ -1167,8 +1167,10 @@ paths:
       summary: Get the caller's home timeline
       description: |
         The caller's home feed: posts by followed authors plus the
-        caller's own posts, newest first. Hybrid fan-out / fan-in
-        (see docs/feeds.md): normal authors are fanned out to Valkey
+        caller's own posts, **ranked per page** by the v1 recommender
+        (recency decay + follow-graph boost + like velocity — see
+        docs/recsys.md; engagement can move an older post above a newer
+        one). Hybrid fan-out / fan-in (see docs/feeds.md): normal authors are fanned out to Valkey
         timelines on write; authors with more than FANOUT_THRESHOLD
         followers (default 10,000) are merged in from PostgreSQL at read
         time. Keyset-paginated — pass `next_cursor` for the next page;

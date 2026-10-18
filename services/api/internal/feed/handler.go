@@ -9,13 +9,15 @@ import (
 	"strconv"
 
 	"github.com/mintzocloud-coder/sutra/services/api/internal/db"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/engagement"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/middleware"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/social"
 )
 
 // HomeFeedHandler serves GET /v1/feed/home: the caller's merged home
-// timeline (fan-out-on-write + pull-on-read), newest first,
-// keyset-paged with an opaque `cursor` query parameter.
+// timeline (fan-out-on-write + pull-on-read), ranked per page by the
+// v1 recommender (engagement moves posts; see RankPage), keyset-paged
+// with an opaque `cursor` query parameter.
 //
 //   - `limit`: 1..100, default 20 (clamped, like every other listing).
 //   - `cursor`: the opaque `next_cursor` from the previous page; empty
@@ -30,7 +32,7 @@ import (
 //   - A downed timeline store is 503 `feed_unavailable` with Retry-After
 //     (infrastructure outage, not a client bug); author timelines and
 //     post CRUD keep working — they are pure PostgreSQL.
-func HomeFeedHandler(pool *db.Pool, svc *Service, translator *Translator, log *slog.Logger) http.HandlerFunc {
+func HomeFeedHandler(pool *db.Pool, svc *Service, engSvc *engagement.Service, translator *Translator, rankW RankWeights, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		callerID, ok := social.CallerUUID(w, r, pool, log)
 		if !ok {
@@ -83,6 +85,16 @@ func HomeFeedHandler(pool *db.Pool, svc *Service, translator *Translator, log *s
 			middleware.WriteStatusError(w, r, http.StatusInternalServerError,
 				"internal server error")
 			return
+		}
+
+		// Recommendations v1 (E5): per-page rerank happens BEFORE
+		// translate decoration, so the decoration budget is spent on
+		// the posts the user will actually see first. Best-effort: a
+		// signals outage degrades to the pre-rank (time, id) order,
+		// never a 5xx.
+		if err := RankPage(r.Context(), engSvc, page, rankW); err != nil {
+			log.Warn("feed: ranking failed — serving unranked page",
+				"err", err, "request_id", middleware.FromContext(r.Context()))
 		}
 
 		if target != "" {

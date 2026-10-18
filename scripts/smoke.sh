@@ -523,6 +523,60 @@ pass "delete propagation: post removed from follower feed"
   -H "Authorization: Bearer $access_token" "$API_URL/v1/users/$id_b/follow")" = "204" ] \
   || fail "DELETE follow (feed teardown) did not return 204"
 
+# --- Recommendations v1 ranking (E5) ---------------------------------------
+# Engagement moves posts: A posts X, then Y seconds later. The baseline
+# feed is newest-first (Y above X); after B likes X, X outranks Y. One
+# like contributes 0.3*0.1 = +0.03 while the ~1s recency gap costs
+# ~0.000005, so the flip is deterministic, not timing-luck.
+echo "smoke: recommendations v1 ranking (E5)"
+
+rx="$(curl -sf -X POST -H "Authorization: Bearer $access_token" \
+  -H 'Content-Type: application/json' -d '{"text":"rank candidate older"}' \
+  "$API_URL/v1/posts")" || fail "POST /v1/posts (rank X) failed"
+rxid="$(jget "$rx" id)"
+ry="$(curl -sf -X POST -H "Authorization: Bearer $access_token" \
+  -H 'Content-Type: application/json' -d '{"text":"rank candidate newer"}' \
+  "$API_URL/v1/posts")" || fail "POST /v1/posts (rank Y) failed"
+ryid="$(jget "$ry" id)"
+[ -n "$rxid" ] && [ -n "$ryid" ] || fail "rank post ids missing"
+
+rank_pos() {
+  printf '%s' "$1" | python3 -c "
+import json,sys
+ids=[it['id'] for it in json.load(sys.stdin)['items']]
+print(ids.index('$2'), ids.index('$3'))"
+}
+
+feed_rank0="$(curl -sf -H "Authorization: Bearer $access_token" \
+  "$API_URL/v1/feed/home?limit=10")" || fail "GET /v1/feed/home (rank baseline) failed"
+pos0="$(rank_pos "$feed_rank0" "$rxid" "$ryid")"
+[ "${pos0% *}" -gt "${pos0#* }" ] \
+  || fail "baseline feed not newest-first (X@${pos0% *}, Y@${pos0#* })"
+pass "rank baseline: newer post Y above older post X"
+
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_b" "$API_URL/v1/posts/$rxid/like")" = "201" ] \
+  || fail "POST /v1/posts/{id}/like (rank setup) did not return 201"
+
+feed_rank1="$(curl -sf -H "Authorization: Bearer $access_token" \
+  "$API_URL/v1/feed/home?limit=10")" || fail "GET /v1/feed/home (rank after like) failed"
+pos1="$(rank_pos "$feed_rank1" "$rxid" "$ryid")"
+[ "${pos1% *}" -lt "${pos1#* }" ] \
+  || fail "like did not move older post above newer (X@${pos1% *}, Y@${pos1#* })"
+pass "ranking: liked older post X outranks newer post Y"
+
+# Cleanup: B unlikes X; A deletes both posts.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+  -H "Authorization: Bearer $token_b" "$API_URL/v1/posts/$rxid/like")" = "204" ] \
+  || fail "DELETE /v1/posts/{id}/like (rank cleanup) did not return 204"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+  -H "Authorization: Bearer $access_token" "$API_URL/v1/posts/$rxid")" = "204" ] \
+  || fail "DELETE rank post X did not return 204"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+  -H "Authorization: Bearer $access_token" "$API_URL/v1/posts/$ryid")" = "204" ] \
+  || fail "DELETE rank post Y did not return 204"
+pass "rank cleanup done"
+
 # --- Language bridge round-trip (E4) ----------------------------------------
 # The stub backend stands in for IndicTrans2 (CI has no model to pull);
 # it returns a visibly-marked "[tgt] text" so the round-trip proves the
