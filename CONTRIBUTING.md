@@ -10,6 +10,12 @@ Sutra's equity map is public: **Founder 70% · Contributors 10% · Investors 20%
 
 ---
 
+## 🎃 Hacktoberfest
+
+**We participate in Hacktoberfest.** Look for issues labeled [`hacktoberfest`](https://github.com/mintzocloud-coder/sutra/labels/hacktoberfest) — newcomers start with [`good first issue`](https://github.com/mintzocloud-coder/sutra/labels/good%20first%20issue). The same claim workflow (§2) applies: comment, get assigned within 24h, then open your PR. Quality PRs merged during October count toward Hacktoberfest **and** earn contributor credits (§5) toward the 10% pool.
+
+---
+
 ## 1. Ways to contribute
 
 - **Code** — Go APIs, Elixir realtime core, Python AI, Next.js web, KMP mobile. `good-first-issue` labels mark the on-ramps. (Elixir core is deliberately narrow — serious contributors only.)
