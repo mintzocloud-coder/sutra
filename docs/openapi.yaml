@@ -2350,6 +2350,543 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /v1/cart:
+    get:
+      tags: [commerce]
+      summary: View my cart
+      description: |
+        The buyer's cart: buyable lines with LIVE prices (read fresh at
+        view time — the line price may differ from when the item was
+        added), plus `subtotal_paise` over the buyable lines only.
+        Lines whose variant or parent product left `active` status are
+        not deleted — they are excluded from the totals and reported in
+        `unavailable_count` (archiving a product never silently drops a
+        buyer's line; reactivating restores it).
+      operationId: getCart
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The cart view
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Cart'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [commerce]
+      summary: Clear my cart
+      description: |
+        Removes every line (204, idempotent). Checkout also clears the
+        cart on success.
+      operationId: clearCart
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Cart cleared.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/cart/items:
+    post:
+      tags: [commerce]
+      summary: Add an item to the cart
+      description: |
+        Accumulating upsert: adding a variant already in the cart grows
+        the line. The stock check is transaction-atomic against
+        `available` (quantity − reserved) — overflow rolls the whole
+        write back with 409 `insufficient_stock`. Only `active`
+        variants of `active` products are buyable (422
+        `variant_not_available`); quantity is 1–999 (422
+        `invalid_quantity`).
+      operationId: addCartItem
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CartItemAdd'
+            example:
+              variant_id: 9c1f7a4d-2e6b-4a3f-8c5d-e7f9a1b2c3d4
+              quantity: 2
+      responses:
+        '201':
+          description: The cart line after the add
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CartLine'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: |
+            Malformed JSON, unknown field, missing `variant_id`/`quantity`
+            (`missing_field`), non-UUID variant (`invalid_variant_id`),
+            or non-integer quantity (`invalid_quantity`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No such variant (`variant_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '409':
+          description: Resulting line quantity exceeds available stock (`insufficient_stock`); nothing was written.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '422':
+          description: |
+            Out-of-range quantity (`invalid_quantity`) or variant/product
+            not active (`variant_not_available`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/cart/items/{variant_id}:
+    patch:
+      tags: [commerce]
+      summary: Set a cart line's quantity
+      description: |
+        `quantity: 0` removes the line (204, same as DELETE).
+        Overflow against available stock rolls back with 409
+        `insufficient_stock`; the cart is never left half-written.
+      operationId: setCartItemQuantity
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/VariantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CartQuantityPatch'
+            example:
+              quantity: 3
+      responses:
+        '200':
+          description: The cart line after the quantity change
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CartLine'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '204':
+          description: quantity was 0 — the line was removed.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: |
+            Malformed variant id in the path, malformed JSON, unknown
+            field, missing or non-integer `quantity`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: |
+            The variant id names no variant (`variant_not_found`), or the
+            cart holds no such line (`cart_item_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '409':
+          description: New quantity exceeds available stock (`insufficient_stock`); line unchanged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '422':
+          description: |
+            Out-of-range quantity (`invalid_quantity`) or variant/product
+            not active (`variant_not_available`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [commerce]
+      summary: Remove a cart line
+      description: |
+        Idempotent by design — deleting an absent line is a 204 no-op,
+        so a lost acknowledgement can be retried safely.
+      operationId: removeCartItem
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/VariantId'
+      responses:
+        '204':
+          description: Line removed (or was already absent).
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed variant id in the path.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/orders:
+    post:
+      tags: [commerce]
+      summary: Checkout — turn the cart into orders
+      description: |
+        Wave-3 is COD-first: `payment_method` is always `cod` and no
+        payment step is involved (the F4 Cashfree adapter will add
+        prepaid later; the adapter stays fail-closed until real
+        onboarding is done, post-investors). Checkout is one
+        transaction: live buyable lines are re-read, each line's stock
+        is re-verified under a row lock and reserved, prices are
+        snapshotted into `order_items` at checkout-time values (a later
+        seller price change never rewrites history), then the cart is
+        cleared. A mixed cart becomes one order PER SELLER, so the
+        response is a list. Empty cart → 422 `cart_empty`; a line that
+        overshoots stock after re-verify → 409 `insufficient_stock`
+        with the cart left intact and nothing reserved.
+      operationId: checkoutCart
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        description: |
+          Checkout takes no parameters. An absent body is normal; a
+          present body must be an empty JSON object (unknown fields
+          400).
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckoutRequest'
+      responses:
+        '201':
+          description: One order per seller, all `created`
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckoutResult'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed JSON or unknown field in the body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: |
+            A line overshoots stock after the re-verify
+            (`insufficient_stock`); cart intact, nothing reserved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '422':
+          description: |
+            Empty cart (`cart_empty`) or a line's variant/product no
+            longer buyable (`variant_not_available`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    get:
+      tags: [commerce]
+      summary: List my orders
+      description: |
+        Buyer view by default (`role=buyer`); `role=seller` lists orders
+        placed against the caller's storefront (callers without a seller
+        account see an empty list, never an error). Strangers can never
+        see an order — detail and transitions are buyer-or-seller only.
+      operationId: listOrders
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: role
+          in: query
+          required: false
+          description: Which side of the order to list; defaults to buyer.
+          schema:
+            type: string
+            enum: [buyer, seller]
+            default: buyer
+        - name: limit
+          in: query
+          required: false
+          description: |
+            Page size, 1–50. Non-integers are 400; out-of-range values
+            clamp to the sane default (20) rather than failing.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: offset
+          in: query
+          required: false
+          description: Offset into the result set (newest first).
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: The order summaries, newest first
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderList'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: |
+            Unknown `role` (`invalid_role`), or non-integer
+            `limit`/`offset` (`invalid_limit`, `invalid_offset`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/orders/{id}:
+    get:
+      tags: [commerce]
+      summary: Get an order
+      description: |
+        Full order view — lines with their immutable price snapshots —
+        for the buyer or the seller only. Strangers get 403 `forbidden`.
+      operationId: getOrder
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: The order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed order id (`invalid_order_id`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Caller is neither the buyer nor the seller (`forbidden`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '404':
+          description: No such order (`order_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/orders/{id}/status:
+    patch:
+      tags: [commerce]
+      summary: Move an order along its state machine
+      description: |
+        Role-aware transitions under a row lock — a buyer cannot
+        confirm, a seller cannot mark delivered, and no one can move a
+        terminal order: `created → confirmed → shipped → delivered` by
+        the seller; `created → cancelled` by buyer or seller;
+        `confirmed → cancelled` by the seller; `delivered → returned`
+        by buyer or seller. Cancel/return RELEASES the stock
+        reservation back to available; delivery CONVERTS it into a
+        sale. Unknown status names → 422 `invalid_status`; legal names
+        on illegal edges → 422 `invalid_transition`.
+      operationId: transitionOrder
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderStatusPatch'
+            example:
+              status: confirmed
+      responses:
+        '200':
+          description: The order after the transition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: |
+            Malformed order id (`invalid_order_id`), malformed JSON,
+            unknown field (`unknown_field`), missing `status`
+            (`missing_field`), or non-string status (`invalid_status`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Caller is neither the buyer nor the seller (`forbidden`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '404':
+          description: No such order (`order_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '422':
+          description: |
+            Unknown status name (`invalid_status`) or the
+            (from, to, role) edge does not exist (`invalid_transition`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
 components:
   parameters:
     UserId:
@@ -2421,6 +2958,14 @@ components:
       in: path
       required: true
       description: Variant UUID.
+      schema:
+        type: string
+        format: uuid
+    OrderId:
+      name: id
+      in: path
+      required: true
+      description: Order UUID.
       schema:
         type: string
         format: uuid
@@ -3111,6 +3656,241 @@ components:
             409 `insufficient_stock` when it would drive quantity below
             zero.
           example: 100
+
+    CartLine:
+      type: object
+      required: [variant_id, product_id, seller_id, title, sku, price_paise, quantity, line_total_paise, added_at]
+      description: |
+        One cart line: the variant reference plus live product data.
+        `price_paise` is read fresh at view time — never a stale
+        snapshot.
+      properties:
+        variant_id:
+          type: string
+          format: uuid
+        product_id:
+          type: string
+          format: uuid
+        seller_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        sku:
+          type: string
+        price_paise:
+          type: integer
+          description: Live price in integer paise.
+          example: 149900
+        mrp_paise:
+          type: integer
+          nullable: true
+          description: Live MRP in integer paise; null when not set.
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 999
+        line_total_paise:
+          type: integer
+          description: quantity × live price_paise.
+        added_at:
+          type: string
+          format: date-time
+
+    Cart:
+      type: object
+      required: [items, item_count, subtotal_paise, unavailable_count]
+      description: |
+        The full cart view: buyable lines plus totals.
+        `unavailable_count` is the number of lines whose variant or
+        parent product is no longer active — reported, not deleted.
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CartLine'
+        item_count:
+          type: integer
+          description: Number of buyable lines.
+        subtotal_paise:
+          type: integer
+          description: Sum of line_total_paise over buyable lines only.
+        unavailable_count:
+          type: integer
+          description: Lines excluded from totals (archived/inactive).
+
+    CartItemAdd:
+      type: object
+      required: [variant_id, quantity]
+      additionalProperties: false
+      properties:
+        variant_id:
+          type: string
+          format: uuid
+          description: The variant to add.
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 999
+          description: Units to add (accumulates with the existing line).
+
+    CartQuantityPatch:
+      type: object
+      required: [quantity]
+      additionalProperties: false
+      properties:
+        quantity:
+          type: integer
+          minimum: 0
+          maximum: 999
+          description: |
+            New line quantity. `0` removes the line (204, same as
+            DELETE).
+
+    OrderItem:
+      type: object
+      required: [variant_id, product_id, sku, title, price_paise, quantity, line_total_paise]
+      description: |
+        One order line: an IMMUTABLE price snapshot taken at checkout.
+        A later seller price change never rewrites order history; the
+        RESTRICT references keep orders as legal history.
+      properties:
+        variant_id:
+          type: string
+          format: uuid
+        product_id:
+          type: string
+          format: uuid
+        sku:
+          type: string
+        title:
+          type: string
+          description: Snapshot of the product title at checkout.
+        price_paise:
+          type: integer
+          description: Checkout-time price in integer paise.
+          example: 149900
+        mrp_paise:
+          type: integer
+          nullable: true
+          description: Checkout-time MRP; null when not set.
+        quantity:
+          type: integer
+          minimum: 1
+        line_total_paise:
+          type: integer
+          description: quantity × checkout-time price_paise.
+
+    Order:
+      type: object
+      required: [id, buyer_id, seller_id, status, payment_method, total_paise, items, created_at, updated_at]
+      description: |
+        A Wave-3 order. `payment_method` is always `cod` until F4 adds
+        prepaid; `total_paise` is the sum of the line snapshots.
+      properties:
+        id:
+          type: string
+          format: uuid
+        buyer_id:
+          type: string
+          format: uuid
+        seller_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [created, confirmed, shipped, delivered, cancelled, returned]
+          description: |
+            Lifecycle: created → confirmed → shipped → delivered (seller);
+            created/cancelled and delivered/returned as documented.
+        payment_method:
+          type: string
+          enum: [cod]
+          description: Wave-3 is COD-first; F4 adds prepaid methods.
+        total_paise:
+          type: integer
+          description: Sum of line_total_paise over the snapshot lines.
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItem'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    OrderSummary:
+      type: object
+      required: [id, buyer_id, seller_id, status, payment_method, total_paise, line_count, created_at]
+      description: The list view of an order (lines are on the detail endpoint).
+      properties:
+        id:
+          type: string
+          format: uuid
+        buyer_id:
+          type: string
+          format: uuid
+        seller_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [created, confirmed, shipped, delivered, cancelled, returned]
+        payment_method:
+          type: string
+          enum: [cod]
+        total_paise:
+          type: integer
+        line_count:
+          type: integer
+          description: Number of lines in the order.
+        created_at:
+          type: string
+          format: date-time
+
+    OrderList:
+      type: object
+      required: [orders]
+      properties:
+        orders:
+          type: array
+          description: Order summaries, newest first.
+          items:
+            $ref: '#/components/schemas/OrderSummary'
+
+    CheckoutRequest:
+      type: object
+      additionalProperties: false
+      description: |
+        Checkout takes no parameters — the request body must be absent
+        or an empty object. Unknown fields are 400 `unknown_field`.
+
+    CheckoutResult:
+      type: object
+      required: [orders]
+      description: |
+        One order per seller (a mixed cart splits). The cart is empty
+        after a successful checkout.
+      properties:
+        orders:
+          type: array
+          items:
+            $ref: '#/components/schemas/Order'
+
+    OrderStatusPatch:
+      type: object
+      required: [status]
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum: [created, confirmed, shipped, delivered, cancelled, returned]
+          description: |
+            Target status. Only the edges in the description of
+            PATCH /v1/orders/{id}/status are legal for the caller's
+            role; anything else is 422 `invalid_transition`.
 
     SearchProductHit:
       type: object

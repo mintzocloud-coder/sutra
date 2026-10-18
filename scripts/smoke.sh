@@ -53,6 +53,17 @@
 #     draft → list → activate), variant add (duplicate SKU 409), inventory
 #     (0 → +100; −150 refuses 409 insufficient_stock), then archive
 #     variant + product.
+#   - The F3 cart + order round-trip: a fresh sellable fixture (product →
+#     active, variant, stock 10); cart add (line_total math) → over-stock
+#     add 409 insufficient_stock → set qty 3 → cart view subtotal;
+#     COD-first checkout (201, created/cod, cart cleared) → empty-cart
+#     checkout 422 cart_empty → buyer + seller list views → bad role 400 →
+#     detail (price snapshot, 400 on bad id, 404 on ghost) → seller reprice
+#     leaves the snapshot untouched → created→confirmed→(delivered 422
+#     invalid_transition)→shipped→delivered → a second order
+#     buyer-cancelled proves reservation release (quantity 7, reserved 0)
+#     → status-patch error matrix (422 invalid_status, 400 unknown
+#     field); fixture archived at the end.
 #   - The F2 product-search round-trip: Meilisearch boots with an ephemeral
 #     per-run master key, the api is recreated with SEARCH_MASTER_KEY set
 #     (bypass explicitly off — the production auth path); a throwaway
@@ -1136,6 +1147,179 @@ pass "inventory: 0 → +100 = 100; −150 → 409 insufficient_stock"
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')" = "archived" ] \
   || fail "DELETE product did not archive"
 pass "variant + product archived (cleanup)"
+
+# --- Commerce cart + order round-trip (F3 part 2b) ---------------------------
+# A throwaway Hydra identity doubles as buyer and seller here: the cart
+# round-trip (add → view → set → over-stock refusal) flows into COD
+# checkout, the full status-machine walk (created → confirmed → shipped →
+# delivered, with illegal edges rejected), a buyer-cancel proving the
+# reservation release, and the error matrix. Everything asserts on the
+# real compose stack, not mocks.
+echo "smoke: commerce cart + order round-trip (F3)"
+
+# Fresh sellable listing: product → active, one variant, stock 10.
+ordp_json="$(curl -sf -X POST \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"title":"Smoke Order Item","description":"smoke-test checkout","category_slug":"audio"}' \
+  "$API_URL/v1/products")" || fail "POST /v1/products (order item) failed"
+ordp_id="$(printf '%s' "$ordp_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+curl -sf -X PATCH -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"status":"active"}' "$API_URL/v1/products/$ordp_id" >/dev/null \
+  || fail "PATCH /v1/products/{id} (activate order item) failed"
+ordv_json="$(curl -sf -X POST \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"sku":"SMOKE-O-001","price_paise":149900,"mrp_paise":299900}' \
+  "$API_URL/v1/products/$ordp_id/variants")" || fail "POST variant (order item) failed"
+ordv_id="$(printf '%s' "$ordv_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+curl -sf -X POST -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"delta":10}' "$API_URL/v1/variants/$ordv_id/inventory/adjust" >/dev/null \
+  || fail "inventory adjust +10 (order item) failed"
+pass "order fixture: product $ordp_id active, variant $ordv_id stocked 10"
+
+# Cart: add 2 → 201, line_total = 2 × 149900 paise.
+ord_line="$(curl -sf -X POST \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d "{\"variant_id\":\"$ordv_id\",\"quantity\":2}" \
+  "$API_URL/v1/cart/items")" || fail "POST /v1/cart/items failed"
+[ "$(printf '%s' "$ord_line" | python3 -c 'import json,sys; print(json.load(sys.stdin)["line_total_paise"])')" = "299800" ] \
+  || fail "cart line_total wrong (want 2 × 149900)"
+pass "cart add: 2 × SMOKE-O-001 → 201, line_total 299800 paise"
+
+# Over-stock add refuses: 2 + 999 > 10 available → 409 insufficient_stock.
+com_code="$(curl -s -o "$com_body" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d "{\"variant_id\":\"$ordv_id\",\"quantity\":999}" \
+  "$API_URL/v1/cart/items")"
+[ "$com_code" = "409" ] || fail "cart over-stock add did not return 409 (got $com_code)"
+[ "$(python3 -c 'import json; print(json.load(open("'"$com_body"'"))["error"]["code"])')" = "insufficient_stock" ] \
+  || fail "cart over-stock envelope code is not insufficient_stock"
+pass "cart over-stock add → 409 insufficient_stock"
+
+# PATCH quantity to 3 → 200; cart view shows the live-price subtotal.
+ord_line="$(curl -sf -X PATCH \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"quantity":3}' "$API_URL/v1/cart/items/$ordv_id")" \
+  || fail "PATCH /v1/cart/items/{variant_id} failed"
+[ "$(printf '%s' "$ord_line" | python3 -c 'import json,sys; print(json.load(sys.stdin)["line_total_paise"])')" = "449700" ] \
+  || fail "cart line_total wrong after set to 3"
+ord_cart="$(curl -sf -H "Authorization: Bearer $token_c" "$API_URL/v1/cart")" \
+  || fail "GET /v1/cart failed"
+[ "$(printf '%s' "$ord_cart" | python3 -c 'import json,sys; print(json.load(sys.stdin)["subtotal_paise"])')" = "449700" ] \
+  || fail "cart subtotal wrong"
+[ "$(printf '%s' "$ord_cart" | python3 -c 'import json,sys; print(json.load(sys.stdin)["unavailable_count"])')" = "0" ] \
+  || fail "cart unavailable_count wrong"
+pass "cart set qty 3 → 200; GET /v1/cart subtotal 449700 paise, 0 unavailable"
+
+# Checkout (COD-first): 201, status created, payment_method cod; cart cleared.
+ord_co="$(curl -sf -X POST \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  "$API_URL/v1/orders")" || fail "POST /v1/orders (checkout) failed"
+ord_id="$(printf '%s' "$ord_co" | python3 -c 'import json,sys; print(json.load(sys.stdin)["orders"][0]["id"])')"
+[ "$(printf '%s' "$ord_co" | python3 -c 'import json,sys; print(json.load(sys.stdin)["orders"][0]["status"])')" = "created" ] \
+  || fail "checkout order not created"
+[ "$(printf '%s' "$ord_co" | python3 -c 'import json,sys; print(json.load(sys.stdin)["orders"][0]["payment_method"])')" = "cod" ] \
+  || fail "checkout payment_method not cod"
+[ "$(printf '%s' "$ord_co" | python3 -c 'import json,sys; print(json.load(sys.stdin)["orders"][0]["total_paise"])')" = "449700" ] \
+  || fail "checkout total wrong"
+[ "$(curl -sf -H "Authorization: Bearer $token_c" "$API_URL/v1/cart" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["item_count"])')" = "0" ] \
+  || fail "cart not cleared after checkout"
+pass "checkout → 201, order $ord_id created/cod, total 449700 paise, cart cleared"
+
+# Second checkout on the empty cart → 422 cart_empty.
+com_code="$(curl -s -o "$com_body" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  "$API_URL/v1/orders")"
+[ "$com_code" = "422" ] || fail "empty-cart checkout did not return 422 (got $com_code)"
+[ "$(python3 -c 'import json; print(json.load(open("'"$com_body"'"))["error"]["code"])')" = "cart_empty" ] \
+  || fail "empty-cart envelope code is not cart_empty"
+pass "empty-cart checkout → 422 cart_empty"
+
+# List as buyer (default) and seller; bad role → 400.
+[ "$(curl -sf -H "Authorization: Bearer $token_c" "$API_URL/v1/orders" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["orders"][0]["id"])')" = "$ord_id" ] \
+  || fail "GET /v1/orders (buyer) missing the order"
+[ "$(curl -sf -H "Authorization: Bearer $token_c" "$API_URL/v1/orders?role=seller" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["orders"][0]["id"])')" = "$ord_id" ] \
+  || fail "GET /v1/orders?role=seller missing the order"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token_c" \
+  "$API_URL/v1/orders?role=bogus")" = "400" ] || fail "bad role did not return 400"
+pass "order lists: buyer + seller views, bad role → 400"
+
+# Detail: price snapshot; bad id → 400, ghost id → 404.
+ord_det="$(curl -sf -H "Authorization: Bearer $token_c" "$API_URL/v1/orders/$ord_id")" \
+  || fail "GET /v1/orders/{id} failed"
+[ "$(printf '%s' "$ord_det" | python3 -c 'import json,sys; print(json.load(sys.stdin)["items"][0]["price_paise"])')" = "149900" ] \
+  || fail "order line price snapshot wrong"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token_c" \
+  "$API_URL/v1/orders/not-a-uuid")" = "400" ] || fail "bad order id did not return 400"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token_c" \
+  "$API_URL/v1/orders/00000000-0000-0000-0000-000000000000")" = "404" ] \
+  || fail "ghost order id did not return 404"
+pass "order detail: snapshot 149900 paise, 400 on bad id, 404 on ghost"
+
+# Price immutability: seller reprices the variant; the order keeps its snapshot.
+curl -sf -X PATCH -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"price_paise":159900}' "$API_URL/v1/variants/$ordv_id" >/dev/null \
+  || fail "PATCH variant (reprice) failed"
+[ "$(curl -sf -H "Authorization: Bearer $token_c" "$API_URL/v1/orders/$ord_id" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["items"][0]["price_paise"])')" = "149900" ] \
+  || fail "order line price changed after seller reprice"
+pass "price snapshot immutable after seller reprice to 159900"
+
+# State machine: confirmed → (illegal delivered) → shipped → delivered.
+ord_st() { curl -sf -X PATCH -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d "{\"status\":\"$2\"}" "$API_URL/v1/orders/$1" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])'; }
+[ "$(ord_st "$ord_id" confirmed)" = "confirmed" ] || fail "created → confirmed failed"
+com_code="$(curl -s -o "$com_body" -w '%{http_code}' -X PATCH \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"status":"delivered"}' "$API_URL/v1/orders/$ord_id")"
+[ "$com_code" = "422" ] || fail "confirmed → delivered did not return 422 (got $com_code)"
+[ "$(python3 -c 'import json; print(json.load(open("'"$com_body"'"))["error"]["code"])')" = "invalid_transition" ] \
+  || fail "invalid_transition envelope code missing"
+[ "$(ord_st "$ord_id" shipped)" = "shipped" ] || fail "confirmed → shipped failed"
+[ "$(ord_st "$ord_id" delivered)" = "delivered" ] || fail "shipped → delivered failed"
+pass "state machine: confirmed → (delivered 422 invalid_transition) → shipped → delivered"
+
+# Cancel a fresh order → reservation released (quantity 7, reserved 0).
+curl -sf -X POST -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d "{\"variant_id\":\"$ordv_id\",\"quantity\":2}" "$API_URL/v1/cart/items" >/dev/null \
+  || fail "cart add (second order) failed"
+ord_id2="$(curl -sf -X POST -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  "$API_URL/v1/orders" | python3 -c 'import json,sys; print(json.load(sys.stdin)["orders"][0]["id"])')"
+[ "$(ord_st "$ord_id2" cancelled)" = "cancelled" ] || fail "created → cancelled failed"
+ord_inv="$(curl -sf -H "Authorization: Bearer $token_c" "$API_URL/v1/variants/$ordv_id/inventory")" \
+  || fail "GET inventory (after cancel) failed"
+[ "$(printf '%s' "$ord_inv" | python3 -c 'import json,sys; print(json.load(sys.stdin)["quantity"])')" = "7" ] \
+  || fail "inventory quantity wrong after cancel (want 7)"
+[ "$(printf '%s' "$ord_inv" | python3 -c 'import json,sys; print(json.load(sys.stdin)["reserved"])')" = "0" ] \
+  || fail "inventory reserved not released after cancel"
+pass "buyer cancel → reservation released (quantity 7, reserved 0)"
+
+# Status-patch error matrix: unknown name → 422 invalid_status, missing → 400.
+com_code="$(curl -s -o "$com_body" -w '%{http_code}' -X PATCH \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"status":"teleported"}' "$API_URL/v1/orders/$ord_id")"
+[ "$com_code" = "422" ] || fail "unknown status did not return 422 (got $com_code)"
+[ "$(python3 -c 'import json; print(json.load(open("'"$com_body"'"))["error"]["code"])')" = "invalid_status" ] \
+  || fail "invalid_status envelope code missing"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"nope":1}' "$API_URL/v1/orders/$ord_id")" = "400" ] \
+  || fail "unknown field on status patch did not return 400"
+pass "status-patch error matrix: 422 invalid_status, 400 on unknown field"
+
+# Cleanup: archive variant + product (nothing is hard-deleted).
+[ "$(curl -sf -X DELETE -H "Authorization: Bearer $token_c" \
+  "$API_URL/v1/variants/$ordv_id" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')" = "archived" ] \
+  || fail "DELETE order variant did not archive"
+[ "$(curl -sf -X DELETE -H "Authorization: Bearer $token_c" \
+  "$API_URL/v1/products/$ordp_id" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')" = "archived" ] \
+  || fail "DELETE order product did not archive"
+pass "order fixture archived (cleanup)"
 
 # --- Product search round-trip (F2 part 2b) --------------------------------
 # Meilisearch boots with the ephemeral per-run master key; the api is
