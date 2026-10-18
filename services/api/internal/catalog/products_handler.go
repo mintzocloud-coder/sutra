@@ -77,7 +77,7 @@ func optInt64(raw map[string]json.RawMessage, key string) (val int64, ok bool, e
 // CreateProductHandler serves POST /v1/products: the caller lists a
 // new product under their seller account. New listings start as
 // "draft" — invisible on the storefront until activated.
-func CreateProductHandler(pool *db.Pool, svc *Service, log *slog.Logger) http.HandlerFunc {
+func CreateProductHandler(pool *db.Pool, svc *Service, hooks ProductHooks, log *slog.Logger) http.HandlerFunc {
 	allowed := map[string]bool{"title": true, "description": true, "category_slug": true, "status": true}
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := social.CallerUUID(w, r, pool, log)
@@ -104,6 +104,7 @@ func CreateProductHandler(pool *db.Pool, svc *Service, log *slog.Logger) http.Ha
 			catalogError(w, r, log, "create product", err)
 			return
 		}
+		hooks.productWritten(r.Context(), p.ID)
 		writeJSON(w, http.StatusCreated, p)
 	}
 }
@@ -168,7 +169,7 @@ func ListProductsHandler(svc *Service, log *slog.Logger) http.HandlerFunc {
 
 // UpdateProductHandler serves PATCH /v1/products/{id}: owner-only
 // partial edit. category_slug "" clears the category.
-func UpdateProductHandler(pool *db.Pool, svc *Service, log *slog.Logger) http.HandlerFunc {
+func UpdateProductHandler(pool *db.Pool, svc *Service, hooks ProductHooks, log *slog.Logger) http.HandlerFunc {
 	allowed := map[string]bool{"title": true, "description": true, "category_slug": true, "status": true}
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := social.CallerUUID(w, r, pool, log)
@@ -216,6 +217,7 @@ func UpdateProductHandler(pool *db.Pool, svc *Service, log *slog.Logger) http.Ha
 			catalogError(w, r, log, "update product", err)
 			return
 		}
+		hooks.productWritten(r.Context(), p.ID)
 		writeJSON(w, http.StatusOK, p)
 	}
 }
@@ -223,7 +225,7 @@ func UpdateProductHandler(pool *db.Pool, svc *Service, log *slog.Logger) http.Ha
 // DeleteProductHandler serves DELETE /v1/products/{id}: owner-only
 // archive (products are never hard-deleted — order history in later
 // waves references them).
-func DeleteProductHandler(pool *db.Pool, svc *Service, log *slog.Logger) http.HandlerFunc {
+func DeleteProductHandler(pool *db.Pool, svc *Service, hooks ProductHooks, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := social.CallerUUID(w, r, pool, log)
 		if !ok {
@@ -240,6 +242,7 @@ func DeleteProductHandler(pool *db.Pool, svc *Service, log *slog.Logger) http.Ha
 			catalogError(w, r, log, "archive product", err)
 			return
 		}
+		hooks.productWritten(r.Context(), p.ID)
 		writeJSON(w, http.StatusOK, p)
 	}
 }
@@ -470,20 +473,20 @@ func methodMux(handlers map[string]http.HandlerFunc) http.HandlerFunc {
 
 // ProductsMux serves /v1/products: POST (owner create) and GET
 // (public seller listing).
-func ProductsMux(pool *db.Pool, svc *Service, log *slog.Logger) http.HandlerFunc {
+func ProductsMux(pool *db.Pool, svc *Service, hooks ProductHooks, log *slog.Logger) http.HandlerFunc {
 	return methodMux(map[string]http.HandlerFunc{
-		http.MethodPost: CreateProductHandler(pool, svc, log),
+		http.MethodPost: CreateProductHandler(pool, svc, hooks, log),
 		http.MethodGet:  ListProductsHandler(svc, log),
 	})
 }
 
 // ProductMux serves /v1/products/{id}: GET (public), PATCH and DELETE
 // (owner-only).
-func ProductMux(pool *db.Pool, svc *Service, log *slog.Logger) http.HandlerFunc {
+func ProductMux(pool *db.Pool, svc *Service, hooks ProductHooks, log *slog.Logger) http.HandlerFunc {
 	return methodMux(map[string]http.HandlerFunc{
 		http.MethodGet:    GetProductHandler(svc, log),
-		http.MethodPatch:  UpdateProductHandler(pool, svc, log),
-		http.MethodDelete: DeleteProductHandler(pool, svc, log),
+		http.MethodPatch:  UpdateProductHandler(pool, svc, hooks, log),
+		http.MethodDelete: DeleteProductHandler(pool, svc, hooks, log),
 	})
 }
 

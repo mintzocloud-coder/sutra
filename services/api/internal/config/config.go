@@ -64,6 +64,12 @@ type Config struct {
 	// token with a bad URL makes the API refuse to boot (fail-closed).
 	AIServiceURL   string // e.g. http://ai:8000; the /v1/ai prefix is stripped
 	AIServiceToken string // shared service-to-service secret; never commit
+	// Search (F2): self-hosted Meilisearch CE for product search.
+	// Empty SearchMasterKey disables indexing (dev default — the API
+	// logs a WARN at startup); a key with a bad URL refuses to boot
+	// (fail-closed), mirroring the AI proxy contract.
+	SearchURL       string // e.g. http://meilisearch:7700
+	SearchMasterKey string // Meilisearch master key; never commit
 }
 
 func getEnv(key, fallback string) string {
@@ -183,5 +189,7 @@ func Load() Config {
 		ChatInternalToken: getEnv("CHAT_INTERNAL_TOKEN", ""),
 		AIServiceURL:      getEnv("AI_SERVICE_URL", "http://ai:8000"),
 		AIServiceToken:    getEnv("AI_SERVICE_TOKEN", ""),
+		SearchURL:         getEnv("SEARCH_URL", "http://meilisearch:7700"),
+		SearchMasterKey:   getEnv("SEARCH_MASTER_KEY", ""),
 	}
 }

@@ -1360,6 +1360,46 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
 - [ ] F2: Search — Meilisearch CE (MIT, pinned version) in compose + Go
   indexer (product → index on create/update) + GET /v1/search proxy
   (filters, typo tolerance, keyset paging), docs/search.md, smoke section.
+  - [x] F2 part 1 DONE 2026-10-18 ~19:55 IST: Meilisearch in compose
+    (`getmeili/meilisearch:v1.38.0` pinned, MIT; meili_data volume;
+    host 7700; no healthcheck — image ships no curl and the API never
+    blocks on search; MEILI_MASTER_KEY dev default, prod must override)
+    + api SEARCH_URL/SEARCH_MASTER_KEY env passthroughs (empty key =
+    disabled). New `internal/search` package: stdlib-only v1 REST
+    client (no vendored SDK), NewClient fail-closed on bad URL with key
+    set / loud-WARN disabled client on empty key (mirrors realtime +
+    aiproxy contracts), ProductDoc (id/title/description/seller_id/
+    category_slug/status/min_price_paise/updated_at_unix),
+    IndexProduct (POST documents, 202 accepted, async by design),
+    DeleteProduct (idempotent), ensureIndex once-per-client (create
+    409-tolerant + settings: title>description searchable,
+    seller_id/category_slug/status/min_price_paise filterable,
+    min_price_paise/updated_at_unix sortable, explicit typoTolerance
+    block; retries on failure instead of wedging). New
+    `internal/catalog/index.go`: ProductHooks (zero value disables;
+    handlers call productWritten after successful create/update/
+    archive) + BuildProductDoc (product row + category slug + cheapest
+    ACTIVE variant price; ErrProductNotFound → caller deletes the doc).
+    main.go: client constructed fail-closed (proven: bad URL + key →
+    exit 1 "invalid search config"), hooks fire detached best-effort
+    (15s ctx, WARN on failure, never delays the 201): active → index,
+    draft/archived → delete. Handlers ProductsMux/ProductMux take
+    hooks; 4 newHandler test call sites updated (D4a lesson).
+    VERIFIED: gofmt/build/vet clean; full `go test ./...` green on
+    real PG16 — 6 new search unit suites (fail-closed, disabled
+    no-op, request shapes incl. auth header + settings body,
+    ensure-once, validation no-network, ensure-retry) + catalog
+    BuildProductDoc integration (min-price = cheapest ACTIVE variant,
+    archived excluded, unknown → ErrProductNotFound, category clear →
+    empty slug); compose YAML + SPDX checker green. LIVE binary smoke
+    (stub Meilisearch): create active product → PATCH settings +
+    POST /indexes/products/documents with the full doc (Bearer auth);
+    archive → DELETE /indexes/products/documents/{id}; disabled mode →
+    boots with WARN, 201, zero stub traffic.
+  - [ ] F2 part 2: variant-triggered reindex (Add/Update/ArchiveVariant
+    → parent product doc rebuild), GET /v1/search proxy (filters,
+    typo tolerance, keyset paging), docs/search.md, OpenAPI, smoke.sh
+    section, production.md SEARCH_* env rows.
 - [ ] F3: Cart + checkout + orders — cart API (add/update/remove,
   idempotent), checkout → order creation, order state machine
   (created → confirmed → shipped → delivered / cancelled / returned),
@@ -1383,6 +1423,20 @@ All boxes ticked, CI green, `scripts/smoke.sh` passes, docs complete.
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-18 ~19:55 IST: F2 part 1 done — Meilisearch CE in compose
+  (pinned v1.38.0, MIT) + stdlib-only Go search client (fail-closed /
+  disabled contracts, ensure-once index+settings with explicit typo
+  tolerance) + product lifecycle index hooks (active → upsert,
+  draft/archived → delete; detached, best-effort, never delays the
+  write). Verified: go build+vet+gofmt clean, full go test ./... green
+  on real PG16 (6 search unit + BuildProductDoc integration suites),
+  compose YAML + SPDX green; live binary smoke vs a stub Meilisearch —
+  create → settings PATCH + document POST (Bearer auth, correct doc
+  shape), archive → document DELETE, disabled mode → WARN + zero
+  index traffic, bad-URL+key → exit 1 fail-closed. F2 stays open:
+  part 2 = variant-triggered reindex + GET /v1/search proxy +
+  docs/search.md + OpenAPI + smoke + production.md rows. Pushed.
 
 - 2026-10-18 ~19:32 IST: F1b part 2 done — OpenAPI gains the full F1a/F1b
   commerce surface (commerce tag, 9 path items, 4 new params, 14 new

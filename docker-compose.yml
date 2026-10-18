@@ -27,6 +27,19 @@ services:
       interval: 5s
       retries: 10
 
+  # Commerce search (F2): Meilisearch CE (MIT), pinned. The Go API
+  # indexes product documents on write (internal/search); indexing is
+  # best-effort, so the API boots fine with this service down.
+  # MEILI_MASTER_KEY is a DEV default — production must override it
+  # (docs/production.md). No healthcheck: the image ships no curl and
+  # the API never blocks on search, so none is needed.
+  meilisearch:
+    image: getmeili/meilisearch:v1.38.0
+    ports: ["7700:7700"]
+    environment:
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-sutra-dev-master-key}
+    volumes: [meili_data:/meili_data]
+
   seaweedfs:
     image: chrislusf/seaweedfs:3.92
     command: "server -dir=/data -volume.max=10 -master.volumeSizeLimitMB=1024 -ip=seaweedfs"
@@ -226,6 +239,13 @@ services:
       # commit a real token here.
       AI_SERVICE_URL: "http://ai:8000"
       AI_SERVICE_TOKEN: ${AI_SERVICE_TOKEN:-}
+      # Commerce search (F2 part 1): Meilisearch product indexing.
+      # SEARCH_URL defaults to the compose service above; empty master
+      # key DISABLES indexing (dev default — the API logs a WARN).
+      # Set SEARCH_MASTER_KEY to the same value as MEILI_MASTER_KEY to
+      # enable product search. Never commit a real key here.
+      SEARCH_URL: "http://meilisearch:7700"
+      SEARCH_MASTER_KEY: ${SEARCH_MASTER_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -300,5 +320,6 @@ services:
 volumes:
   pgdata:
   weeddata:
+  meili_data:
   ollama-data:
   whisper-models:

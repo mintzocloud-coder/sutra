@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -27,6 +28,7 @@ import (
 	"github.com/mintzocloud-coder/sutra/services/api/internal/otp"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/posts"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/realtime"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/search"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/social"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/users"
 )
@@ -54,7 +56,7 @@ func methodGuard(allowed []string, h http.Handler) http.HandlerFunc {
 // be nil: the /v1/ai/* proxy routes are then unregistered. translator
 // may be nil or disabled: ?translate= is then a no-op and feed items
 // keep their original text.
-func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, mediaSvc *media.Service, rt realtime.Publisher, aiProxy *aiproxy.Proxy, log *slog.Logger, translator *feed.Translator) http.Handler {
+func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, mediaSvc *media.Service, rt realtime.Publisher, aiProxy *aiproxy.Proxy, log *slog.Logger, translator *feed.Translator, searchClient *search.Client) http.Handler {
 	auth := middleware.RequireAuth(verifier, log, middleware.AuthOptions{
 		Bypass:        cfg.AuthBypass,
 		BypassSubject: cfg.BypassSubject,
@@ -226,6 +228,46 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedS
 	// tree. Storefront reads are public (any caller); registration is
 	// one seller account per authenticated user (Wave-1 rule).
 	catalogSvc := catalog.NewService(pool)
+
+	// Search indexing (F2 part 1): after a successful product write,
+	// build the search document and upsert/delete it — detached,
+	// best-effort, never delaying the response. searchClient may be
+	// nil in unit tests; the zero hooks value then disables indexing.
+	prodHooks := catalog.ProductHooks{}
+	if searchClient != nil && searchClient.Enabled() {
+		prodHooks.AfterProductWrite = func(ctx context.Context, productID string) {
+			go func() {
+				cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+				defer cancel()
+				var pid pgtype.UUID
+				if err := pid.Scan(productID); err != nil {
+					log.Warn("search: bad product id from hook", "product_id", productID)
+					return
+				}
+				doc, err := catalogSvc.BuildProductDoc(cctx, pid)
+				if err != nil {
+					if errors.Is(err, catalog.ErrProductNotFound) {
+						if derr := searchClient.DeleteProduct(cctx, productID); derr != nil {
+							log.Warn("search: delete failed", "product_id", productID, "err", derr)
+						}
+						return
+					}
+					log.Warn("search: build doc failed", "product_id", productID, "err", err)
+					return
+				}
+				if doc.Status == "active" {
+					if err := searchClient.IndexProduct(cctx, doc); err != nil {
+						log.Warn("search: index failed", "product_id", productID, "err", err)
+					}
+				} else {
+					// Drafts and archived listings leave the index.
+					if err := searchClient.DeleteProduct(cctx, doc.ID); err != nil {
+						log.Warn("search: delete failed", "product_id", productID, "err", err)
+					}
+				}
+			}()
+		}
+	}
 	v1.Handle("/v1/sellers", methodGuard([]string{http.MethodPost},
 		catalog.RegisterSellerHandler(pool, catalogSvc, log)))
 	v1.Handle("/v1/sellers/{id}", methodGuard([]string{http.MethodGet},
@@ -237,9 +279,9 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedS
 	// Reads (GET) are public storefront reads; every write resolves
 	// the caller's seller account and refuses non-owners (403).
 	v1.Handle("/v1/products", methodGuard([]string{http.MethodPost, http.MethodGet},
-		catalog.ProductsMux(pool, catalogSvc, log)))
+		catalog.ProductsMux(pool, catalogSvc, prodHooks, log)))
 	v1.Handle("/v1/products/{id}", methodGuard([]string{http.MethodGet, http.MethodPatch, http.MethodDelete},
-		catalog.ProductMux(pool, catalogSvc, log)))
+		catalog.ProductMux(pool, catalogSvc, prodHooks, log)))
 	v1.Handle("/v1/products/{id}/variants", methodGuard([]string{http.MethodPost},
 		catalog.AddVariantHandler(pool, catalogSvc, log)))
 	v1.Handle("/v1/variants/{id}", methodGuard([]string{http.MethodPatch, http.MethodDelete},
@@ -404,7 +446,20 @@ func main() {
 		log.Warn("AI_SERVICE_TOKEN empty — ?translate= disabled (feed items keep original text)")
 	}
 
-	handler := newHandler(cfg, pool, verifier, feedSvc, mediaSvc, rtPub, aiProxy, log, translator)
+	// Commerce search (F2 part 1): Meilisearch product indexing. Empty
+	// master key = indexing disabled (dev default, loud WARN); a key
+	// with a bad URL is a configuration bug — refuse to boot, same as
+	// the realtime publisher and the AI proxy.
+	searchClient, err := search.NewClient(cfg.SearchURL, cfg.SearchMasterKey, log)
+	if err != nil {
+		log.Error("invalid search config — refusing to start", "err", err)
+		os.Exit(1)
+	}
+	if searchClient.Enabled() {
+		log.Info("product search indexing enabled", "search", cfg.SearchURL)
+	}
+
+	handler := newHandler(cfg, pool, verifier, feedSvc, mediaSvc, rtPub, aiProxy, log, translator, searchClient)
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: handler}
 
 	go func() {
