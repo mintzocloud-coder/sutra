@@ -35,6 +35,9 @@
 #     SeaweedFS → complete → the transcode worker turns it into HLS →
 #     poll to ready (poster + renditions + playback URL), then a post
 #     referencing the ready media (the posts media gate).
+#   - The E3 auto-caption round-trip (same clip): the post opts in with
+#     auto_caption=true → the caption worker transcribes → poll the
+#     media row to caption_status ready (VTT caption_url sidecar).
 #   - The D5 realtime endpoint: no token → 401, wrong token → 401,
 #     unknown event → 422, valid envelope → 202 accepted.
 #   - The D6 velocity guards: the api is recreated with 1/hour caps and
@@ -112,8 +115,8 @@ wait_for() { # wait_for <secs> <description> <command...>
 }
 
 echo "smoke: building service images"
-docker compose build --quiet api chat transcode-worker ai 2>/dev/null \
-  || docker compose build api chat transcode-worker ai
+docker compose build --quiet api chat transcode-worker caption-worker ai 2>/dev/null \
+  || docker compose build api chat transcode-worker caption-worker ai
 
 echo "smoke: starting postgres, valkey, seaweedfs"
 docker compose up -d postgres valkey seaweedfs
@@ -542,12 +545,26 @@ else
   wait_for 90 "transcode-worker heartbeat" worker_heartbeat
   pass "transcode-worker alive (heartbeat key present)"
 
-  # Mint a 2s 640x360 test clip on the host. 360p matches the lowest
-  # ladder rung exactly, so the worker never has to upscale a clip
-  # smaller than its rung widths.
+  # E3: boot the caption worker alongside the transcode worker and gate
+  # on its TTL heartbeat — it drains media:captions once we opt in below.
+  echo "smoke: starting caption-worker"
+  docker compose up -d caption-worker
+  caption_heartbeat() { # true once the caption worker's TTL heartbeat key exists
+    [ "$(docker compose exec -T valkey valkey-cli get worker:captions:heartbeat \
+      2>/dev/null | tr -d '\r')" != "(nil)" ]
+  }
+  wait_for 90 "caption-worker heartbeat" caption_heartbeat
+  pass "caption-worker alive (heartbeat key present)"
+
+  # Mint a 2s 640x360 test clip on the host with a sine-wave audio
+  # track. 360p matches the lowest ladder rung exactly, so the worker
+  # never has to upscale a clip smaller than its rung widths; the audio
+  # track (even a plain tone) gives the caption worker something to
+  # decode — faster-whisper needs an audio stream present.
   clip="/tmp/sutra-smoke-clip.mp4"
   ffmpeg -v error -y -f lavfi -i "testsrc=duration=2:size=640x360:rate=15" \
-    -c:v libx264 -pix_fmt yuv420p "$clip" \
+    -f lavfi -i "sine=frequency=440:duration=2" \
+    -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest "$clip" \
     || fail "ffmpeg could not mint the sample clip"
 
   intent="$(curl -sf -X POST \
@@ -598,16 +615,45 @@ print('renditions:', ','.join(r['name'] for r in m['renditions']))
 " || fail "ready video missing poster/playback/renditions"
   pass "video ready: poster + playback URL + HLS renditions published"
 
-  # The D4a posts gate: a post may reference the ready media.
+  # The D4a posts gate + the E3 auto-caption round-trip: a post may
+  # reference the ready media, and auto_caption=true asks the caption
+  # worker to transcribe it. PublishHooks.AfterCreateCaptions →
+  # media.RequestCaptions (the row is ready, so the job is enqueued onto
+  # media:captions immediately; idempotent on retry) → the caption
+  # worker transcribes → caption_status flips to ready with a VTT
+  # caption_url sidecar.
   media_post="$(curl -sf -X POST \
     -H "Authorization: Bearer $access_token" -H 'Content-Type: application/json' \
-    -d "{\"text\":\"smoke clip post\",\"media_ids\":[\"$media_id\"]}" \
+    -d "{\"text\":\"smoke clip post\",\"media_ids\":[\"$media_id\"],\"auto_caption\":true}" \
     "$API_URL/v1/posts")" || fail "POST /v1/posts with ready media failed"
   media_post_id="$(jget "$media_post" id)"
+  pass "post with ready media attached (201) — posts gate honored; auto_caption=true opted in"
+
+  # Poll for the caption worker: ready carries the VTT sidecar.
+  deadline=$((SECONDS + 300))
+  cap_status=""
+  while [ $SECONDS -lt "$deadline" ]; do
+    cap_status="$(jget "$(curl -sf -H "Authorization: Bearer $access_token" \
+      "$API_URL/v1/media/$media_id")" caption_status)"
+    case "$cap_status" in
+      ready|failed) break ;;
+    esac
+    sleep 5
+  done
+  [ "$cap_status" = "ready" ] || fail "captions never reached 'ready' (last status: '$cap_status')"
+  printf '%s' "$(curl -sf -H "Authorization: Bearer $access_token" \
+    "$API_URL/v1/media/$media_id")" | python3 -c "
+import json,sys
+m=json.load(sys.stdin)
+assert m['caption_url'], 'caption_url missing'
+assert m['auto_caption'] is True, 'auto_caption opt-in not sticky'
+print('caption_url:', m['caption_url'])
+" || fail "ready caption missing caption_url"
+  pass "auto-captions ready: VTT caption_url sidecar published"
   [ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
     -H "Authorization: Bearer $access_token" "$API_URL/v1/posts/$media_post_id")" = "204" ] \
     || fail "cleanup delete of media post failed"
-  pass "post with ready media attached (201) — posts gate honored"
+  pass "caption post deleted (cleanup)"
   rm -f "$clip"
 fi
 

@@ -991,7 +991,7 @@ non-ML signals only; vector embeddings plug in later via #19.
       the advisory lock. Full compose boot + CI smoke run are CI-gated
       (no docker on this VM). Next: E3 creator studio (auto-captions).
 
-- [ ] **E3. Creator studio: auto-captions**
+- [x] **E3. Creator studio: auto-captions**
       faster-whisper worker (CPU) consuming the transcode pipeline:
       on media ready → transcribe → VTT/SRT sidecar in SeaweedFS →
       media status exposes caption_url. POST /v1/posts accepts
@@ -1058,6 +1058,23 @@ non-ML signals only; vector embeddings plug in later via #19.
       auto_caption post → poll caption_status to ready + caption_url (skip
       where no host ffmpeg, like D4b); production.md CAPTION_* env-table
       row; then mark E3 [x] and close issue #20.
+      E3 PART 2b DONE 2026-10-18 ~14:05 IST: smoke.sh now carries the full
+      auto-caption round-trip — caption-worker built (added to the smoke
+      build line) + booted, gated on its TTL heartbeat
+      (worker:captions:heartbeat); the mint command gained a sine-wave
+      audio track (faster-whisper needs an audio stream present —
+      testsrc is video-only); the media post is created with
+      auto_caption=true → PublishHooks.AfterCreateCaptions →
+      RequestCaptions enqueues immediately (row already ready,
+      idempotent) → polls caption_status to ready (300s deadline) →
+      asserts caption_url VTT sidecar + sticky auto_caption → cleanup
+      delete. production.md gains a "Caption worker" env section (13
+      vars: DATABASE_URL/VALKEY_ADDR/SEAWEEDFS_MASTER_ADDR/
+      MEDIA_PUBLIC_BASE_URL + 9 CAPTION_*), cross-checked against
+      app/captions.py defaults + compose. Issue #20 closed (state:
+      completed). VERIFIED: bash -n clean, SPDX checker green; full
+      end-to-end is CI-gated (no docker on this VM) via the smoke job.
+      **E3 COMPLETE — next: E4 language bridge (IndicTrans2).**
 
 - [ ] **E4. Language bridge**
       POST /v1/ai/translate (IndicTrans2, MIT): post/comment text →
@@ -1122,3 +1139,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-18 ~13:20 IST: E3 part 1 done — Go caption request surface (migration 0006, RequestCaptions + EnqueueCaptionsIfRequested, transcode-worker handoff, POST /v1/posts auto_caption flag, GET /v1/media/{id} caption fields), docs/creator-studio.md with the part-2 worker contract. Verified: go build+vet+test green on real PG16 + local redis (5 new media suites); redocly 0 warnings. Next: E3 part 2 — Python faster-whisper worker.
 - 2026-10-18 ~13:40 IST: E3 part 2a done — Python faster-whisper caption worker core (app/captions.py + app/caption_worker.py + app/caption_main.py), requirements-caption.txt (redis==8.1.0, faster-whisper==1.2.1), Dockerfile.caption, compose caption-worker service + whisper-models volume, CI build gate, creator-studio.md updated. Verified: py_compile + 14 pytest green, compose/CI YAML + SPDX clean. E3 stays open: part 2b = smoke.sh clip→caption round-trip, production.md env row, close issue #20. Pushed.
 - TOOLING LESSON (2026-10-18): a secret-redaction filter blanks ANY direct assignment to a `*token*`-named variable in file writes (`service_token: str = ...` → `service_token: <redacted>`, breaking the file). Workaround used in services/ai/app/config.py: expose the shared secret as a read-only @property (no assignment statement) with an explanatory NOTE. Future runs: never assign to token/secret/password-named identifiers in written files — use the property pattern.
+- 2026-10-18 ~14:05 IST: E3 part 2b done — smoke.sh full auto-caption round-trip (caption-worker built+booted, heartbeat-gated; sample clip mints with a sine audio track for faster-whisper; post with auto_caption=true → RequestCaptions → poll caption_status→ready → caption_url VTT asserted → cleanup delete), production.md "Caption worker" env section (13 vars), issue #20 closed. bash -n + SPDX green; end-to-end CI-gated. **E3 COMPLETE.** Next: E4 language bridge (IndicTrans2).

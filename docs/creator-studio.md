@@ -123,6 +123,21 @@ contract. It never touches `posts`, `users`, or the chat service.
 - Web players: point `<track src=caption_url kind=captions>` at the VTT.
   The SRT twin is for download/editing clients.
 
+## Smoke coverage
+
+`scripts/smoke.sh` carries the full auto-caption round-trip (D4's clip
+section): the caption worker is built and booted, gated on its TTL
+heartbeat (`worker:captions:heartbeat`); the sample clip is minted with
+a sine-wave audio track (faster-whisper needs an audio stream present —
+`testsrc` is video-only); a post is created with `auto_caption=true`
+→ `RequestCaptions` enqueues immediately (row already ready,
+idempotent); the script polls `caption_status` to `ready` (300s
+deadline) and asserts the VTT `caption_url` sidecar plus the sticky
+`auto_caption`, then deletes the post. Skips cleanly where no host
+ffmpeg exists (CI runners ship one). The transcode worker must have
+turned the video `ready` first — the caption flow reuses that same
+clip, so captions never run against a failed or missing transcode.
+
 ## Out of scope (Wave 2+)
 
 - Caption *translation* (that's E4's IndicTrans2 bridge — it can MT the

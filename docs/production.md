@@ -111,6 +111,28 @@ CORS_ORIGINS=https://app.sutra.example.com
 | `MIX_ENV` | `dev` | Set `prod` for the release image |
 | `AUTH_BYPASS` / `AUTH_BYPASS_SUBJECT` | *(unset)* / `dev-user` | Dev-only hatch — **never in prod** |
 
+### Caption worker (`services/ai` — `app/captions.py` + `app/caption_worker.py`, read at boot)
+
+faster-whisper on CPU; separate image (`Dockerfile.caption`) so the
+whisper stack never bloats the chat API. Full spec in
+`docs/creator-studio.md`.
+
+| Var | Default | Purpose |
+|---|---|---|
+| `DATABASE_URL` | *(required — fails closed)* | Same PG as the API (media table claims/updates, own ai_schema_migrations ledger) |
+| `VALKEY_ADDR` | `valkey:6379` | Consumes the `media:captions` stream; dead-letter `media:captions:dlq` after max attempts |
+| `SEAWEEDFS_MASTER_ADDR` | `seaweedfs:9333` | Downloads the video, uploads the VTT/SRT sidecars |
+| `MEDIA_PUBLIC_BASE_URL` | `http://seaweedfs:8080` | Base for the published `caption_url` |
+| `CAPTION_MODEL` | `base` | faster-whisper model size (`tiny`/`base`/`small`); cached on the `whisper-models` volume (E3) |
+| `CAPTION_GROUP` | `caption-workers` | Valkey consumer group; replicas split jobs (E3) |
+| `CAPTION_CONSUMER` | *(container hostname)* | Consumer id within the group (E3) |
+| `CAPTION_MAX_ATTEMPTS` | `3` | Then dead-letter + row marked failed (E3) |
+| `CAPTION_BACKOFF_BASE` | `60s` | Exponential-backoff base between retries (E3) |
+| `CAPTION_BACKOFF_MAX` | `30m` | Backoff cap (E3) |
+| `CAPTION_SWEEP_INTERVAL` | `5m` | Stuck-row sweep interval (E3) |
+| `CAPTION_WORK_DIR` | `/tmp/captions` | Download + sidecar scratch (E3) |
+| `CAPTION_MODEL_DIR` | `/srv/ai/models/whisper` | faster-whisper cache inside the image (E3) |
+
 ## 4. Build the images
 
 ```bash
