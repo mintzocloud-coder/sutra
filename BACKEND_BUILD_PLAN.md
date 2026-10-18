@@ -731,6 +731,28 @@ every run. Gated items stay gated: real SMS/DLT stays post-incorporation
       2 (CI has docker).
 
 - [ ] **D4b. Video pipeline part 2: transcode worker + docs + smoke**
+      PART 1 DONE 2026-10-18 ~08:35 IST: `internal/transcode` package —
+      Worker drains media:transcode via consumer group (Valkey, go-redis),
+      per-job: download from SeaweedFS → ffprobe → ladder ≤ source
+      resolution (never upscale) → ffmpeg HLS 4s-seg VOD playlists +
+      poster → upload back → media.MarkReady; failures: attempts hash +
+      exponential backoff requeue (BackoffBase 30s, cap 30m), dead-letter
+      stream + MarkFailed after MaxAttempts (5); startup + interval sweep
+      of stuck uploaded rows; TTL heartbeat for liveness probes; pure
+      streamOps interface so all retry/dead-letter logic is unit-testable.
+      `cmd/transcode-worker` main (fail-closed on DB/Valkey, warn-only on
+      SeaweedFS, graceful SIGTERM). Config: TRANSCODE_* envs (group,
+      consumer=hostname, attempts, backoffs, sweep). BUG FIX (D4a code):
+      media.scanMedia crashed on NULL filename/mime_type/error columns
+      ("cannot scan NULL into *string") — now *string intermediates;
+      caught by the new transcode integration tests. VERIFIED:
+      `go build`+`go vet`+gofmt clean; full `go test ./...` green on
+      real PG16 — 4 pure unit suites + 3 integration (dead-letter parks
+      row failed + DLQ entry after 3 attempts; success → ready with 3
+      renditions + poster + 7 files uploaded; duplicate delivery no-op).
+      PART 2 NEXT: Dockerfile.worker (FFmpeg), compose service, CI
+      compose-build gate, docs/video-pipeline.md, smoke.sh full clip
+      round-trip.
       Background Go worker (cmd/transcode-worker or new package):
       FFmpeg 8.1 → HLS multi-rendition + poster frame; consumes the
       `media:transcode` Valkey stream (consumer group), backoff
@@ -788,3 +810,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-18 ~04:35 IST: D1 done — real Ory identity plane in compose (Hydra v26.4.2 + Kratos v26.4.2, pinned; migrate one-shots; Kratos dev config + identity schema); Go API verifies Hydra RS256 JWTs via the unchanged A2 JWKS path (HYDRA_ISSUER/JWKS_URL/JWT_AUDIENCE explicit in compose); `internal/otp` adapter interface + fail-closed stub (`OTP_PROVIDER` env-gated, unknown provider refuses boot — proven live); `docs/identity.md` (DLT-gated SMS path + post-incorporation checklist); smoke.sh extended with the real-issuer loop (Hydra JWT → /v1/me 200 with bypass OFF, no-token → 401). Verified: go build+vet+test green, gofmt/bash/YAML/JSON/SPDX clean, `hydra create client` syntax confirmed against v2 CLI reference. Full-stack run is CI-gated. Pushed.
 - 2026-10-18 ~05:15 IST: D2 done — profiles + follow graph: migration 0003 (profiles/follows, retired users.handle), new internal/social package (PATCH /v1/me/profile with presence-flag partials + explicit-null clears, first-come handle claims via UNIQUE → 409, per-user PATCH serialization, idempotent follows 201/200/204, self-follow 422, computed counts, keyset cursor pagination, subject never exposed), 5 routes wired, OpenAPI + redocly green, smoke.sh D2 round-trip (two Hydra clients, bypass off). Verified: go build+vet+test green on real PG16 (incl. 10-racer claim race → 1 winner, 3-page pagination, HTTP envelope matrix); 2 real bugs caught by tests pre-push (next_cursor off-by-one row, DisallowUnknownFields no-op on maps → explicit allowlist); live binary smoke of all routes. Pushed.- 2026-10-18 ~05:45 IST: D3a done — posts table + CRUD (D3 part 1): migration 0004 (posts + CHECKs + author-timeline index), new internal/posts package (Create w/ validation + rolling per-author velocity cap → 429 post_velocity_limited + computed Retry-After; Get; ListByAuthor keyset on (created_at,id); author-only Delete), routes POST /v1/posts / DELETE /v1/posts/{id} / GET /v1/users/{id}/posts wired, OpenAPI + redocly green, smoke.sh posts round-trip added. Verified: go build+vet+test green on real PG16 (7 suites); 1 real bug caught pre-push (LIMIT literal vs $N param); live binary smoke 201/405/200/204/404/400 + live 429 with Retry-After. D3b (Valkey hybrid fan-out + GET /v1/feed/home + docs/feeds.md) is the next task. Pushed.
 - 2026-10-18 ~07:50 IST: D4a done — media registry + presigned upload (D4 part 1): migration 0005, internal/media (SeaweedFS dir/assign + direct PUT URLs, GET status, complete with HEAD-byte-confirmation, CheckReady gate, MarkReady/MarkFailed), 3 routes wired in main.go with the posts media gate, OpenAPI media paths + schemas (redocly 0 warnings). Two build-red bugs caught this run: unused media import in posts.go, bench_test.go stale newHandler signature — both fixed. Verified: go build+vet+gofmt clean, go test ./... green on real PG16, live binary smoke (upload 400/400/422/503+Retry-After, GET 400/404, complete 404, 405; post w/ unknown media → 422 unknown_media, post w/o media → 201). Previous run wrote this code but timed out before verify/push (4th timeout — cron body now has strict scope discipline). Pushed. Next: D4b (transcode worker + docs/video-pipeline.md + smoke clip round-trip).
+- 2026-10-18 ~08:35 IST: D4b part 1 done — transcode worker core (`internal/transcode` + `cmd/transcode-worker` + TRANSCODE_* config). Consumer-group stream drain, FFmpeg HLS ladder (never upscale) + poster, SeaweedFS round-trip, exponential-backoff retries, dead-letter after 5 attempts, sweep of stuck rows, TTL heartbeat. Fixed a real D4a bug (scanMedia NULL-column crash) caught by the new tests. `go build`+`go vet`+gofmt clean; full `go test ./...` green on real PG16 (4 unit + 3 integration suites). Pushed.

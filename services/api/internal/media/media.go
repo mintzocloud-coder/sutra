@@ -254,17 +254,29 @@ func (s *Service) scanMedia(row pgx.Row) (*Media, error) {
 		owner          pgtype.UUID
 		fid            *string
 		posterFid      *string
+		filename       *string
+		mimeType       *string
+		errorText      *string
 		renditionsJSON []byte
 	)
-	if err := row.Scan(&id, &owner, &m.Kind, &m.Status, &fid, &m.Filename,
-		&m.MimeType, &m.SizeBytes, &m.Width, &m.Height, &m.DurationMs,
-		&posterFid, &renditionsJSON, &m.Error, &m.CreatedAt, &m.UpdatedAt); err != nil {
+	if err := row.Scan(&id, &owner, &m.Kind, &m.Status, &fid, &filename,
+		&mimeType, &m.SizeBytes, &m.Width, &m.Height, &m.DurationMs,
+		&posterFid, &renditionsJSON, &errorText, &m.CreatedAt, &m.UpdatedAt); err != nil {
 		return nil, err
 	}
 	m.ID = id.String()
 	m.OwnerID = owner.String()
 	if fid != nil {
 		m.PlaybackURL = s.publicBaseURL + "/" + *fid
+	}
+	if filename != nil {
+		m.Filename = *filename
+	}
+	if mimeType != nil {
+		m.MimeType = *mimeType
+	}
+	if errorText != nil {
+		m.Error = *errorText
 	}
 	if posterFid != nil {
 		m.PosterURL = s.publicBaseURL + "/" + *posterFid

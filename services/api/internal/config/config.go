@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config holds the API service configuration.
@@ -35,6 +36,14 @@ type Config struct {
 	SeaweedMasterAddr  string // master for dir/assign, host:port; e.g. seaweedfs:9333
 	MediaPublicBaseURL string // client-reachable volume base URL for
 	// direct PUTs/downloads, e.g. http://localhost:8080 in dev
+	// Transcode worker (D4b): background HLS pipeline draining
+	// media:transcode.
+	TranscodeGroup         string
+	TranscodeConsumer      string
+	TranscodeMaxAttempts   int
+	TranscodeBackoffBase   time.Duration
+	TranscodeBackoffMax    time.Duration
+	TranscodeSweepInterval time.Duration
 }
 
 func getEnv(key, fallback string) string {
@@ -94,5 +103,44 @@ func Load() Config {
 		}(),
 		SeaweedMasterAddr:  getEnv("SEAWEEDFS_MASTER_ADDR", "seaweedfs:9333"),
 		MediaPublicBaseURL: getEnv("MEDIA_PUBLIC_BASE_URL", "http://seaweedfs:8080"),
+		// Transcode worker (D4b): background video pipeline.
+		TranscodeGroup: func() string { return getEnv("TRANSCODE_GROUP", "transcode-workers") }(),
+		TranscodeConsumer: func() string {
+			if c := getEnv("TRANSCODE_CONSUMER", ""); c != "" {
+				return c
+			}
+			if h, err := os.Hostname(); err == nil && h != "" {
+				return h
+			}
+			return "worker-1"
+		}(),
+		TranscodeMaxAttempts: func() int {
+			n, _ := strconv.Atoi(getEnv("TRANSCODE_MAX_ATTEMPTS", "5"))
+			if n < 1 {
+				n = 5
+			}
+			return n
+		}(),
+		TranscodeBackoffBase: func() time.Duration {
+			d, _ := time.ParseDuration(getEnv("TRANSCODE_BACKOFF_BASE", "30s"))
+			if d <= 0 {
+				d = 30 * time.Second
+			}
+			return d
+		}(),
+		TranscodeBackoffMax: func() time.Duration {
+			d, _ := time.ParseDuration(getEnv("TRANSCODE_BACKOFF_MAX", "30m"))
+			if d <= 0 {
+				d = 30 * time.Minute
+			}
+			return d
+		}(),
+		TranscodeSweepInterval: func() time.Duration {
+			d, _ := time.ParseDuration(getEnv("TRANSCODE_SWEEP_INTERVAL", "5m"))
+			if d <= 0 {
+				d = 5 * time.Minute
+			}
+			return d
+		}(),
 	}
 }
