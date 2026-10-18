@@ -95,7 +95,7 @@ jobs:
         # Gates C4: the benchmarks compile and run; numbers print to the
         # log (baselines live in docs/benchmarks.md). Short benchtime
         # keeps CI fast; full runs are manual (see the doc).
-        run: go test -run='^$' -bench=. -benchtime=2s -count=1 ./cmd/api/... ./internal/middleware/...
+        run: go test -run='^$' -bench=. -benchtime=2s -count=1 ./cmd/api/... ./internal/middleware/... ./internal/social/...
 
   elixir-chat:
     name: Elixir chat builds and tests
@@ -128,6 +128,11 @@ jobs:
           otp-version: "27"
       - run: mix deps.get
       - run: mix compile --warnings-as-errors
-      - run: mix ecto.create
-      - run: mix ecto.migrate
+      # ecto.create/migrate MUST run in MIX_ENV=test: `mix test` reads
+      # config/test.exs, which points the Repo at the DATABASE_URL database
+      # (sutra_chat_test). Running them in the default dev env creates and
+      # migrates sutra_chat_dev instead, and every DB-touching channel test
+      # then fails with "database sutra_chat_test does not exist".
+      - run: MIX_ENV=test mix ecto.create
+      - run: MIX_ENV=test mix ecto.migrate
       - run: mix test

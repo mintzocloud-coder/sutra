@@ -35,6 +35,12 @@
 #     SeaweedFS → complete → the transcode worker turns it into HLS →
 #     poll to ready (poster + renditions + playback URL), then a post
 #     referencing the ready media (the posts media gate).
+#   - The D5 realtime endpoint: no token → 401, wrong token → 401,
+#     unknown event → 422, valid envelope → 202 accepted.
+#   - The D6 velocity guards: the api is recreated with 1/hour caps and
+#     a throwaway Hydra identity proves post 429 (post_velocity_limited
+#     + Retry-After) and follow 429 (follow_velocity_limited +
+#     Retry-After), while an idempotent follow retry still 200s.
 # The chat release fails closed at boot without a real SECRET_KEY_BASE, so
 # this script generates an ephemeral one (kept in the environment only,
 # never written to disk or committed).
@@ -106,8 +112,23 @@ docker compose build --quiet api chat transcode-worker 2>/dev/null \
 
 echo "smoke: starting postgres, valkey, seaweedfs"
 docker compose up -d postgres valkey seaweedfs
-wait_for 90 "postgres to accept connections" \
-  docker compose exec -T postgres pg_isready -U sutra
+# Postgres readiness is the flakiest gate on CI runners (cold image pulls,
+# slow initdb). Wait longer here, and dump the container logs on timeout so
+# the next failure carries its own diagnosis instead of just a timeout line.
+pg_deadline=$((SECONDS + 180))
+while [ $SECONDS -lt "$pg_deadline" ]; do
+  if docker compose exec -T postgres pg_isready -U sutra >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
+if ! docker compose exec -T postgres pg_isready -U sutra >/dev/null 2>&1; then
+  echo "smoke: postgres never became ready — dumping container logs" >&2
+  docker compose logs --tail=80 postgres >&2 || true
+  docker compose ps >&2 || true
+  fail "timed out waiting for postgres to accept connections (logs above)"
+fi
+pass "postgres ready"
 
 echo "smoke: starting hydra + kratos (migrate one-shots run first via depends_on)"
 docker compose up -d hydra kratos
@@ -531,6 +552,92 @@ pass "internal/events 422 on unknown event"
 [ "$(internal_status "$CHAT_INTERNAL_TOKEN" "$evt")" = "202" ] \
   || fail "/internal/events valid envelope did not 202"
 pass "internal/events 202: follower:new accepted for user:sutra-smoke-b"
+
+# --- Velocity abuse guards (D6) -------------------------------------------
+# Tighten the rolling abuse caps to 1/hour and prove the 429 contract:
+# posts: 1st create → 201, 2nd within the hour → 429 post_velocity_limited
+# + Retry-After; follows: 1st new edge → 201, a second NEW edge → 429
+# follow_velocity_limited + Retry-After, while an idempotent retry of an
+# EXISTING edge still 200s (retries must never consume budget — the D6
+# part-1 design fix). A throwaway Hydra identity unique to this run keeps
+# the trailing-hour counters at zero (SMOKE_KEEP_UP=1 re-runs stay green);
+# id_a/id_b from the D2 section are the follow targets.
+echo "smoke: velocity abuse guards (D6)"
+
+echo "smoke: recreating api with tight velocity caps (1/hour)"
+POST_VELOCITY_PER_HOUR=1 FOLLOW_VELOCITY_PER_HOUR=1 docker compose up -d --no-deps api
+wait_for 90 "api /healthz (velocity caps on)" curl -sf "$API_URL/healthz"
+
+vel_client="sutra-smoke-v-$(date +%s)"
+echo "smoke: creating hydra oauth2 client '$vel_client'"
+SMOKE_HYDRA_CLIENT_V_SECRET="${SMOKE_HYDRA_CLIENT_V_SECRET:-$(openssl rand -hex 16)}"
+if ! docker compose run --rm hydra hydra create client \
+    --endpoint http://hydra:4445 \
+    --id "$vel_client" \
+    --secret "$SMOKE_HYDRA_CLIENT_V_SECRET" \
+    --grant-type client_credentials \
+    --grant-type urn:ietf:params:oauth:grant-type:jwt-bearer \
+    --response-type token \
+    --scope openid \
+    --audience sutra-api \
+    --token-endpoint-auth-method client_secret_basic \
+    >/tmp/sutra-hydra-client-v.out 2>&1; then
+  cat /tmp/sutra-hydra-client-v.out >&2
+  fail "hydra oauth2 client '$vel_client' creation failed"
+else
+  pass "hydra oauth2 client '$vel_client' created"
+fi
+
+token_v_json="$(curl -sf -u "$vel_client:$SMOKE_HYDRA_CLIENT_V_SECRET" \
+  --data-urlencode 'grant_type=client_credentials' \
+  --data-urlencode 'audience=sutra-api' \
+  --data-urlencode 'scope=openid' \
+  http://localhost:4444/oauth2/token)" || fail "hydra token request for '$vel_client' failed"
+token_v="$(printf '%s' "$token_v_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
+
+# Provision V (JIT via /v1/me) so posts/follows have an author/follower.
+curl -sf -H "Authorization: Bearer $token_v" "$API_URL/v1/me" >/dev/null \
+  || fail "GET /v1/me for '$vel_client' failed"
+
+# Post velocity: 1st create → 201, 2nd within the hour → 429
+# post_velocity_limited with a Retry-After header.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_v" -H 'Content-Type: application/json' \
+  -d '{"text":"velocity post one"}' \
+  "$API_URL/v1/posts")" = "201" ] || fail "velocity: first post did not return 201"
+vel_hdr="/tmp/sutra-vel-hdr.txt"; vel_body="/tmp/sutra-vel-body.json"
+vel_code="$(curl -s -o "$vel_body" -D "$vel_hdr" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_v" -H 'Content-Type: application/json' \
+  -d '{"text":"velocity post two"}' \
+  "$API_URL/v1/posts")"
+[ "$vel_code" = "429" ] || fail "velocity: second post did not return 429 (got $vel_code)"
+grep -qi '^Retry-After: [1-9]' "$vel_hdr" \
+  || fail "velocity: post 429 missing Retry-After header"
+[ "$(python3 -c 'import json; print(json.load(open("'"$vel_body"'"))["error"]["code"])')" = "post_velocity_limited" ] \
+  || fail "velocity: post 429 envelope code is not post_velocity_limited"
+pass "post velocity: 201 then 429 post_velocity_limited + Retry-After"
+
+# Follow velocity: V→A → 201; V→B (a NEW edge) → 429 follow_velocity_limited
+# with a Retry-After header; retrying the EXISTING V→A edge → 200.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_v" "$API_URL/v1/users/$id_a/follow")" = "201" ] \
+  || fail "velocity: follow V→A did not return 201"
+fvel_code="$(curl -s -o "$vel_body" -D "$vel_hdr" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_v" "$API_URL/v1/users/$id_b/follow")"
+[ "$fvel_code" = "429" ] || fail "velocity: second new follow did not return 429 (got $fvel_code)"
+grep -qi '^Retry-After: [1-9]' "$vel_hdr" \
+  || fail "velocity: follow 429 missing Retry-After header"
+[ "$(python3 -c 'import json; print(json.load(open("'"$vel_body"'"))["error"]["code"])')" = "follow_velocity_limited" ] \
+  || fail "velocity: follow 429 envelope code is not follow_velocity_limited"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_v" "$API_URL/v1/users/$id_a/follow")" = "200" ] \
+  || fail "velocity: idempotent retry of existing follow did not return 200"
+pass "follow velocity: 201 then 429 follow_velocity_limited + Retry-After; retry → 200"
+
+# Restore the default caps so later sections use production values.
+echo "smoke: restoring api to default velocity caps"
+docker compose up -d --no-deps api
+wait_for 90 "api /healthz (defaults restored)" curl -sf "$API_URL/healthz"
 
 # --- Chat websocket round-trip --------------------------------------------
 wait_for 90 "chat websocket listener" \

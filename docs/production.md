@@ -6,9 +6,12 @@ backend. For local laptop setup, see `docs/dev-setup.md` instead.
 
 **Scope:** `services/api` (Go REST) + `services/chat` (Elixir Phoenix
 release) + their dependencies (PostgreSQL 18 + pgvector, Valkey,
-SeaweedFS). Identity (Ory Hydra) lands with GitHub issue #4 — until
-then, JWT verification is fail-closed: without a real identity provider,
-`/v1/*` and chat sockets reject requests. The dev-only `AUTH_BYPASS=1`
+SeaweedFS). Identity is Ory Hydra + Ory Kratos (D1, in
+docker-compose.yml): the API and chat verify Hydra-issued RS256 JWTs
+through the JWKS path, and compose ships both services with migrate
+one-shots. Phone-OTP SMS is stub-only until DLT registration
+post-incorporation — any real provider value fails the API boot
+fail-closed (see `docs/identity.md`). The dev-only `AUTH_BYPASS=1`
 hatch exists for smoke tests and is **never** enabled in production.
 
 ---
@@ -76,6 +79,19 @@ CORS_ORIGINS=https://app.sutra.example.com
 | `CORS_MAX_AGE` | `86400` | Preflight cache seconds |
 | `POST_VELOCITY_PER_HOUR` | `30` | Rolling per-author post cap; over the cap → 429 `post_velocity_limited` + Retry-After (D3) |
 | `FOLLOW_VELOCITY_PER_HOUR` | `200` | Rolling per-user new-follow cap; over the cap → 429 `follow_velocity_limited` + Retry-After (D6) |
+| `OTP_PROVIDER` | `stub` | Phone-OTP SMS gateway: only `stub` exists until DLT registration post-incorporation; any other value makes the API refuse to boot (fail-closed) (D1) |
+| `FANOUT_THRESHOLD` | `10000` | Authors above this follower count merge on read instead of fan-out-on-write (D3b) |
+| `FEED_TIMELINE_MAX` | `2000` | Home-timeline sorted-set trim: each user's `feed:home:{id}` keeps at most this many entries (D3b) |
+| `SEAWEEDFS_MASTER_ADDR` | `seaweedfs:9333` | SeaweedFS master (dir/assign) for the media upload path (D4) |
+| `MEDIA_PUBLIC_BASE_URL` | `http://seaweedfs:8080` | Volume-server base used for presigned PUT URLs and playback/poster URLs (D4) |
+| `TRANSCODE_GROUP` | `transcode-workers` | Valkey consumer-group for the `media:transcode` stream; replicas share it so jobs distribute (D4b) |
+| `TRANSCODE_CONSUMER` | *(container hostname)* | Consumer name within the group; set explicitly when you want pinned identity, else hostname (D4b) |
+| `TRANSCODE_MAX_ATTEMPTS` | `5` | Job retries before the row is marked failed and the job parked on the `media:transcode:dead` stream (D4b) |
+| `TRANSCODE_BACKOFF_BASE` | `30s` | Exponential-backoff base between retries (D4b) |
+| `TRANSCODE_BACKOFF_MAX` | `30m` | Backoff cap (D4b) |
+| `TRANSCODE_SWEEP_INTERVAL` | `5m` | Interval at which the worker sweeps stuck `uploaded` rows back onto the stream (D4b) |
+| `CHAT_INTERNAL_URL` | `http://chat:4000` | Base URL of the chat service's internal event endpoint (D5) |
+| `CHAT_INTERNAL_TOKEN` | *(unset)* | Service-to-service Bearer token for `POST /internal/events`; empty **disables** the realtime publisher with a loud WARN (D5) |
 | `SHUTDOWN_TIMEOUT` | `10` | Graceful-shutdown seconds |
 | `AUTH_BYPASS` | *(unset)* | Dev-only identity hatch — **never in prod** |
 
@@ -91,6 +107,7 @@ CORS_ORIGINS=https://app.sutra.example.com
 | `CLUSTER_ENABLED` | *(unset)* | `1` = enable libcluster (B5) |
 | `CLUSTER_SECRET` | `dev-only-cluster-secret` | Gossip signing (set in prod!) |
 | `RELEASE_NODE` / `RELEASE_COOKIE` | — | BEAM node name + distribution cookie (B7); unique node name per replica |
+| `CHAT_INTERNAL_TOKEN` | *(required in prod)* | Shared secret for `POST /internal/events` (D5); fail-closed — every request 401s when unset |
 | `MIX_ENV` | `dev` | Set `prod` for the release image |
 | `AUTH_BYPASS` / `AUTH_BYPASS_SUBJECT` | *(unset)* / `dev-user` | Dev-only hatch — **never in prod** |
 

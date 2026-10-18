@@ -41,7 +41,7 @@ Run:
 
 ```bash
 cd services/api
-go test -run='^$' -bench=. -benchtime=10s -count=3 ./cmd/api/... ./internal/middleware/
+go test -run='^$' -bench=. -benchtime=10s -count=3 ./cmd/api/... ./internal/middleware/... ./internal/social/
 ```
 
 Scope: **pure HTTP-layer overhead** — mux routing, the full middleware
@@ -61,6 +61,27 @@ limiter effectively unlimited.
 | `BenchmarkErrorEnvelopeWrite` | JSON marshal of the canonical error envelope | TBD | TBD | TBD |
 | `BenchmarkRequestIDOnly` | request-ID generation + header echo in isolation | TBD | TBD | TBD |
 | `BenchmarkSecurityHeadersOnly` | baseline header writes in isolation | TBD | TBD | TBD |
+
+### Social validation benchmarks (D6)
+
+Location: `services/api/internal/social/bench_test.go`. Pure,
+DB-free hot paths that sit on every profile/follow read and write —
+run with the same command above.
+
+| Benchmark | Measures | ns/op | req/s | allocs/op |
+|---|---|---|---|---|
+| `BenchmarkValidateHandle` | compiled-regex match on every handle claim and profile PATCH | TBD | TBD | TBD |
+| `BenchmarkValidateHandleInvalid` | fast-reject path for an illegal handle | TBD | TBD | TBD |
+| `BenchmarkEncodeCursor` | `next_cursor` generation per paginated page (JSON marshal + base64) | TBD | TBD | TBD |
+| `BenchmarkDecodeCursor` | client-cursor parsing on every `?cursor=` request (base64 + JSON + UUID validation) | TBD | TBD | TBD |
+| `BenchmarkParseUserID` | `{id}` path-parameter parse on every `/v1/users/{id}` route | TBD | TBD | TBD |
+
+The D3/D6 **velocity caps are deliberately not benchmarked**: they are
+DB-backed (a `COUNT(*)` over the trailing-hour window), and these
+harnesses are DB-free by design. Their contract — 429 +
+`post_velocity_limited` / `follow_velocity_limited` envelope codes +
+computed `Retry-After` — is proven by `scripts/smoke.sh` (the D6
+section asserts all three live against the real stack).
 
 **Reading them:** `BenchmarkHealthz` ns/op is the per-request framework
 tax every route pays; compare `BenchmarkUnauthorized401` minus

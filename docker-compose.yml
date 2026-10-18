@@ -153,6 +153,11 @@ services:
       # Dev-only auth bypass for scripts/smoke.sh (the API logs a loud
       # WARN when this is set; never enable in production).
       AUTH_BYPASS: ${AUTH_BYPASS:-}
+      # Velocity abuse guards (D6): posts/hour and new-follows/hour.
+      # Empty (the default) means the Go defaults apply (30 / 200).
+      # scripts/smoke.sh tightens them to 1 for its D6 429 assertions.
+      POST_VELOCITY_PER_HOUR: ${POST_VELOCITY_PER_HOUR:-}
+      FOLLOW_VELOCITY_PER_HOUR: ${FOLLOW_VELOCITY_PER_HOUR:-}
       # Realtime social events (D5): the chat service's internal signed
       # endpoint. URL default is the compose service name; the token is
       # empty by default, which DISABLES eventing (dev default — the API
