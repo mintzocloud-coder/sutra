@@ -1554,9 +1554,37 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
     adapter).**
 - [ ] F4: Cashfree payment adapter — internal/payments interface
   (CreateOrder, VerifyWebhook, SplitTransfer, Payout) + fail-closed stub
-  (CASHFREE_* env-gated; refuses boot without creds, loud WARN), 
+  (CASHFREE_* env-gated; refuses boot without creds, loud WARN),
   docs/payments.md (Easy Split 0.1%/vendor design, UPI Intent-first,
   post-incorporation onboarding checklist).
+  - [x] F4 part 1 DONE 2026-10-18 ~22:50 IST: `internal/payments`
+    package — Provider interface (CreateOrder / VerifyWebhook /
+    SplitTransfer / Payout, integer-paise money, INR-pinned), real
+    param/result types (OrderParams with UPIIntent flag, OrderResult
+    with session + upi:// deep link, WebhookEvent paid/failed,
+    SplitParams with 0bps-commission reconciliation field,
+    PayoutParams upi/imps/neft), StubProvider (every method →
+    typed *ErrPaymentsDisabled, never a fake), NewProvider
+    ("stub"/"" only; "cashfree" and anything else → fail-closed
+    errUnknownProvider naming the post-investors gate; bad
+    CASHFREE_ENV → boot-time error). Config: PAYMENTS_PROVIDER +
+    CASHFREE_APP_ID/SECRET_KEY/ENV (loaded, never logged, never in
+    repo). main.go constructs the provider at startup (unknown →
+    os.Exit(1, fail-closed) + loud WARN that real processing is
+    DISABLED + extra WARN when CASHFREE_* are set but ignored;
+    discarded for now, consumed by the F6 online-checkout wiring).
+    Compose api env gains the four passthroughs (PAYMENTS_PROVIDER
+    pinned "stub"). VERIFIED: gofmt/build/vet clean; 6 new tests
+    green (stub matrix on all 4 methods, cashfree-with-creds still
+    refused, name typos refused, env validation, no secret leakage
+    in error strings); full `go test ./...` green; compose YAML
+    parses. LIVE binary proof: PAYMENTS_PROVIDER=bogus → "invalid
+    payments config — refusing to start"; bad CASHFREE_ENV →
+    refuses before any DB touch.
+  - [ ] F4 part 2: docs/payments.md (Easy Split 0.1%/vendor design,
+    UPI Intent-first, post-incorporation onboarding checklist),
+    production.md PAYMENTS_PROVIDER/CASHFREE_* env rows, smoke.sh
+    boot-log assertion on the fail-closed WARN.
 - [ ] F5: Logistics gateway — internal/logistics interface (CreateShipment,
   Track, Cancel) + stub provider, shipment events → Elixir realtime
   (user:<id> topics), COD remittance tracking fields, docs/logistics.md.
@@ -1664,3 +1692,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-18 ~17:30 IST: E6 part 2 done — smoke.sh E6 ag-ui 429 section verified (bash -n clean, logic reviewed) + CI-RED TRIAGE: the E6p1 push (4e559a94) was red on 4 jobs (elixir-chat, python-ai, SPDX, smoke); all four root causes fixed and pushed — (1) elixir-chat 19× `no :pubsub_server configured` → added pubsub_server: SutraChat.PubSub to services/chat/config/config.exs (also repairs the production D5 /internal/events broadcast path, which would have raised on every request); (2) elixir-chat 5× PresenceTest `already started` → setup probe now targets the real registered name SutraChat.Presence instead of the nonexistent SutraChat.PresenceSupervisor; (3) python-ai exit 2 at collection → CI pytest step sets dummy AI_SERVICE_TOKEN + DATABASE_URL (fail-closed import raises; unit tests use fake pools); (4) smoke postgres never ready → compose pgvector/pgvector:pg18 mount fixed to pgdata:/var/lib/postgresql (the pre-18 /data mount makes the pg18 entrypoint refuse to start); (5) SPDX → .pytest_cache skipped by the checker, excluded from pushes, gitignored, local caches deleted (push drops them from the repo). Verified: elixir syntax OK ×2, YAML parse ×2, bash -n ×2, SPDX simulation clean; full mix test / pytest / smoke are CI-gated. PENDING: CI-green confirmation on this push — next run checks the four jobs and reports. **E6 COMPLETE — Phase E complete (CI confirmation pending).**
 - 2026-10-18 ~19:10 IST: F1b part 1 done — product CRUD, variant/inventory ops (see F1b task note): internal/catalog/products.go (CreateProduct default-draft, GetProduct, keyset ListProducts, UpdateProduct patch incl. category clear, ArchiveProduct; AddVariant creates inventory row in-tx, SKU unique/product → 409, UpdateVariant incl. MRP clear, ArchiveVariant; GetInventory public, AdjustInventory atomic guarded UPDATE, 409 on would-go-negative; reserved untouched — F6 saga owns it), products_handler.go (10 handlers, strict-body contract, owner-only writes via SellerIDForUser, public reads; ProductsMux/ProductMux/VariantMux method dispatch), main.go routes (/v1/products POST+GET, /v1/products/{id} GET+PATCH+DELETE, /v1/products/{id}/variants POST, /v1/variants/{id} PATCH+DELETE, /v1/variants/{id}/inventory GET, .../adjust POST), products_test.go (validation unit + 3 integration suites: lifecycle incl. ErrNotOwner cross-seller checks, keyset paging, variant+inventory incl. negative-stock refusal). Verified: gofmt/build/vet clean, 11/11 tests green on real PG16.2 (embedded pgserver; apt PG16 vanished when the VM was replaced mid-run; 0001 pgcrypto relaxed only for the local run, restored byte-identical — diff-verified). F1b stays open: part 2 = OpenAPI (redocly clean) + smoke.sh commerce section. Pushed.
 - 2026-10-18 ~22:25 IST: F3 part 2b done — OpenAPI full F3 surface (see F3 task note): 6 path items (GET+DELETE /v1/cart, POST /v1/cart/items, PATCH+DELETE /v1/cart/items/{variant_id}, POST+GET /v1/orders, GET /v1/orders/{id}, PATCH /v1/orders/{id}/status), OrderId param, 11 new schemas (Cart/CartLine/CartItemAdd/CartQuantityPatch/Order/OrderItem/OrderSummary/OrderList/CheckoutRequest/CheckoutResult/OrderStatusPatch); status codes cross-checked against cartErrorCode/orderErrorCode; smoke.sh F3 cart+order round-trip (add/over-stock-409/set-qty/checkout-201/cod/cart-cleared/empty-cart-422/lists/detail-snapshot/reprice-immutable/state-machine/illegal-edges-422/cancel-releases-reservation/error-matrix/fixture-archived). Verified: redocly lint valid (0 warnings), bash -n clean, go build+vet clean, full go test ./... green (no Go code changed — 2a suites intact; no PG on this VM so integration suites skipped, live binary check + compose smoke CI-gated like F1b part 2). **F3 COMPLETE.** Next: F4 (Cashfree payment adapter). Pushed.
+- 2026-10-18 ~22:55 IST: F4 part 1 done — internal/payments seam (see F4 task note): Provider interface (CreateOrder/VerifyWebhook/SplitTransfer/Payout, integer-paise, INR-pinned), param/result types (UPIIntent flag, upi:// deep link, WebhookEvent paid/failed, 0bps-commission SplitParams, upi/imps/neft payouts), StubProvider (every method → typed *ErrPaymentsDisabled), NewProvider ("stub"/"" only; "cashfree"/typos → fail-closed errUnknownProvider; bad CASHFREE_ENV → boot error); config PAYMENTS_PROVIDER + CASHFREE_APP_ID/SECRET_KEY/ENV (never logged); main.go fail-closed startup wiring + loud DISABLED WARN + creds-set-but-ignored WARN; compose api env passthroughs. Verified: gofmt/build/vet clean, 6 new tests green, full go test ./... green, compose YAML parses; live binary: PAYMENTS_PROVIDER=bogus → "invalid payments config — refusing to start"; bad CASHFREE_ENV → refuses before DB. F4 stays open: part 2 = docs/payments.md (Easy Split 0.1%/vendor design, UPI Intent-first, post-incorporation onboarding checklist) + production.md env rows + smoke.sh boot-log assertion.

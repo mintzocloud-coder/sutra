@@ -70,6 +70,16 @@ type Config struct {
 	// (fail-closed), mirroring the AI proxy contract.
 	SearchURL       string // e.g. http://meilisearch:7700
 	SearchMasterKey string // Meilisearch master key; never commit
+	// Payments (F4): payment-aggregator seam. PAYMENTS_PROVIDER is
+	// "stub" until the Cashfree onboarding completes post-investors
+	// (see internal/payments, docs/payments.md); any other value
+	// makes the API refuse to boot (fail-closed). CASHFREE_* are the
+	// future live credentials — loaded, never logged, never in repo;
+	// the stub ignores them (and warns loudly if they are set).
+	PaymentsProvider string // payment aggregator name; "stub" until onboarding
+	CashfreeAppID    string // CASHFREE_APP_ID; unset = no live creds
+	CashfreeSecret   string // CASHFREE_SECRET_KEY; never logged, never committed
+	CashfreeEnv      string // "sandbox" | "prod"; "" = unset
 }
 
 func getEnv(key, fallback string) string {
@@ -191,5 +201,9 @@ func Load() Config {
 		AIServiceToken:    getEnv("AI_SERVICE_TOKEN", ""),
 		SearchURL:         getEnv("SEARCH_URL", "http://meilisearch:7700"),
 		SearchMasterKey:   getEnv("SEARCH_MASTER_KEY", ""),
+		PaymentsProvider:  getEnv("PAYMENTS_PROVIDER", "stub"),
+		CashfreeAppID:     getEnv("CASHFREE_APP_ID", ""),
+		CashfreeSecret:    getEnv("CASHFREE_SECRET_KEY", ""),
+		CashfreeEnv:       getEnv("CASHFREE_ENV", ""),
 	}
 }

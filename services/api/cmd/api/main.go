@@ -28,6 +28,7 @@ import (
 	"github.com/mintzocloud-coder/sutra/services/api/internal/oidc"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/orders"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/otp"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/payments"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/posts"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/realtime"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/search"
@@ -383,6 +384,28 @@ func main() {
 		os.Exit(1)
 	}
 	log.Info("otp provider configured", "provider", cfg.OTPProvider)
+
+	// Payments seam (F4): fail fast on an unknown PAYMENTS_PROVIDER so a
+	// misconfigured aggregator name refuses to boot instead of silently
+	// taking no payments. Until the Cashfree onboarding completes
+	// post-investors the only provider is the fail-closed stub (see
+	// internal/payments): every operation — CreateOrder, VerifyWebhook,
+	// SplitTransfer, Payout — is an explicit typed error, never a charge.
+	// The constructed provider is discarded for now and consumed by the
+	// online-checkout wiring landing in F6. Real keys MUST come from the
+	// CASHFREE_* environment; they are never committed and never logged.
+	if _, err := payments.NewProvider(cfg.PaymentsProvider, payments.CashfreeConfig{
+		AppID:  cfg.CashfreeAppID,
+		Secret: cfg.CashfreeSecret,
+		Env:    cfg.CashfreeEnv,
+	}); err != nil {
+		log.Error("invalid payments config — refusing to start", "err", err)
+		os.Exit(1)
+	}
+	log.Warn("payments: running with the fail-closed stub — real payment processing is DISABLED until the post-investors Cashfree onboarding (see docs/payments.md)")
+	if cfg.CashfreeAppID != "" || cfg.CashfreeSecret != "" {
+		log.Warn("payments: CASHFREE_* credentials are set but no real provider is wired — they are IGNORED; online payments cannot process")
+	}
 
 	// Database: connect (fail fast if unreachable) then apply pending
 	// migrations before serving any traffic.

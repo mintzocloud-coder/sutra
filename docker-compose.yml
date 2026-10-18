@@ -246,6 +246,17 @@ services:
       # enable product search. Never commit a real key here.
       SEARCH_URL: "http://meilisearch:7700"
       SEARCH_MASTER_KEY: ${SEARCH_MASTER_KEY:-}
+      # Payments (F4 part 1): payment-aggregator seam. Only "stub" boots
+      # until the Cashfree onboarding completes post-investors — any other
+      # PAYMENTS_PROVIDER makes the API refuse to boot (fail-closed), and
+      # every operation on the stub is a typed error, never a charge.
+      # CASHFREE_APP_ID/SECRET_KEY/ENV are the future live credentials:
+      # loaded, never logged, never committed; the stub ignores them
+      # (and warns loudly if they are set).
+      PAYMENTS_PROVIDER: "stub"
+      CASHFREE_APP_ID: ${CASHFREE_APP_ID:-}
+      CASHFREE_SECRET_KEY: ${CASHFREE_SECRET_KEY:-}
+      CASHFREE_ENV: ${CASHFREE_ENV:-}
     depends_on:
       postgres:
         condition: service_healthy
