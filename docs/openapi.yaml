@@ -551,6 +551,231 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /v1/posts:
+    post:
+      tags: [posts]
+      summary: Publish a post
+      description: |
+        Publishes a post as the caller. Body text is capped at 500 runes
+        (measured in runes, not bytes, so emoji-heavy posts are measured
+        fairly); blank bodies are 422. media_ids are validated for shape
+        (`[A-Za-z0-9_-]{1,128}`, max 10 per post) — the readiness gate
+        ("reference only ready media") is enforced by the media pipeline
+        (D4), not here. A per-author rolling velocity cap applies (default
+        30 posts/hour, `POST_VELOCITY_PER_HOUR`): over the cap is 429
+        `post_velocity_limited` with a Retry-After header telling the
+        client when the oldest post in the window ages out.
+      operationId: createPost
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostCreate'
+            example:
+              text: Shipping the Wave 1 feed today.
+              media_ids: []
+      responses:
+        '201':
+          description: Post created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Post'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed JSON body or unknown field.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '405':
+          description: Wrong method — this route only supports POST.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Allow:
+              description: Supported methods for this route
+              schema:
+                type: string
+                example: POST
+        '422':
+          description: |
+            Validation failure — `empty_post` (blank body), `post_too_long`
+            (>500 runes), `too_many_media` (>10), or `invalid_media_id`
+            (grammar).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          description: |
+            Over the per-author velocity cap (error code
+            "post_velocity_limited"); the Retry-After header carries the
+            wait in seconds.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Retry-After:
+              description: Seconds until the oldest post in the rolling window ages out
+              schema:
+                type: integer
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/posts/{id}:
+    delete:
+      tags: [posts]
+      summary: Delete a post
+      description: |
+        Deletes a post. Author-only: 403 `post_not_author` when the caller
+        is not the author; 404 `post_not_found` for unknown ids (deleting
+        an already-gone post is a client bug worth surfacing, unlike the
+        idempotent unfollow).
+      operationId: deletePost
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PostId'
+      responses:
+        '204':
+          description: Post deleted
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed post id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Caller is not the post's author.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '404':
+          description: No such post.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '405':
+          description: Wrong method — this route only supports DELETE.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Allow:
+              description: Supported methods for this route
+              schema:
+                type: string
+                example: DELETE
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/users/{id}/posts:
+    get:
+      tags: [posts]
+      summary: List a user's posts
+      description: |
+        One author's posts, newest first. Keyset-paginated on
+        (created_at, id) — pass `next_cursor` for the next page; null
+        `next_cursor` means the last page. No OFFSET, so pages stay stable
+        while the author keeps posting.
+      operationId: listUserPosts
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/PageLimit'
+        - $ref: '#/components/parameters/PageCursor'
+      responses:
+        '200':
+          description: One page of the author's posts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostPage'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed user id, bad limit, or bad cursor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No such user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '405':
+          description: Wrong method — this route only supports GET.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Allow:
+              description: Supported methods for this route
+              schema:
+                type: string
+                example: GET
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
 components:
   parameters:
     UserId:
@@ -562,6 +787,15 @@ components:
         type: string
         format: uuid
         example: 3f6b1c9e-8b4a-4d2e-9f01-abc123def456
+    PostId:
+      name: id
+      in: path
+      required: true
+      description: Post UUID.
+      schema:
+        type: string
+        format: uuid
+        example: 7e2a8f4c-1b3d-4e5f-8a09-b1c2d3e4f506
     PageLimit:
       name: limit
       in: query
@@ -714,6 +948,73 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/FollowItem'
+        next_cursor:
+          type: [string, 'null']
+          description: |
+            Opaque cursor for the next page; null on the last page.
+
+    Post:
+      type: object
+      required: [id, author_id, text, media_ids, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 7e2a8f4c-1b3d-4e5f-8a09-b1c2d3e4f506
+        author_id:
+          type: string
+          format: uuid
+          description: The author's user id.
+          example: 3f6b1c9e-8b4a-4d2e-9f01-abc123def456
+        text:
+          type: string
+          maxLength: 500
+          description: Post body, max 500 runes (measured in runes, not bytes).
+          example: Shipping the Wave 1 feed today.
+        media_ids:
+          type: array
+          maxItems: 10
+          description: |
+            Media ids (max 10), grammar `[A-Za-z0-9_-]{1,128}`. Shape
+            validated on create; readiness ("reference only ready media")
+            is enforced by the media pipeline.
+          items:
+            type: string
+          example: []
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PostCreate:
+      type: object
+      required: [text]
+      description: |
+        New post body. Unknown keys are rejected with 400 (strict API).
+      properties:
+        text:
+          type: string
+          maxLength: 500
+          example: Shipping the Wave 1 feed today.
+        media_ids:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+            pattern: '^[A-Za-z0-9_-]{1,128}$'
+          example: []
+      additionalProperties: false
+
+    PostPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Post'
         next_cursor:
           type: [string, 'null']
           description: |

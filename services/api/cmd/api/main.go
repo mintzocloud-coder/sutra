@@ -17,6 +17,7 @@ import (
 	"github.com/mintzocloud-coder/sutra/services/api/internal/middleware"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/oidc"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/otp"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/posts"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/social"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/users"
 )
@@ -97,6 +98,16 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, log *
 		social.FollowersHandler(pool, log)))
 	v1.Handle("/v1/users/{id}/following", methodGuard([]string{http.MethodGet},
 		social.FollowingHandler(pool, log)))
+
+	// Posts (D3 part 1): publish, author timeline, author-only delete.
+	// The home feed (Valkey fan-out) lands in D3 part 2.
+	postsSvc := posts.NewService(pool, cfg.PostVelocityCap)
+	v1.Handle("/v1/posts", methodGuard([]string{http.MethodPost},
+		posts.CreatePostHandler(postsSvc, log)))
+	v1.Handle("/v1/posts/{id}", methodGuard([]string{http.MethodDelete},
+		posts.DeletePostHandler(postsSvc, log)))
+	v1.Handle("/v1/users/{id}/posts", methodGuard([]string{http.MethodGet},
+		posts.UserPostsHandler(postsSvc, pool, log)))
 
 	v1.Handle("/", middleware.NotFoundHandler())
 	mux.Handle("/v1/", auth(v1))

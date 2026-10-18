@@ -26,6 +26,7 @@ type Config struct {
 	CORSMaxAge      int      // preflight cache seconds
 	OTPProvider     string   // SMS gateway for phone OTP: "stub" until DLT
 	// registration post-incorporation (see internal/otp, docs/identity.md)
+	PostVelocityCap int // posts per rolling hour per author (D3); <=0 = default 30
 }
 
 func getEnv(key, fallback string) string {
@@ -71,5 +72,9 @@ func Load() Config {
 		CORSOrigins:     parseCORSOrigins(getEnv("CORS_ORIGINS", "")),
 		CORSMaxAge:      maxAge,
 		OTPProvider:     getEnv("OTP_PROVIDER", "stub"),
+		PostVelocityCap: func() int {
+			n, _ := strconv.Atoi(getEnv("POST_VELOCITY_PER_HOUR", "30"))
+			return n
+		}(),
 	}
 }

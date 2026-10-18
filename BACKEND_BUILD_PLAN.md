@@ -636,14 +636,45 @@ every run. Gated items stay gated: real SMS/DLT stays post-incorporation
       end-to-end also live-verified against the compiled binary (real
       main.go mux patterns). Pushed.
 
-- [ ] **D3. Feed timelines (hybrid fan-out)**
-      Valkey sorted-set timelines: fan-out-on-write to followers' home
-      timelines, except high-follower authors (FANOUT_THRESHOLD env,
-      default 10k) whose posts merge on read. Go API: POST /v1/posts,
-      GET /v1/feed/home (score+id cursor), GET /v1/users/{id}/posts,
-      DELETE /v1/posts/{id} (author only). posts table (id, author_id,
-      text ≤500 chars, media_ids, created_at). Per-user post velocity
-      cap.
+- [x] **D3a. Posts table + CRUD (D3 part 1)**
+      Migration 0004: posts (id uuid pk, author_id → users, text ≤500
+      runes with non-blank CHECK, media_ids text[] ≤10 with CHECKs,
+      author-timeline index (author_id, created_at DESC, id DESC)).
+      New `internal/posts` package: Service.Create (validation + rolling
+      per-author velocity cap — default 30/h, `POST_VELOCITY_PER_HOUR`
+      env, over-cap → 429 `post_velocity_limited` + computed Retry-After
+      to when the oldest post in the window ages out; best-effort under
+      concurrency, documented), Get, ListByAuthor (keyset on
+      (created_at, id), never OFFSET), Delete (author-only, 404/403).
+      media_ids shape-validated only — the "ready media only" gate is D4.
+      Routes: POST /v1/posts (201), DELETE /v1/posts/{id} (204/403/404),
+      GET /v1/users/{id}/posts (404 unknown user, cursor-paged);
+      social.pageParams/callerUUID exported for reuse (no duplication).
+      OpenAPI updated (3 paths, Post/PostCreate/PostPage schemas, PostId
+      param) — redocly lint valid, 0 warnings. smoke.sh gains the posts
+      round-trip (create 201, oversized 422, timeline lists newest-first,
+      non-author delete 403, author delete 204, timeline empty).
+      Accept: tests green + live binary smoke of all routes.
+      DONE 2026-10-18 ~05:35 IST: `go build`+`go vet`+gofmt clean; full
+      `go test ./...` green on real PG16 — 2 pure unit suites (text rune
+      counting incl. emoji, media-id grammar matrix) + 5 integration
+      suites (create/get/delete, validation matrix, velocity cap 3/h →
+      4th rejected with RetryAfter ≥1s + per-author isolation, 3-page
+      cursor pagination newest-first, author isolation). One real bug
+      caught pre-push: LIMIT built as a literal instead of a $N
+      parameter ("expected 1 arguments, got 2"). Live binary smoke:
+      201/405/200/204/404/400 all correct; POST_VELOCITY_PER_HOUR=1 →
+      live 429 `post_velocity_limited` + `Retry-After: 3584`. Pushed.
+
+- [ ] **D3b. Feed timelines: Valkey hybrid fan-out (D3 part 2)**
+      Valkey sorted-set home timelines: fan-out-on-write to followers'
+      home timelines, except high-follower authors (FANOUT_THRESHOLD env,
+      default 10k) whose posts merge on read. Go API: GET /v1/feed/home
+      (score+id cursor). Delete propagation from timelines. NOTE: needs
+      a Valkey client dep (go-redis v9 speaks RESP to Valkey; if the Go
+      module proxy is unreachable from the build VM, write a minimal
+      RESP client instead — document the choice). config.ValkeyAddr
+      already exists; compose already runs valkey:8.
       Accept: docs/feeds.md documents the hybrid model; tests cover
       push path, pull path, merge ordering, delete propagation.
 
@@ -700,4 +731,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-18 ~03:10 IST: C3 done — `docs/production.md`: secrets table (generation commands, gitignored .env), full api+chat env reference cross-checked against config.go/runtime.exs, image builds, migration procedure (api advisory-locked self-migrate; chat via Release.migrate(); separate ledgers), first-boot compose steps with docker-compose.prod.yml override, /healthz-vs-/readyz probe guidance, backups (PG nightly+WAL, seaweedfs snapshots, presence ephemeral), scaling (stateless api + limiter caveat, chat clustering via CLUSTER_ENABLED/RELEASE_NODE/RELEASE_COOKIE, PG single-primary caveat), incident table, pre-flight checklist, rollback, Kubernetes notes. Honest caveat documented: Hydra not landed (issue #4) → identity fail-closed in prod; AUTH_BYPASS dev-only, forbidden in prod. Pushed.
 - 2026-10-18 ~03:40 IST: C4 done — benchmarks: `docs/benchmarks.md` (methodology + hardware template + re-run policy; baseline tables TBD — no fabricated numbers); Go bench tests (cmd/api: Healthz seq/parallel, 404, 401, 405; middleware: limiter allow seq/parallel, envelope write, RequestID/SecurityHeaders isolation); `scripts/bench_ws.py` (stdlib Phoenix-channels-v2 load probe: conns/sec, server-confirmed msgs/sec, ack p50/p95/p99, --fail-on-errors); smoke.sh runs a short 20×10 probe with --fail-on-errors; CI go-api job runs the short bench suite. Verified: bash -n + py_compile + YAML clean, SPDX headers; bench_ws.py vs fake Phoenix server — happy 10×5 → 50/50 acks exit 0, ack-drop → errors counted + exit 3, refused port → connect errors counted + JSON exit 0. Go compile/bench CI-gated (no Go on this VM, apt locked). Pushed. **ALL PHASES COMPLETE — backend production build done; report to founder.**
 - 2026-10-18 ~04:35 IST: D1 done — real Ory identity plane in compose (Hydra v26.4.2 + Kratos v26.4.2, pinned; migrate one-shots; Kratos dev config + identity schema); Go API verifies Hydra RS256 JWTs via the unchanged A2 JWKS path (HYDRA_ISSUER/JWKS_URL/JWT_AUDIENCE explicit in compose); `internal/otp` adapter interface + fail-closed stub (`OTP_PROVIDER` env-gated, unknown provider refuses boot — proven live); `docs/identity.md` (DLT-gated SMS path + post-incorporation checklist); smoke.sh extended with the real-issuer loop (Hydra JWT → /v1/me 200 with bypass OFF, no-token → 401). Verified: go build+vet+test green, gofmt/bash/YAML/JSON/SPDX clean, `hydra create client` syntax confirmed against v2 CLI reference. Full-stack run is CI-gated. Pushed.
-- 2026-10-18 ~05:15 IST: D2 done — profiles + follow graph: migration 0003 (profiles/follows, retired users.handle), new internal/social package (PATCH /v1/me/profile with presence-flag partials + explicit-null clears, first-come handle claims via UNIQUE → 409, per-user PATCH serialization, idempotent follows 201/200/204, self-follow 422, computed counts, keyset cursor pagination, subject never exposed), 5 routes wired, OpenAPI + redocly green, smoke.sh D2 round-trip (two Hydra clients, bypass off). Verified: go build+vet+test green on real PG16 (incl. 10-racer claim race → 1 winner, 3-page pagination, HTTP envelope matrix); 2 real bugs caught by tests pre-push (next_cursor off-by-one row, DisallowUnknownFields no-op on maps → explicit allowlist); live binary smoke of all routes. Pushed.
+- 2026-10-18 ~05:15 IST: D2 done — profiles + follow graph: migration 0003 (profiles/follows, retired users.handle), new internal/social package (PATCH /v1/me/profile with presence-flag partials + explicit-null clears, first-come handle claims via UNIQUE → 409, per-user PATCH serialization, idempotent follows 201/200/204, self-follow 422, computed counts, keyset cursor pagination, subject never exposed), 5 routes wired, OpenAPI + redocly green, smoke.sh D2 round-trip (two Hydra clients, bypass off). Verified: go build+vet+test green on real PG16 (incl. 10-racer claim race → 1 winner, 3-page pagination, HTTP envelope matrix); 2 real bugs caught by tests pre-push (next_cursor off-by-one row, DisallowUnknownFields no-op on maps → explicit allowlist); live binary smoke of all routes. Pushed.- 2026-10-18 ~05:45 IST: D3a done — posts table + CRUD (D3 part 1): migration 0004 (posts + CHECKs + author-timeline index), new internal/posts package (Create w/ validation + rolling per-author velocity cap → 429 post_velocity_limited + computed Retry-After; Get; ListByAuthor keyset on (created_at,id); author-only Delete), routes POST /v1/posts / DELETE /v1/posts/{id} / GET /v1/users/{id}/posts wired, OpenAPI + redocly green, smoke.sh posts round-trip added. Verified: go build+vet+test green on real PG16 (7 suites); 1 real bug caught pre-push (LIMIT literal vs $N param); live binary smoke 201/405/200/204/404/400 + live 429 with Retry-After. D3b (Valkey hybrid fan-out + GET /v1/feed/home + docs/feeds.md) is the next task. Pushed.

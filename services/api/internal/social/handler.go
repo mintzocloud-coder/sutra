@@ -26,11 +26,11 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// callerUUID provisions the caller's user row (first sight) and returns
+// CallerUUID provisions the caller's user row (first sight) and returns
 // its UUID, or writes the error response and returns false. Every /v1/*
 // handler below runs behind RequireAuth, so a subject is always present;
 // the only failure mode left is the database.
-func callerUUID(w http.ResponseWriter, r *http.Request, pool *db.Pool, log *slog.Logger) (pgtype.UUID, bool) {
+func CallerUUID(w http.ResponseWriter, r *http.Request, pool *db.Pool, log *slog.Logger) (pgtype.UUID, bool) {
 	ctx := r.Context()
 	subject := middleware.SubjectFromContext(ctx)
 	u, err := users.Provision(ctx, pool, subject, "")
@@ -116,7 +116,7 @@ func socialError(w http.ResponseWriter, r *http.Request, log *slog.Logger, op st
 // silently ignored). Present-but-null clears a field.
 func ProfileHandler(pool *db.Pool, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		userID, ok := callerUUID(w, r, pool, log)
+		userID, ok := CallerUUID(w, r, pool, log)
 		if !ok {
 			return
 		}
@@ -203,7 +203,7 @@ func FollowHandler(pool *db.Pool, log *slog.Logger) http.HandlerFunc {
 			middleware.MethodNotAllowedHandler(http.MethodPost, http.MethodDelete)(w, r)
 			return
 		}
-		follower, ok := callerUUID(w, r, pool, log)
+		follower, ok := CallerUUID(w, r, pool, log)
 		if !ok {
 			return
 		}
@@ -237,11 +237,11 @@ func FollowHandler(pool *db.Pool, log *slog.Logger) http.HandlerFunc {
 	}
 }
 
-// pageParams parses the limit/cursor query params for the listing
+// PageParams parses the limit/cursor query params for the listing
 // handlers. A non-positive/non-integer limit or a malformed cursor is a
 // 400 (client bugs fail loudly); a limit above the cap clamps instead of
 // erroring, since huge pages are a cost issue, not a client bug.
-func pageParams(r *http.Request) (int, *Cursor, error) {
+func PageParams(r *http.Request) (int, *Cursor, error) {
 	limit := DefaultPageLimit
 	if s := r.URL.Query().Get("limit"); s != "" {
 		n, err := strconv.Atoi(s)
@@ -272,7 +272,7 @@ func FollowersHandler(pool *db.Pool, log *slog.Logger) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		limit, after, err := pageParams(r)
+		limit, after, err := PageParams(r)
 		if err != nil {
 			middleware.WriteJSONError(w, r, http.StatusBadRequest,
 				"invalid_pagination", "limit must be a positive integer and cursor must be valid")
@@ -300,7 +300,7 @@ func FollowingHandler(pool *db.Pool, log *slog.Logger) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		limit, after, err := pageParams(r)
+		limit, after, err := PageParams(r)
 		if err != nil {
 			middleware.WriteJSONError(w, r, http.StatusBadRequest,
 				"invalid_pagination", "limit must be a positive integer and cursor must be valid")

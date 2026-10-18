@@ -24,6 +24,9 @@
 #     sutra-smoke-b) claim handles via PATCH /v1/me/profile, A follows B
 #     (201 then idempotent 200), self-follow 422s, followers/following
 #     listings are verified, A unfollows (204) — all with the bypass off.
+#   - The D3 part-1 posts round-trip: A creates a post (201), an
+#     oversized body 422s, A's author timeline lists it, B's delete
+#     attempt 403s, A deletes it (204), the timeline is empty again.
 # The chat release fails closed at boot without a real SECRET_KEY_BASE, so
 # this script generates an ephemeral one (kept in the environment only,
 # never written to disk or committed).
@@ -274,6 +277,50 @@ followers_after="$(curl -sf -H "Authorization: Bearer $access_token" \
 [ "$(printf '%s' "$followers_after" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["items"]))')" = "0" ] \
   || fail "B's followers not empty after unfollow"
 pass "unfollow 204; followers empty"
+
+# --- Posts round-trip (D3 part 1) -------------------------------------------
+# A creates a post (201), an oversized body 422s, A's author timeline
+# lists it, B's delete attempt 403s (author-only), A deletes it (204),
+# and the timeline is empty again — all with the bypass off.
+echo "smoke: posts round-trip (D3 part 1)"
+
+post_json="$(curl -sf -X POST \
+  -H "Authorization: Bearer $access_token" -H 'Content-Type: application/json' \
+  -d '{"text":"smoke post one"}' \
+  "$API_URL/v1/posts")" || fail "POST /v1/posts failed"
+post_id="$(jget "$post_json" id)"
+[ -n "$post_id" ] || fail "post id missing from create response"
+pass "post created ($post_id)"
+
+# Oversized body (501 runes) is rejected with 422.
+oversize_body="$(python3 -c 'import json; print(json.dumps({"text": "x"*501}))')"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $access_token" -H 'Content-Type: application/json' \
+  -d "$oversize_body" \
+  "$API_URL/v1/posts")" = "422" ] || fail "oversized post did not return 422"
+pass "oversized post rejected with 422"
+
+# A's author timeline lists the new post newest-first.
+timeline="$(curl -sf -H "Authorization: Bearer $access_token" \
+  "$API_URL/v1/users/$id_a/posts?limit=10")" || fail "GET author timeline failed"
+[ "$(printf '%s' "$timeline" | python3 -c 'import json,sys; print(json.load(sys.stdin)["items"][0]["id"])')" = "$post_id" ] \
+  || fail "post missing from author timeline"
+pass "author timeline lists the post"
+
+# B cannot delete A's post (403); A deletes it (204).
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+  -H "Authorization: Bearer $token_b" "$API_URL/v1/posts/$post_id")" = "403" ] \
+  || fail "non-author delete did not return 403"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+  -H "Authorization: Bearer $access_token" "$API_URL/v1/posts/$post_id")" = "204" ] \
+  || fail "author delete did not return 204"
+pass "non-author delete 403; author delete 204"
+
+timeline_after="$(curl -sf -H "Authorization: Bearer $access_token" \
+  "$API_URL/v1/users/$id_a/posts")" || fail "GET author timeline after delete failed"
+[ "$(printf '%s' "$timeline_after" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["items"]))')" = "0" ] \
+  || fail "author timeline not empty after delete"
+pass "author timeline empty after delete"
 
 # --- Chat websocket round-trip --------------------------------------------
 wait_for 90 "chat websocket listener" \

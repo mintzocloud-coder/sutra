@@ -1,0 +1,205 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+package posts
+
+import (
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"net/http"
+	"strconv"
+
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/mintzocloud-coder/sutra/services/api/internal/db"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/middleware"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/social"
+)
+
+// maxPostBody caps POST bodies: posts are small (500 runes + metadata);
+// anything bigger is abuse, not a post.
+const maxPostBody = 64 << 10
+
+// writeJSON encodes v as a JSON response.
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// targetPostID parses the {id} path value into a UUID, 400 on garbage —
+// without ever touching the database.
+func targetPostID(w http.ResponseWriter, r *http.Request) (pgtype.UUID, bool) {
+	id, err := social.ParseUserID(r.PathValue("id"))
+	if err != nil {
+		middleware.WriteJSONError(w, r, http.StatusBadRequest,
+			"invalid_post_id", "post id must be a UUID")
+		return pgtype.UUID{}, false
+	}
+	return id, true
+}
+
+// clientErr reports whether err is a mapped client error (4xx) rather
+// than an unexpected (500) failure.
+func clientErr(err error) bool {
+	for _, e := range []error{
+		social.ErrUserNotFound, ErrPostNotFound, ErrNotAuthor,
+		ErrEmptyText, ErrTextTooLong, ErrTooManyMedia, ErrBadMediaID,
+		social.ErrInvalidCursor,
+	} {
+		if errors.Is(err, e) {
+			return true
+		}
+	}
+	var vel *VelocityLimitedError
+	return errors.As(err, &vel)
+}
+
+// postError maps package errors to envelope responses; unexpected
+// errors are logged by the caller and answered 500.
+func postError(w http.ResponseWriter, r *http.Request, log *slog.Logger, op string, err error) {
+	if clientErr(err) {
+		var vel *VelocityLimitedError
+		switch {
+		case errors.Is(err, ErrPostNotFound):
+			middleware.WriteJSONError(w, r, http.StatusNotFound,
+				"post_not_found", "post not found")
+		case errors.Is(err, ErrNotAuthor):
+			middleware.WriteJSONError(w, r, http.StatusForbidden,
+				"post_not_author", "only the author can delete this post")
+		case errors.Is(err, ErrEmptyText):
+			middleware.WriteJSONError(w, r, http.StatusUnprocessableEntity,
+				"empty_post", "post text must not be blank")
+		case errors.Is(err, ErrTextTooLong):
+			middleware.WriteJSONError(w, r, http.StatusUnprocessableEntity,
+				"post_too_long", "post text exceeds 500 characters")
+		case errors.Is(err, ErrTooManyMedia):
+			middleware.WriteJSONError(w, r, http.StatusUnprocessableEntity,
+				"too_many_media", "a post can reference at most 10 media items")
+		case errors.Is(err, ErrBadMediaID):
+			middleware.WriteJSONError(w, r, http.StatusUnprocessableEntity,
+				"invalid_media_id", "media id must match [A-Za-z0-9_-]{1,128}")
+		case errors.Is(err, social.ErrInvalidCursor):
+			middleware.WriteJSONError(w, r, http.StatusBadRequest,
+				"invalid_cursor", "cursor is malformed")
+		case errors.As(err, &vel):
+			// Tell the client exactly when to retry: the wait until
+			// the oldest post in the rolling window ages out. A flat
+			// 429 would make clients poll blindly.
+			secs := int(vel.RetryAfter / 1e9)
+			if secs < 1 {
+				secs = 1
+			}
+			w.Header().Set("Retry-After", strconv.Itoa(secs))
+			middleware.WriteJSONError(w, r, http.StatusTooManyRequests,
+				"post_velocity_limited", "too many posts: slow down and retry")
+		case errors.Is(err, social.ErrUserNotFound):
+			middleware.WriteJSONError(w, r, http.StatusNotFound,
+				"user_not_found", "user not found")
+		}
+		return
+	}
+	log.Error("posts: "+op+" failed", "err", err,
+		"request_id", middleware.FromContext(r.Context()))
+	middleware.WriteStatusError(w, r, http.StatusInternalServerError, "internal server error")
+}
+
+// CreatePostHandler serves POST /v1/posts: publish a post as the caller.
+// Unknown JSON fields are rejected (strict API, same rule as profiles).
+func CreatePostHandler(svc *Service, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		authorID, ok := social.CallerUUID(w, r, svc.pool, log)
+		if !ok {
+			return
+		}
+
+		var raw map[string]json.RawMessage
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPostBody))
+		if err := dec.Decode(&raw); err != nil {
+			middleware.WriteJSONError(w, r, http.StatusBadRequest,
+				"invalid_json", "request body must be a JSON object")
+			return
+		}
+		for key := range raw {
+			switch key {
+			case "text", "media_ids":
+			default:
+				middleware.WriteJSONError(w, r, http.StatusBadRequest,
+					"unknown_field", "unknown field: "+key)
+				return
+			}
+		}
+
+		var text string
+		if v, present := raw["text"]; present {
+			if err := json.Unmarshal(v, &text); err != nil {
+				middleware.WriteJSONError(w, r, http.StatusBadRequest,
+					"invalid_json", "field text must be a string")
+				return
+			}
+		}
+		var mediaIDs []string
+		if v, present := raw["media_ids"]; present && string(v) != "null" {
+			if err := json.Unmarshal(v, &mediaIDs); err != nil {
+				middleware.WriteJSONError(w, r, http.StatusBadRequest,
+					"invalid_json", "field media_ids must be an array of strings")
+				return
+			}
+		}
+
+		post, err := svc.Create(r.Context(), authorID, text, mediaIDs)
+		if err != nil {
+			postError(w, r, log, "create post", err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, post)
+	}
+}
+
+// DeletePostHandler serves DELETE /v1/posts/{id}: author-only delete.
+// 204 on success; 404 for unknown posts; 403 when the caller is not
+// the author.
+func DeletePostHandler(svc *Service, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := targetPostID(w, r)
+		if !ok {
+			return
+		}
+		callerID, ok := social.CallerUUID(w, r, svc.pool, log)
+		if !ok {
+			return
+		}
+		if err := svc.Delete(r.Context(), id, callerID); err != nil {
+			postError(w, r, log, "delete post", err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// UserPostsHandler serves GET /v1/users/{id}/posts: one author's posts,
+// newest first, keyset-paginated. 404 for unknown users (the listing
+// would otherwise just be empty).
+func UserPostsHandler(svc *Service, pool *db.Pool, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := targetPostID(w, r)
+		if !ok {
+			return
+		}
+		limit, after, err := social.PageParams(r)
+		if err != nil {
+			middleware.WriteJSONError(w, r, http.StatusBadRequest,
+				"invalid_pagination", "limit must be a positive integer and cursor must be valid")
+			return
+		}
+		if _, err := social.GetProfile(r.Context(), pool, id); err != nil {
+			postError(w, r, log, "list user posts", err)
+			return
+		}
+		page, err := svc.ListByAuthor(r.Context(), id, limit, after)
+		if err != nil {
+			postError(w, r, log, "list user posts", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, page)
+	}
+}
