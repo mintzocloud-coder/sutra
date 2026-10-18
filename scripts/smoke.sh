@@ -47,6 +47,12 @@
 #   - The E6 AG-UI abuse guard: the ai service is recreated with
 #     AI_AGUI_RPM=1 and a throwaway Hydra identity proves the echo
 #     endpoint streams first, then 429s (ai_rate_limited + Retry-After).
+#   - The F1 commerce round-trip: a throwaway Hydra identity registers a
+#     seller (201 + 0bps commission; second registration 409), public
+#     storefront reads (GET seller, category tree), product CRUD (create
+#     draft → list → activate), variant add (duplicate SKU 409), inventory
+#     (0 → +100; −150 refuses 409 insufficient_stock), then archive
+#     variant + product.
 # The chat release fails closed at boot without a real SECRET_KEY_BASE, so
 # this script generates an ephemeral one (kept in the environment only,
 # never written to disk or committed).
@@ -969,6 +975,150 @@ pass "follow velocity: 201 then 429 follow_velocity_limited + Retry-After; retry
 echo "smoke: restoring api to default velocity caps"
 docker compose up -d --no-deps api
 wait_for 90 "api /healthz (defaults restored)" curl -sf "$API_URL/healthz"
+
+# --- Commerce catalog round-trip (F1b part 2) --------------------------------
+# A throwaway Hydra identity (fresh every run) registers a seller, lists a
+# product, adds a variant, moves inventory, then archives everything —
+# the full F1a/F1b HTTP surface through the production auth path (bypass
+# off). The identity is per-run because seller registration is first-come
+# (one seller per user; a second registration is 409).
+echo "smoke: commerce catalog round-trip (F1b)"
+
+com_client="sutra-smoke-c-$(date +%s)"
+echo "smoke: creating hydra oauth2 client '$com_client'"
+SMOKE_HYDRA_CLIENT_C_SECRET=${SMOKE_HYDRA_CLIENT_C_SECRET:-$(openssl rand -hex 16)}
+if ! docker compose run --rm hydra hydra create client \
+    --endpoint http://hydra:4445 \
+    --id "$com_client" \
+    --secret "$SMOKE_HYDRA_CLIENT_C_SECRET" \
+    --grant-type client_credentials \
+    --grant-type urn:ietf:params:oauth:grant-type:jwt-bearer \
+    --response-type token \
+    --scope openid \
+    --audience sutra-api \
+    --token-endpoint-auth-method client_secret_basic \
+    >/tmp/sutra-hydra-client-c.out 2>&1; then
+  cat /tmp/sutra-hydra-client-c.out >&2
+  fail "hydra oauth2 client '$com_client' creation failed"
+else
+  pass "hydra oauth2 client '$com_client' created"
+fi
+
+token_c_json="$(curl -sf -u "$com_client:$SMOKE_HYDRA_CLIENT_C_SECRET" \
+  --data-urlencode 'grant_type=client_credentials' \
+  --data-urlencode 'audience=sutra-api' \
+  --data-urlencode 'scope=openid' \
+  http://localhost:4444/oauth2/token)" || fail "hydra token request for '$com_client' failed"
+token_c="$(printf '%s' "$token_c_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
+
+com_slug="smoke-store-c-$(date +%s)"
+seller_json="$(curl -sf -X POST \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d "{\"store_name\":\"Smoke Store\",\"store_slug\":\"$com_slug\"}" \
+  "$API_URL/v1/sellers")" || fail "POST /v1/sellers failed"
+seller_id="$(printf '%s' "$seller_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+[ "$(printf '%s' "$seller_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["store_slug"])')" = "$com_slug" ] \
+  || fail "seller slug mismatch"
+[ "$(printf '%s' "$seller_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["commission_rate_bps"])')" = "0" ] \
+  || fail "seller commission_rate_bps is not 0 (0%-commission model)"
+pass "seller registered: $com_slug ($seller_id), commission 0bps"
+
+# Second registration for the same user → 409 seller_already_registered.
+com_body="/tmp/sutra-com-body.json"
+com_code="$(curl -s -o "$com_body" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"store_name":"Smoke Store Two"}' \
+  "$API_URL/v1/sellers")"
+[ "$com_code" = "409" ] || fail "second seller registration did not return 409 (got $com_code)"
+[ "$(python3 -c 'import json; print(json.load(open("'"$com_body"'"))["error"]["code"])')" = "seller_already_registered" ] \
+  || fail "second registration envelope code is not seller_already_registered"
+pass "duplicate registration → 409 seller_already_registered"
+
+# Public storefront reads.
+seller_get="$(curl -sf -H "Authorization: Bearer $token_c" "$API_URL/v1/sellers/$seller_id")" \
+  || fail "GET /v1/sellers/{id} failed"
+[ "$(printf '%s' "$seller_get" | python3 -c 'import json,sys; print(json.load(sys.stdin)["store_name"])')" = "Smoke Store" ] \
+  || fail "GET seller returned wrong store_name"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token_c" \
+  "$API_URL/v1/sellers/not-a-uuid")" = "400" ] || fail "GET seller with bad id did not return 400"
+pass "GET /v1/sellers/{id}: 200 storefront read, 400 on bad id"
+
+cats="$(curl -sf -H "Authorization: Bearer $token_c" "$API_URL/v1/categories")" \
+  || fail "GET /v1/categories failed"
+python3 -c '
+import json, sys
+tree = json.load(sys.stdin)["categories"]
+assert len(tree) >= 10, "fewer than 10 root categories"
+elec = next(c for c in tree if c["slug"] == "electronics")
+child_slugs = {c["slug"] for c in elec["children"]}
+assert {"audio", "mobiles"} <= child_slugs, "electronics missing audio/mobiles children"
+' <<<"$cats" || fail "category tree shape wrong"
+pass "GET /v1/categories: tree with electronics → audio/mobiles"
+
+# Product: create (draft) → list → activate → get.
+prod_json="$(curl -sf -X POST \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"title":"Smoke Catalog Item","description":"smoke-test listing","category_slug":"audio"}' \
+  "$API_URL/v1/products")" || fail "POST /v1/products failed"
+prod_id="$(printf '%s' "$prod_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+[ "$(printf '%s' "$prod_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')" = "draft" ] \
+  || fail "new product is not draft"
+pass "product created as draft: $prod_id"
+
+plist="$(curl -sf -H "Authorization: Bearer $token_c" \
+  "$API_URL/v1/products?seller_id=$seller_id")" || fail "GET /v1/products failed"
+[ "$(printf '%s' "$plist" | python3 -c 'import json,sys; print(json.load(sys.stdin)["products"][0]["id"])')" = "$prod_id" ] \
+  || fail "product missing from seller listing"
+pass "GET /v1/products: newest-first storefront listing"
+
+curl -sf -X PATCH -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"status":"active"}' "$API_URL/v1/products/$prod_id" >/dev/null \
+  || fail "PATCH /v1/products/{id} (activate) failed"
+[ "$(curl -sf -H "Authorization: Bearer $token_c" "$API_URL/v1/products/$prod_id" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')" = "active" ] \
+  || fail "product status not active after PATCH"
+pass "PATCH /v1/products/{id}: draft → active"
+
+# Variant: add SKU → inventory starts at 0 → +100 → −150 refuses 409.
+var_json="$(curl -sf -X POST \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"sku":"SMOKE-C-001","price_paise":149900,"mrp_paise":299900,"attributes":{"color":"black"}}' \
+  "$API_URL/v1/products/$prod_id/variants")" || fail "POST /v1/products/{id}/variants failed"
+var_id="$(printf '%s' "$var_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"sku":"SMOKE-C-001","price_paise":149900}' \
+  "$API_URL/v1/products/$prod_id/variants")" = "409" ] \
+  || fail "duplicate SKU did not return 409"
+pass "variant created: $var_id; duplicate SKU → 409 sku_exists"
+
+inv0="$(curl -sf -H "Authorization: Bearer $token_c" "$API_URL/v1/variants/$var_id/inventory")" \
+  || fail "GET inventory failed"
+[ "$(printf '%s' "$inv0" | python3 -c 'import json,sys; print(json.load(sys.stdin)["quantity"])')" = "0" ] \
+  || fail "new variant inventory is not 0"
+inv1="$(curl -sf -X POST -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"delta":100}' "$API_URL/v1/variants/$var_id/inventory/adjust")" \
+  || fail "inventory adjust +100 failed"
+[ "$(printf '%s' "$inv1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["quantity"])')" = "100" ] \
+  || fail "quantity not 100 after +100"
+com_code="$(curl -s -o "$com_body" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"delta":-150}' "$API_URL/v1/variants/$var_id/inventory/adjust")"
+[ "$com_code" = "409" ] || fail "adjust below zero did not return 409 (got $com_code)"
+[ "$(python3 -c 'import json; print(json.load(open("'"$com_body"'"))["error"]["code"])')" = "insufficient_stock" ] \
+  || fail "insufficient_stock envelope code missing"
+pass "inventory: 0 → +100 = 100; −150 → 409 insufficient_stock"
+
+# Cleanup: archive variant, archive product (nothing is hard-deleted).
+[ "$(curl -sf -X DELETE -H "Authorization: Bearer $token_c" \
+  "$API_URL/v1/variants/$var_id" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')" = "archived" ] \
+  || fail "DELETE variant did not archive"
+[ "$(curl -sf -X DELETE -H "Authorization: Bearer $token_c" \
+  "$API_URL/v1/products/$prod_id" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')" = "archived" ] \
+  || fail "DELETE product did not archive"
+pass "variant + product archived (cleanup)"
 
 # --- Chat websocket round-trip --------------------------------------------
 wait_for 90 "chat websocket listener" \

@@ -39,6 +39,14 @@ tags:
     description: Liveness / readiness probes (unauthenticated, DB-free for /healthz)
   - name: identity
     description: Authenticated caller identity
+  - name: commerce
+    description: |
+      Wave-3 marketplace: seller onboarding, curated categories, product
+      catalog (products, purchasable variants, inventory). Write routes are
+      owner-only — the caller must have a seller account and own the
+      resource; reads are public storefront reads. Money is always integer
+      paise (`price_paise`, `mrp_paise`); the platform commission is 0%
+      (`commission_rate_bps` default 0).
 paths:
   /healthz:
     get:
@@ -1433,6 +1441,787 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /v1/sellers:
+    post:
+      tags: [commerce]
+      summary: Register a seller account
+      description: |
+        Registers a seller account for the caller (Wave-1 rule: one seller
+        per user; a second registration is 409 `seller_already_registered`).
+        The store slug is first-come, first-served and must match
+        `[a-z0-9-]{3,30}` (no leading/trailing/double hyphens); when omitted
+        it is derived from the store name. The store name is 3–80 runes
+        (rune-counted so Indic-script names are measured fairly). GSTIN, when
+        given, is validated as a 15-character GSTIN. The platform commission
+        is 0% (`commission_rate_bps` default 0, Meesho-style marketplace).
+      operationId: registerSeller
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SellerCreate'
+            example:
+              store_name: Shivam Electronics
+              store_slug: shivam-electronics
+              gstin: 24ABCDE1234F1Z5
+      responses:
+        '201':
+          description: Seller registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Seller'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed JSON body or unknown field.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: |
+            `seller_already_registered` (caller already has a seller account)
+            or `slug_taken` (another seller claimed the slug first).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '422':
+          description: |
+            Validation failure — `invalid_store_name`, `invalid_slug`, or
+            `invalid_gstin`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/sellers/{id}:
+    get:
+      tags: [commerce]
+      summary: Get a seller's public storefront record
+      description: |
+        The public seller record. 400 on non-UUID ids without touching the
+        database.
+      operationId: getSeller
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SellerId'
+      responses:
+        '200':
+          description: The seller record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Seller'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed seller id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No such seller (`seller_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/categories:
+    get:
+      tags: [commerce]
+      summary: List the curated category tree
+      description: |
+        The curated storefront category tree (26 seeded roots/children),
+        returned as roots with nested `children`. Public beyond the standard
+        `/v1/*` token gate.
+      operationId: listCategories
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: The category tree
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryTree'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/products:
+    post:
+      tags: [commerce]
+      summary: Create a product listing
+      description: |
+        The caller lists a new product under their own seller account (403
+        `seller_not_registered` without one). New listings start as `draft`
+        — invisible on the storefront until activated. Price lives on
+        variants, not here. Optional `category_slug` must exist
+        (`category_not_found` → 422).
+      operationId: createProduct
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductCreate'
+            example:
+              title: Wireless Bluetooth Headphones
+              description: 40mm drivers, 60h battery, Type-C charging.
+              category_slug: audio
+      responses:
+        '201':
+          description: Product created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed JSON body or unknown field.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Caller has no seller account (`seller_not_registered`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '422':
+          description: |
+            Validation failure — `invalid_title` / `invalid_description` /
+            `invalid_status` / `category_not_found`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    get:
+      tags: [commerce]
+      summary: List one seller's public listings
+      description: |
+        One seller's products, newest first. Keyset-paginated on
+        (created_at, id) — pass `next_cursor` for the next page; null
+        `next_cursor` means the last page. No OFFSET.
+      operationId: listProducts
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: seller_id
+          in: query
+          required: true
+          description: Seller UUID (the storefront query).
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/CommerceListLimit'
+        - $ref: '#/components/parameters/PageCursor'
+      responses:
+        '200':
+          description: One page of the seller's products
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductPage'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed seller id, bad limit, or bad cursor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/products/{id}:
+    get:
+      tags: [commerce]
+      summary: Get a product
+      description: The public product page.
+      operationId: getProduct
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProductId'
+      responses:
+        '200':
+          description: The product
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed product id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No such product (`product_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags: [commerce]
+      summary: Update a product
+      description: |
+        Owner-only partial edit. `category_slug: ""` clears the category;
+        explicit null on any field means "leave unchanged".
+      operationId: updateProduct
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProductId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductPatch'
+      responses:
+        '200':
+          description: The updated product
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed JSON body or unknown field.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not the product's owner (`not_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '404':
+          description: No such product (`product_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '422':
+          description: |
+            Validation failure — `invalid_title` / `invalid_description` /
+            `invalid_status` / `category_not_found`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [commerce]
+      summary: Archive a product
+      description: |
+        Owner-only archive — products are never hard-deleted (order history
+        in later waves references them). Returns the archived product.
+      operationId: archiveProduct
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProductId'
+      responses:
+        '200':
+          description: The archived product
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed product id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not the product's owner (`not_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '404':
+          description: No such product (`product_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/products/{id}/variants:
+    post:
+      tags: [commerce]
+      summary: Add a purchasable variant (SKU) to a product
+      description: |
+        Owner-only. Creates one purchasable SKU (price in integer paise;
+        `mrp_paise` ≥ price when set, null/omitted means no MRP) plus its
+        inventory row (quantity 0 — stock it via the inventory adjust
+        endpoint). SKU must be unique per product (`sku_exists` → 409).
+      operationId: addVariant
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProductId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VariantCreate'
+            example:
+              sku: HP-BLK-001
+              price_paise: 149900
+              mrp_paise: 299900
+              attributes:
+                color: black
+      responses:
+        '201':
+          description: Variant created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Variant'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed JSON body or unknown field.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: No seller account (`seller_not_registered`) or not the owner (`not_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '404':
+          description: No such product (`product_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '409':
+          description: SKU already exists on this product (`sku_exists`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '422':
+          description: |
+            Validation failure — `invalid_sku` / `invalid_price` /
+            `invalid_mrp` / `invalid_attributes` / `invalid_status`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/variants/{id}:
+    patch:
+      tags: [commerce]
+      summary: Update a variant
+      description: |
+        Owner-only partial edit. `mrp_paise: null` clears the MRP (unlike
+        most fields, where explicit null means "leave unchanged").
+      operationId: updateVariant
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/VariantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VariantPatch'
+      responses:
+        '200':
+          description: The updated variant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Variant'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed JSON body or unknown field.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not the variant's owner (`not_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '404':
+          description: No such variant (`variant_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '409':
+          description: SKU already exists on this product (`sku_exists`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '422':
+          description: |
+            Validation failure — `invalid_sku` / `invalid_price` /
+            `invalid_mrp` / `invalid_attributes` / `invalid_status`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [commerce]
+      summary: Archive a variant
+      description: |
+        Owner-only archive — variants are never hard-deleted (orders
+        reference them). Returns the archived variant.
+      operationId: archiveVariant
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/VariantId'
+      responses:
+        '200':
+          description: The archived variant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Variant'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed variant id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not the variant's owner (`not_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '404':
+          description: No such variant (`variant_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/variants/{id}/inventory:
+    get:
+      tags: [commerce]
+      summary: Get a variant's stock record
+      description: |
+        The public stock record (buyers see availability). `available` is
+        quantity minus reserved; the F6 order saga owns `reserved`.
+      operationId: getInventory
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/VariantId'
+      responses:
+        '200':
+          description: The stock record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Inventory'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed variant id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No such variant (`variant_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/variants/{id}/inventory/adjust:
+    post:
+      tags: [commerce]
+      summary: Adjust inventory (signed stock movement)
+      description: |
+        Owner-only. `delta` may be negative (e.g. a warehouse recount); the
+        write is one atomic UPDATE and 409 `insufficient_stock` when the
+        delta would drive quantity below zero. `reserved` is never touched
+        here — the F6 order saga owns it.
+      operationId: adjustInventory
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/VariantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InventoryAdjust'
+            example:
+              delta: 100
+      responses:
+        '200':
+          description: The stock record after the adjustment
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Inventory'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed JSON body or unknown field.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: No seller account (`seller_not_registered`) or not the owner (`not_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '404':
+          description: No such variant (`variant_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '409':
+          description: Delta would drive stock below zero (`insufficient_stock`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
 components:
   parameters:
     UserId:
@@ -1483,6 +2272,41 @@ components:
         cursors are 400.
       schema:
         type: string
+    SellerId:
+      name: id
+      in: path
+      required: true
+      description: Seller UUID.
+      schema:
+        type: string
+        format: uuid
+    ProductId:
+      name: id
+      in: path
+      required: true
+      description: Product UUID.
+      schema:
+        type: string
+        format: uuid
+    VariantId:
+      name: id
+      in: path
+      required: true
+      description: Variant UUID.
+      schema:
+        type: string
+        format: uuid
+    CommerceListLimit:
+      name: limit
+      in: query
+      required: false
+      description: |
+        Commerce page size, 1–50. Out-of-range or non-integer values are 400.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 50
+        default: 20
     TranslateTarget:
       name: translate
       in: query
@@ -1883,6 +2707,282 @@ components:
         updated_at:
           type: string
           format: date-time
+
+    Seller:
+      type: object
+      required: [id, store_name, store_slug, status, commission_rate_bps, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        store_name:
+          type: string
+          example: Shivam Electronics
+        store_slug:
+          type: string
+          description: First-come store handle, unique, `[a-z0-9-]{3,30}`.
+          example: shivam-electronics
+        status:
+          type: string
+          enum: [active, suspended]
+        commission_rate_bps:
+          type: integer
+          description: Basis points; 0 = the 0%-commission marketplace model.
+          example: 0
+        gstin:
+          type: string
+          description: Present only when the seller supplied one.
+          example: 24ABCDE1234F1Z5
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    SellerCreate:
+      type: object
+      required: [store_name]
+      additionalProperties: false
+      properties:
+        store_name:
+          type: string
+          minLength: 1
+          description: 3–80 runes (rune-counted, not bytes).
+        store_slug:
+          type: string
+          description: |
+            Optional; derived from the store name when omitted. Lowercased
+            server-side.
+        gstin:
+          type: string
+          description: |
+            Optional; validated as a 15-character GSTIN and uppercased
+            server-side.
+    CategoryNode:
+      type: object
+      required: [id, slug, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+          example: audio
+        name:
+          type: string
+          example: Audio
+        parent_id:
+          type: string
+          format: uuid
+          description: Absent on root categories.
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/CategoryNode'
+    CategoryTree:
+      type: object
+      required: [categories]
+      properties:
+        categories:
+          type: array
+          description: Root categories with nested children.
+          items:
+            $ref: '#/components/schemas/CategoryNode'
+    Product:
+      type: object
+      required: [id, seller_id, title, description, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        seller_id:
+          type: string
+          format: uuid
+        category_id:
+          type: string
+          format: uuid
+          description: Absent when the product is uncategorized.
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [draft, active, archived]
+          description: |
+            New listings start as draft — invisible on the storefront until
+            activated. archived: owner archive (never hard-deleted).
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ProductCreate:
+      type: object
+      required: [title]
+      additionalProperties: false
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        category_slug:
+          type: string
+          description: Must exist in the curated tree (`category_not_found` otherwise).
+        status:
+          type: string
+          enum: [draft, active, archived]
+          description: Defaults to draft when omitted.
+    ProductPatch:
+      type: object
+      additionalProperties: false
+      description: |
+        Partial edit; explicit null on any field means "leave unchanged"
+        (except category_slug, where "" clears the category).
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        category_slug:
+          type: string
+          description: Empty string clears the category.
+        status:
+          type: string
+          enum: [draft, active, archived]
+    ProductPage:
+      type: object
+      required: [products]
+      properties:
+        products:
+          type: array
+          description: Newest first, keyset-paged on (created_at, id).
+          items:
+            $ref: '#/components/schemas/Product'
+        next_cursor:
+          type: string
+          description: |
+            Product id of the last returned item; pass as `cursor` for the
+            next page. Null when this is the last page.
+    Variant:
+      type: object
+      required: [id, product_id, sku, price_paise, attributes, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        product_id:
+          type: string
+          format: uuid
+        sku:
+          type: string
+          description: Unique per product.
+        price_paise:
+          type: integer
+          format: int64
+          description: Integer paise — money is never a float.
+          example: 149900
+        mrp_paise:
+          type: integer
+          format: int64
+          description: Absent when no MRP; always ≥ price_paise when set.
+        attributes:
+          type: object
+          additionalProperties:
+            type: string
+          description: String→string bag (color, size, …).
+          example: {color: black}
+        status:
+          type: string
+          enum: [active, archived]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    VariantCreate:
+      type: object
+      required: [sku, price_paise]
+      additionalProperties: false
+      properties:
+        sku:
+          type: string
+        price_paise:
+          type: integer
+          format: int64
+          description: Integer paise.
+        mrp_paise:
+          type: integer
+          format: int64
+          description: Null/omitted means no MRP.
+          nullable: true
+        attributes:
+          type: object
+          additionalProperties:
+            type: string
+        status:
+          type: string
+          enum: [active, archived]
+          description: Defaults to active when omitted.
+    VariantPatch:
+      type: object
+      additionalProperties: false
+      description: |
+        Partial edit; explicit null on a field means "leave unchanged",
+        EXCEPT mrp_paise, where explicit null clears the MRP.
+      properties:
+        sku:
+          type: string
+        price_paise:
+          type: integer
+          format: int64
+        mrp_paise:
+          type: integer
+          format: int64
+          description: Explicit null clears the MRP.
+          nullable: true
+        attributes:
+          type: object
+          additionalProperties:
+            type: string
+        status:
+          type: string
+          enum: [active, archived]
+    Inventory:
+      type: object
+      required: [variant_id, quantity, reserved, available, updated_at]
+      properties:
+        variant_id:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+          description: Total units on hand.
+        reserved:
+          type: integer
+          description: |
+            Units held by in-flight orders; owned by the F6 order saga,
+            never touched by the adjust endpoint.
+        available:
+          type: integer
+          description: quantity − reserved (what buyers may buy).
+        updated_at:
+          type: string
+          format: date-time
+    InventoryAdjust:
+      type: object
+      required: [delta]
+      additionalProperties: false
+      properties:
+        delta:
+          type: integer
+          description: |
+            Signed stock movement (may be negative). One atomic UPDATE;
+            409 `insufficient_stock` when it would drive quantity below
+            zero.
+          example: 100
 
     ErrorEnvelope:
       type: object

@@ -1330,6 +1330,33 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
     local run and restored byte-identical afterwards).
   - [ ] F1b part 2: OpenAPI updated (redocly clean) + smoke.sh commerce
     section (live-binary route smoke of the new endpoints).
+  - [x] F1b part 2 DONE 2026-10-18 ~19:30 IST: docs/openapi.yaml gains the
+    full F1a/F1b commerce surface — new `commerce` tag; 9 path items
+    (POST /v1/sellers, GET /v1/sellers/{id}, GET /v1/categories,
+    POST+GET /v1/products, GET+PATCH+DELETE /v1/products/{id},
+    POST /v1/products/{id}/variants, PATCH+DELETE /v1/variants/{id},
+    GET /v1/variants/{id}/inventory, POST inventory/adjust) with status
+    codes cross-checked against catalogError/catalogErrorCode
+    (201/200/400/401/403/404/409/422/429/500 as the handlers actually
+    emit; archived-DELETE returns 200 with the archived record, product
+    statuses draft/active/archived default draft, variant statuses
+    active/archived default active); new params SellerId/ProductId/
+    VariantId + CommerceListLimit (1–50, matches the code clamp);
+    new schemas Seller/SellerCreate/CategoryNode/CategoryTree/Product/
+    ProductCreate/ProductPatch/ProductPage/Variant/VariantCreate/
+    VariantPatch/Inventory/InventoryAdjust (money = integer paise,
+    mrp null-clear semantics documented). scripts/smoke.sh gains the
+    commerce round-trip before the chat section: throwaway per-run Hydra
+    identity (same convention as D6) → register seller 201 (asserts 0bps
+    commission) → second register 409 seller_already_registered → GET
+    seller 200 + bad id 400 → category tree (electronics → audio/mobiles)
+    → create product (asserts draft) → list newest-first → PATCH active →
+    add variant 201 (duplicate SKU 409) → inventory 0 → +100 = 100 →
+    −150 → 409 insufficient_stock → archive variant + product (cleanup,
+    nothing hard-deleted). Header comment bullet added.
+    VERIFIED: redocly lint valid, 0 warnings; bash -n clean; SPDX checker
+    green. Full compose + smoke run is CI-gated (no docker on this VM).
+    **F1 COMPLETE — next: F2 (Meilisearch search).**
 - [ ] F2: Search — Meilisearch CE (MIT, pinned version) in compose + Go
   indexer (product → index on create/update) + GET /v1/search proxy
   (filters, typo tolerance, keyset paging), docs/search.md, smoke section.
@@ -1356,6 +1383,14 @@ All boxes ticked, CI green, `scripts/smoke.sh` passes, docs complete.
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-18 ~19:32 IST: F1b part 2 done — OpenAPI gains the full F1a/F1b
+  commerce surface (commerce tag, 9 path items, 4 new params, 14 new
+  schemas; redocly valid, 0 warnings) + smoke.sh commerce round-trip
+  (throwaway Hydra identity: register 201 → dup 409 → storefront reads →
+  product CRUD → variant 201/dup-SKU 409 → inventory 0/+100/−150→409 →
+  archive cleanup). bash -n + SPDX green; CI-gated for the live run.
+  F1 COMPLETE; F2 (Meilisearch search) next. Pushed.
 
 - 2026-10-17: Plan created. Starting Phase A.
 - 2026-10-17 18:38 IST: A2 done — real JWT verification (RS256, JWKS cache+rotation, exp/iss/aud), RequireAuth middleware, AUTH_BYPASS dev mode. Verified `go build`+`go vet`+`go test ./...` green, live smoke 401/200 paths. Pushed.
