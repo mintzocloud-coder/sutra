@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/mintzocloud-coder/sutra/services/api/internal/db"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/media"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/middleware"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/social"
 )
@@ -66,6 +67,7 @@ func clientErr(err error) bool {
 		social.ErrUserNotFound, ErrPostNotFound, ErrNotAuthor,
 		ErrEmptyText, ErrTextTooLong, ErrTooManyMedia, ErrBadMediaID,
 		social.ErrInvalidCursor,
+		media.ErrUnknownMedia, media.ErrMediaNotReady, media.ErrMediaNotOwned,
 	} {
 		if errors.Is(err, e) {
 			return true
@@ -116,6 +118,15 @@ func postError(w http.ResponseWriter, r *http.Request, log *slog.Logger, op stri
 		case errors.Is(err, social.ErrUserNotFound):
 			middleware.WriteJSONError(w, r, http.StatusNotFound,
 				"user_not_found", "user not found")
+		case errors.Is(err, media.ErrUnknownMedia):
+			middleware.WriteJSONError(w, r, http.StatusUnprocessableEntity,
+				"unknown_media", "one or more media ids were never uploaded")
+		case errors.Is(err, media.ErrMediaNotReady):
+			middleware.WriteJSONError(w, r, http.StatusUnprocessableEntity,
+				"media_not_ready", "all attached media must be ready (upload, then complete, then transcode)")
+		case errors.Is(err, media.ErrMediaNotOwned):
+			middleware.WriteJSONError(w, r, http.StatusForbidden,
+				"media_not_owned", "cannot attach media owned by another user")
 		}
 		return
 	}

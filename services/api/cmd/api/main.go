@@ -17,6 +17,7 @@ import (
 	"github.com/mintzocloud-coder/sutra/services/api/internal/config"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/db"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/feed"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/media"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/middleware"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/oidc"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/otp"
@@ -42,8 +43,9 @@ func methodGuard(allowed []string, h http.Handler) http.HandlerFunc {
 // newHandler builds the full HTTP serving stack (routes + middleware) so
 // integration tests can exercise the exact same wiring as production.
 // feedSvc may be nil (unit tests): the feed route is then unregistered
-// and post handlers run without fan-out hooks.
-func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, log *slog.Logger) http.Handler {
+// and post handlers run without fan-out hooks. mediaSvc may likewise be
+// nil: the media routes are unregistered and the post media gate is off.
+func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, mediaSvc *media.Service, log *slog.Logger) http.Handler {
 	auth := middleware.RequireAuth(verifier, log, middleware.AuthOptions{
 		Bypass:        cfg.AuthBypass,
 		BypassSubject: cfg.BypassSubject,
@@ -106,6 +108,18 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedS
 
 	// Posts (D3): publish, author timeline, author-only delete.
 	postsSvc := posts.NewService(pool, cfg.PostVelocityCap)
+
+	// Media pipeline (D4 part 1): presigned uploads + the "reference only
+	// ready media" gate. mediaSvc == nil (unit tests) disables both.
+	if mediaSvc != nil {
+		postsSvc.MediaReady = mediaSvc.CheckReady
+		v1.Handle("/v1/media/upload", methodGuard([]string{http.MethodPost},
+			media.UploadHandler(mediaSvc, log)))
+		v1.Handle("/v1/media/{id}", methodGuard([]string{http.MethodGet},
+			media.MediaHandler(mediaSvc, log)))
+		v1.Handle("/v1/media/{id}/complete", methodGuard([]string{http.MethodPost},
+			media.CompleteHandler(mediaSvc, log)))
+	}
 
 	// Home feed (D3b): fan-out hooks plug the Valkey timelines into the
 	// post lifecycle. The zero value (feedSvc == nil, e.g. unit tests)
@@ -217,7 +231,19 @@ func main() {
 	log.Info("valkey connected", "addr", cfg.ValkeyAddr)
 	feedSvc := feed.NewService(pool, rdb, cfg.FanoutThreshold, cfg.TimelineMax)
 
-	handler := newHandler(cfg, pool, verifier, feedSvc, log)
+	// Media pipeline (D4): SeaweedFS object storage. Unlike Valkey, an
+	// unreachable master does NOT refuse boot — everything except
+	// POST /v1/media/upload keeps working, and that endpoint 503s
+	// honestly at request time. Log the state so operators see it.
+	mediaSvc := media.NewService(pool, rdb, cfg.SeaweedMasterAddr, cfg.MediaPublicBaseURL)
+	if err := media.PingMaster(startupCtx, cfg.SeaweedMasterAddr); err != nil {
+		log.Warn("seaweedfs master unreachable at startup — media uploads will 503 until it recovers",
+			"master", cfg.SeaweedMasterAddr, "err", err)
+	} else {
+		log.Info("seaweedfs master reachable", "master", cfg.SeaweedMasterAddr)
+	}
+
+	handler := newHandler(cfg, pool, verifier, feedSvc, mediaSvc, log)
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: handler}
 
 	go func() {

@@ -24,11 +24,12 @@ import (
 
 // benchHandler builds the exact production wiring (newHandler) with the
 // rate limiter effectively disabled so benchmarks measure the stack,
-// not the limiter. pool is nil: none of these benchmarks touch /readyz,
-// the only route that dereferences it.
+// not the limiter. pool/feedSvc/mediaSvc are nil: none of these
+// benchmarks touch /readyz, /v1/feed/* or /v1/media/*, the routes that
+// dereference them.
 func benchHandler(b *testing.B) http.Handler {
 	b.Helper()
-	return newHandler(testConfig(false), nil, testVerifier(), nil, testLogger())
+	return newHandler(testConfig(false), nil, testVerifier(), nil, nil, testLogger())
 }
 
 // serveOnce runs one request through h; shared by the sequential

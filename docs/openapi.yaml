@@ -711,6 +711,210 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /v1/media/upload:
+    post:
+      tags: [media]
+      summary: Start a media upload
+      description: |
+        Mints a media row and returns a direct SeaweedFS PUT URL
+        ("presigned" here means pre-assigned: no signature or expiry —
+        security comes from unguessable fids, the status lifecycle, and
+        the network boundary). Bytes go straight to SeaweedFS and never
+        through the API. The row starts `pending`; the client PUTs its
+        file, then calls `/v1/media/{id}/complete`. Storage-master
+        outages are 503 `media_unavailable` with Retry-After.
+      operationId: createMediaUpload
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MediaUploadRequest'
+            example:
+              kind: video
+              filename: clip.mp4
+              mime_type: video/mp4
+      responses:
+        '201':
+          description: Upload session minted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadSession'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed JSON body or unknown field.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: |
+            `invalid_media_kind` (kind not video/image),
+            `invalid_mime_type` (mime must start with the kind, e.g.
+            video/mp4), `invalid_filename` (1–255 bytes, no path
+            separators).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: |
+            `media_unavailable` — the storage master is unreachable.
+            Retriable; carries Retry-After.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+
+  /v1/media/{id}:
+    get:
+      tags: [media]
+      summary: Get one media record
+      description: |
+        Returns the media row, including lifecycle status. Clients poll
+        this while a video transcodes (status `uploaded` → `ready` or
+        `failed`). Media ids are unguessable UUIDs and rows carry no
+        PII, so any authenticated user may read.
+      operationId: getMedia
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/MediaId'
+      responses:
+        '200':
+          description: The media record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Media'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Media id is not a UUID.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No media with that id (`media_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/media/{id}/complete:
+    post:
+      tags: [media]
+      summary: Mark an upload complete
+      description: |
+        Called after the client PUT its bytes to the upload URL. The
+        API HEADs the file on SeaweedFS to confirm bytes landed (size
+        > 0): images go straight to `ready`; videos go to `uploaded`
+        and are enqueued for the transcode worker (D4 part 2). Re-
+        completing a finished upload is 409 `upload_already_completed`;
+        completing someone else's upload is 403 `media_not_owned`.
+      operationId: completeMediaUpload
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/MediaId'
+      responses:
+        '200':
+          description: Media advanced to its next status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Media'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Media id is not a UUID.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: The media belongs to another user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '404':
+          description: No media with that id (`media_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '409':
+          description: Upload already completed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '422':
+          description: |
+            `upload_bytes_missing` — no bytes found at the upload URL;
+            PUT the file first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /v1/feed/home:
     get:
       tags: [feed]
@@ -871,6 +1075,15 @@ components:
         type: string
         format: uuid
         example: 7e2a8f4c-1b3d-4e5f-8a09-b1c2d3e4f506
+    MediaId:
+      name: id
+      in: path
+      required: true
+      description: Media UUID.
+      schema:
+        type: string
+        format: uuid
+        example: 9c1f7a4d-2e6b-4a3f-8c5d-e7f9a1b2c3d4
     PageLimit:
       name: limit
       in: query
@@ -1094,6 +1307,121 @@ components:
           type: [string, 'null']
           description: |
             Opaque cursor for the next page; null on the last page.
+
+    MediaUploadRequest:
+      type: object
+      required: [kind, filename, mime_type]
+      properties:
+        kind:
+          type: string
+          enum: [video, image]
+          example: video
+        filename:
+          type: string
+          description: 1–255 bytes, no path separators.
+          example: clip.mp4
+        mime_type:
+          type: string
+          description: Must start with the kind (e.g. video/mp4).
+          example: video/mp4
+      additionalProperties: false
+
+    UploadSession:
+      type: object
+      required: [media_id, upload_url, method]
+      properties:
+        media_id:
+          type: string
+          format: uuid
+          description: The minted media id; poll it via GET /v1/media/{id}.
+        upload_url:
+          type: string
+          format: uri
+          description: Direct SeaweedFS PUT URL for the bytes.
+        method:
+          type: string
+          enum: [PUT]
+
+    Rendition:
+      type: object
+      required: [name, url, bandwidth, width, height]
+      properties:
+        name:
+          type: string
+          example: 720p
+        url:
+          type: string
+          format: uri
+          description: HLS playlist URL.
+        bandwidth:
+          type: integer
+          format: int64
+          description: Bits per second.
+        width:
+          type: integer
+        height:
+          type: integer
+
+    Media:
+      type: object
+      required: [id, owner_id, kind, status, renditions, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        owner_id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum: [video, image]
+        status:
+          type: string
+          enum: [pending, uploaded, ready, failed]
+          description: |
+            pending: upload URL minted, no bytes yet. uploaded: bytes
+            confirmed, video awaiting the transcode worker. ready: safe
+            to reference from posts. failed: worker gave up; see error.
+        filename:
+          type: string
+        mime_type:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+          description: Set when the upload completes (HEAD of the file).
+        width:
+          type: integer
+          description: Set by the transcode worker (video) or client metadata.
+        height:
+          type: integer
+        duration_ms:
+          type: integer
+          format: int64
+          description: Video only; set by the transcode worker.
+        poster_url:
+          type: string
+          format: uri
+          description: Video poster frame (set when ready).
+        renditions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Rendition'
+        playback_url:
+          type: string
+          format: uri
+          description: |
+            The original upload URL; for videos, prefer the master
+            playlist once ready.
+        error:
+          type: string
+          description: Failure reason when status is failed.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
 
     ErrorEnvelope:
       type: object

@@ -9,8 +9,9 @@
 //   - Text is capped at 500 runes (Telegram parity) — rune-counted so
 //     emoji-heavy posts are measured fairly; the DB CHECK is the
 //     backstop (char_length, same 500), Go returns 422s first.
-//   - media_ids entries are shape-validated only. The "reference only
-//     ready media" gate is enforced by the D4 media pipeline, not here.
+//   - media_ids entries are shape-validated here; the "reference only
+//     ready media" gate runs in Create via the MediaReady hook (wired
+//     to the media package's CheckReady in production, nil in tests).
 //   - The velocity cap is a rolling 1-hour COUNT per author (default 30,
 //     env-overridable). It is best-effort under concurrency: two racing
 //     creates can both pass the check and both insert. That is the
@@ -98,10 +99,14 @@ type PostPage struct {
 }
 
 // Service is the post store. velocityCapPerHour is the rolling 1-hour
-// per-author cap; <=0 selects DefaultVelocityCap.
+// per-author cap; <=0 selects DefaultVelocityCap. MediaReady, when set,
+// gates attachment: every media id must name a ready row owned by the
+// caller (the D4 "reference only ready media" rule). Nil disables the
+// gate (unit tests without a media store).
 type Service struct {
 	pool               *db.Pool
 	velocityCapPerHour int
+	MediaReady         func(ctx context.Context, ownerID pgtype.UUID, mediaIDs []string) error
 }
 
 // NewService builds the post store.
@@ -176,6 +181,14 @@ func (s *Service) Create(ctx context.Context, authorID pgtype.UUID, text string,
 	}
 	if err := ValidateMediaIDs(mediaIDs); err != nil {
 		return nil, err
+	}
+	// D4 readiness gate: shape-valid ids must name READY media owned by
+	// the caller. Runs before the velocity check so clients learn about
+	// bad attachments without burning their posting budget.
+	if s.MediaReady != nil {
+		if err := s.MediaReady(ctx, authorID, mediaIDs); err != nil {
+			return nil, err
+		}
 	}
 	if err := s.checkVelocity(ctx, authorID); err != nil {
 		return nil, err

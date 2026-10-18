@@ -31,6 +31,10 @@ type Config struct {
 	FanoutThreshold int // authors with MORE followers than this are served
 	// pull-on-read instead of fan-out-on-write; <=0 = default 10000
 	TimelineMax int // entries kept per user home timeline; <=0 = default 2000
+	// Media pipeline (D4): SeaweedFS object storage for uploads.
+	SeaweedMasterAddr  string // master for dir/assign, host:port; e.g. seaweedfs:9333
+	MediaPublicBaseURL string // client-reachable volume base URL for
+	// direct PUTs/downloads, e.g. http://localhost:8080 in dev
 }
 
 func getEnv(key, fallback string) string {
@@ -88,5 +92,7 @@ func Load() Config {
 			n, _ := strconv.Atoi(getEnv("FEED_TIMELINE_MAX", "2000"))
 			return n
 		}(),
+		SeaweedMasterAddr:  getEnv("SEAWEEDFS_MASTER_ADDR", "seaweedfs:9333"),
+		MediaPublicBaseURL: getEnv("MEDIA_PUBLIC_BASE_URL", "http://seaweedfs:8080"),
 	}
 }

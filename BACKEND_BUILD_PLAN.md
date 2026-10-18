@@ -695,15 +695,53 @@ every run. Gated items stay gated: real SMS/DLT stays post-incorporation
       cursor/limit. `go mod tidy` promoted go-redis to a direct require.
       Next: D4 (video upload pipeline).
 
-- [ ] **D4. Video upload pipeline**
-      Presigned SeaweedFS upload (POST /v1/media/upload → upload URL +
-      media_id); background Go transcode worker (FFmpeg 8.1 → HLS
-      multi-rendition + poster frame); GET /v1/media/{id} status
-      (pending/processing/ready/failed); posts reference media_ids only
-      when ready. Worker consumes a Valkey stream, backoff retries,
-      dead-letter after N attempts.
-      Accept: docs/video-pipeline.md; smoke uploads a sample clip and
-      polls to ready; worker unit tests in CI.
+- [x] **D4a. Video pipeline part 1: media registry + presigned upload**
+      Migration 0005: media table (owner, kind, status lifecycle
+      pending→uploaded→ready/failed, fids, renditions jsonb, CHECKs).
+      New `internal/media` package: presigned SeaweedFS upload
+      (POST /v1/media/upload → media row + direct PUT URL; validation
+      before any storage call, 503 `media_unavailable` when the master
+      is unreachable), GET /v1/media/{id} (status polling; any
+      authenticated user may read), POST /v1/media/{id}/complete
+      (HEADs the fid to confirm bytes: images → ready, videos →
+      uploaded + XADD onto `media:transcode` Valkey stream), CheckReady
+      gate wired into posts.Create (posts reference only ready media:
+      unknown → 422 unknown_media, unready → 422 media_not_ready,
+      foreign → 403 media_not_owned), MarkReady/MarkFailed for the
+      part-2 worker, OpenAPI updated (3 paths + Media/UploadSession/
+      Rendition schemas) — redocly lint 0 warnings.
+      Accept: go build+vet+test green; live binary smoke of all
+      routes and the posts gate.
+      DONE 2026-10-18 ~07:50 IST: `go build`+`go vet`+gofmt clean;
+      full `go test ./...` green on real PG16 (part 1 shipped with no
+      test file — service is thin DB/HTTP glue; tests arrive with the
+      worker in part 2). Two real integration bugs caught pre-push:
+      (1) unused `media` import in internal/posts (previous run left it
+      behind — build was RED); (2) bench_test.go still calling the old
+      newHandler signature (5 args) after the mediaSvc parameter was
+      added — vet was RED. Live binary smoke (real PG16 + local
+      redis): /v1/me 200 provisions user; upload bad JSON → 400,
+      unknown field → 400, bad kind → 422, valid intent with no
+      SeaweedFS → 503 `media_unavailable` + Retry-After (proves the
+      master-unreachable path); GET bad id → 400, unknown uuid → 404
+      envelope, complete unknown → 404, wrong method → 405; post with
+      unknown media_id → 422 `unknown_media`, post without media →
+      201 (gate proven). Full happy-path upload (201 + PUT + complete)
+      needs SeaweedFS — covered by the smoke.sh D4 round-trip in part
+      2 (CI has docker).
+
+- [ ] **D4b. Video pipeline part 2: transcode worker + docs + smoke**
+      Background Go worker (cmd/transcode-worker or new package):
+      FFmpeg 8.1 → HLS multi-rendition + poster frame; consumes the
+      `media:transcode` Valkey stream (consumer group), backoff
+      retries, dead-letter after N attempts; downloads from SeaweedFS,
+      uploads outputs back, calls media.MarkReady/MarkFailed;
+      worker Dockerfile with FFmpeg, compose service, health/liveness
+      notes. New docs/video-pipeline.md. smoke.sh: full clip round-
+      trip — upload intent → PUT sample clip → complete → poll GET
+      /v1/media/{id} to ready. Worker unit tests in CI.
+      Accept: docs/video-pipeline.md; smoke green; worker unit tests
+      in CI; OpenAPI already has the media paths (D4a).
 
 - [ ] **D5. Realtime post events**
       API publishes post/follower events to the chat service over an
@@ -749,3 +787,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-18 ~03:40 IST: C4 done — benchmarks: `docs/benchmarks.md` (methodology + hardware template + re-run policy; baseline tables TBD — no fabricated numbers); Go bench tests (cmd/api: Healthz seq/parallel, 404, 401, 405; middleware: limiter allow seq/parallel, envelope write, RequestID/SecurityHeaders isolation); `scripts/bench_ws.py` (stdlib Phoenix-channels-v2 load probe: conns/sec, server-confirmed msgs/sec, ack p50/p95/p99, --fail-on-errors); smoke.sh runs a short 20×10 probe with --fail-on-errors; CI go-api job runs the short bench suite. Verified: bash -n + py_compile + YAML clean, SPDX headers; bench_ws.py vs fake Phoenix server — happy 10×5 → 50/50 acks exit 0, ack-drop → errors counted + exit 3, refused port → connect errors counted + JSON exit 0. Go compile/bench CI-gated (no Go on this VM, apt locked). Pushed. **ALL PHASES COMPLETE — backend production build done; report to founder.**
 - 2026-10-18 ~04:35 IST: D1 done — real Ory identity plane in compose (Hydra v26.4.2 + Kratos v26.4.2, pinned; migrate one-shots; Kratos dev config + identity schema); Go API verifies Hydra RS256 JWTs via the unchanged A2 JWKS path (HYDRA_ISSUER/JWKS_URL/JWT_AUDIENCE explicit in compose); `internal/otp` adapter interface + fail-closed stub (`OTP_PROVIDER` env-gated, unknown provider refuses boot — proven live); `docs/identity.md` (DLT-gated SMS path + post-incorporation checklist); smoke.sh extended with the real-issuer loop (Hydra JWT → /v1/me 200 with bypass OFF, no-token → 401). Verified: go build+vet+test green, gofmt/bash/YAML/JSON/SPDX clean, `hydra create client` syntax confirmed against v2 CLI reference. Full-stack run is CI-gated. Pushed.
 - 2026-10-18 ~05:15 IST: D2 done — profiles + follow graph: migration 0003 (profiles/follows, retired users.handle), new internal/social package (PATCH /v1/me/profile with presence-flag partials + explicit-null clears, first-come handle claims via UNIQUE → 409, per-user PATCH serialization, idempotent follows 201/200/204, self-follow 422, computed counts, keyset cursor pagination, subject never exposed), 5 routes wired, OpenAPI + redocly green, smoke.sh D2 round-trip (two Hydra clients, bypass off). Verified: go build+vet+test green on real PG16 (incl. 10-racer claim race → 1 winner, 3-page pagination, HTTP envelope matrix); 2 real bugs caught by tests pre-push (next_cursor off-by-one row, DisallowUnknownFields no-op on maps → explicit allowlist); live binary smoke of all routes. Pushed.- 2026-10-18 ~05:45 IST: D3a done — posts table + CRUD (D3 part 1): migration 0004 (posts + CHECKs + author-timeline index), new internal/posts package (Create w/ validation + rolling per-author velocity cap → 429 post_velocity_limited + computed Retry-After; Get; ListByAuthor keyset on (created_at,id); author-only Delete), routes POST /v1/posts / DELETE /v1/posts/{id} / GET /v1/users/{id}/posts wired, OpenAPI + redocly green, smoke.sh posts round-trip added. Verified: go build+vet+test green on real PG16 (7 suites); 1 real bug caught pre-push (LIMIT literal vs $N param); live binary smoke 201/405/200/204/404/400 + live 429 with Retry-After. D3b (Valkey hybrid fan-out + GET /v1/feed/home + docs/feeds.md) is the next task. Pushed.
+- 2026-10-18 ~07:50 IST: D4a done — media registry + presigned upload (D4 part 1): migration 0005, internal/media (SeaweedFS dir/assign + direct PUT URLs, GET status, complete with HEAD-byte-confirmation, CheckReady gate, MarkReady/MarkFailed), 3 routes wired in main.go with the posts media gate, OpenAPI media paths + schemas (redocly 0 warnings). Two build-red bugs caught this run: unused media import in posts.go, bench_test.go stale newHandler signature — both fixed. Verified: go build+vet+gofmt clean, go test ./... green on real PG16, live binary smoke (upload 400/400/422/503+Retry-After, GET 400/404, complete 404, 405; post w/ unknown media → 422 unknown_media, post w/o media → 201). Previous run wrote this code but timed out before verify/push (4th timeout — cron body now has strict scope discipline). Pushed. Next: D4b (transcode worker + docs/video-pipeline.md + smoke clip round-trip).
