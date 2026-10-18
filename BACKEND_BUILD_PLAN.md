@@ -1458,6 +1458,38 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
   idempotent), checkout → order creation, order state machine
   (created → confirmed → shipped → delivered / cancelled / returned),
   COD-first flow (no aggregator needed for COD), OpenAPI + tests + smoke.
+  - [x] F3 part 1 DONE 2026-10-18 ~21:25 IST: cart API. Migration
+    0010_carts.sql (carts: one row per user; cart_items PK
+    (user_id, variant_id), qty 1..999, variant-side index). New
+    internal/cart package: AddItem (accumulating upsert + tx-atomic
+    stock check vs available = quantity - reserved; overflow rolls
+    back), SetQuantity (0 = remove; absent line → 404 cart_item_not_found;
+    ghost variant → 404 variant_not_found), RemoveItem (idempotent),
+    Clear (cascade), Get (buyable lines with LIVE prices from
+    product_variants + totals + unavailable_count for archived lines;
+    lines survive state flips, reactivate restores). Routes wired in
+    main.go: GET+DELETE /v1/cart (CartHandler dispatches, 405+Allow),
+    POST /v1/cart/items, PATCH+DELETE /v1/cart/items/{variant_id}
+    (CartItemHandler dispatches). Standard envelopes via
+    cartErrorCode (invalid_quantity 422 / variant_not_found 404 /
+    variant_not_available 422 / insufficient_stock 409 /
+    cart_item_not_found 404).
+    VERIFIED: gofmt/build/vet clean; full `go test ./...` green on
+    real PG16 — 8 new suites (add+get, accumulate, validation matrix,
+    set incl. stock rollback + both 404 shapes, remove/clear
+    idempotency, live-price reprice proof, archive→unavailable→reactivate,
+    empty view, error-code map); live binary smoke on a FRESH DB
+    (migration 0010 applies cleanly): register→product→variant→stock
+    → add 201 → cart totals → over-stock 409 insufficient_stock →
+    patch 200 → patch-0 204 → remove-absent 204 → ghost 404 →
+    bad-id 400 → unknown-field 400 → PUT 405 → clear 204.
+    F3 STAYS OPEN: part 2 = checkout → order creation + order state
+    machine (created → confirmed → shipped → delivered / cancelled /
+    returned), COD-first, OpenAPI, smoke.sh section.
+  - [ ] F3 part 2: checkout → order creation (COD-first, price snapshot
+    into order_items, stock re-verify + reserve), order state machine
+    transitions (seller/buyer roles), OpenAPI updated (redocly clean),
+    tests green on real PG16, smoke.sh commerce-order round-trip.
 - [ ] F4: Cashfree payment adapter — internal/payments interface
   (CreateOrder, VerifyWebhook, SplitTransfer, Payout) + fail-closed stub
   (CASHFREE_* env-gated; refuses boot without creds, loud WARN), 
@@ -1477,6 +1509,12 @@ All boxes ticked, CI green, `scripts/smoke.sh` passes, docs complete.
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-18 ~21:25 IST: F3 part 1 done — cart API (migration 0010,
+  internal/cart service + handlers + routes, 8 test suites green on
+  real PG16, full go test ./... green, live binary smoke of all 5
+  routes + error paths on a fresh DB). F3 stays open: part 2 =
+  checkout/orders/state machine. Pushed.
 
 - 2026-10-18 ~21:05 IST: F2 part 2b done — docs/search.md (index + read
   contracts, keyset-on-numbers rationale, failure modes, env table, ops)

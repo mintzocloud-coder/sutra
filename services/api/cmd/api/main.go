@@ -17,6 +17,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/mintzocloud-coder/sutra/services/api/internal/aiproxy"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/cart"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/catalog"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/config"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/db"
@@ -296,6 +297,15 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedS
 	// 503s when search is unconfigured and on upstream outages.
 	v1.Handle("/v1/search", methodGuard([]string{http.MethodGet},
 		search.SearchHandler(searchClient, log)))
+
+	// Commerce cart (F3 part 1): per-user cart. CartHandler dispatches
+	// GET/DELETE itself (405 + Allow inside, same as FollowHandler);
+	// CartItemHandler dispatches PATCH/DELETE the same way.
+	cartSvc := cart.NewService(pool)
+	v1.Handle("/v1/cart", cart.CartHandler(pool, cartSvc, log))
+	v1.Handle("/v1/cart/items", methodGuard([]string{http.MethodPost},
+		cart.AddItemHandler(pool, cartSvc, log)))
+	v1.Handle("/v1/cart/items/{variant_id}", cart.CartItemHandler(pool, cartSvc, log))
 
 	// AI core (E1): /v1/ai/* proxies to the Python AI service. Runs
 	// behind the same RequireAuth as everything else under /v1/, so the
