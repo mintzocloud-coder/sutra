@@ -251,7 +251,39 @@ services:
       seaweedfs:
         condition: service_started
 
+  # Auto-caption worker (E3 part 2): faster-whisper on CPU. Separate
+  # image from the FastAPI AI service (Dockerfile.caption) so the
+  # whisper stack never bloats the chat API. The model cache is a named
+  # volume (first boot downloads the model; restarts reuse it).
+  # Consumer-group semantics: replicas split media:captions jobs; the
+  # claim UPDATE in the media table makes redelivery safe. Liveness:
+  # worker:captions:heartbeat (TTL'd) — compose/k8s probe it.
+  caption-worker:
+    build:
+      context: ./services/ai
+      dockerfile: Dockerfile.caption
+    environment:
+      DATABASE_URL: "postgres://sutra:sutra@postgres:5432/sutra?sslmode=disable"
+      VALKEY_ADDR: "valkey:6379"
+      # Object storage: master for dir/assign, volume base for reads.
+      SEAWEEDFS_MASTER_ADDR: "seaweedfs:9333"
+      MEDIA_PUBLIC_BASE_URL: "http://seaweedfs:8080"
+      # Tuning knobs (app/captions.py defaults apply when unset):
+      # CAPTION_MODEL / CAPTION_GROUP / CAPTION_CONSUMER /
+      # CAPTION_MAX_ATTEMPTS / CAPTION_BACKOFF_BASE / CAPTION_BACKOFF_MAX /
+      # CAPTION_SWEEP_INTERVAL / CAPTION_WORK_DIR / CAPTION_MODEL_DIR
+    volumes:
+      - whisper-models:/srv/ai/models/whisper
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      seaweedfs:
+        condition: service_started
+
 volumes:
   pgdata:
   weeddata:
   ollama-data:
+  whisper-models:

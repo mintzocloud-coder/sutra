@@ -43,10 +43,26 @@ media.caption_status:  none ──→ requested ──→ processing ──→ r
   of `caption_status IN (requested, processing)` (index
   `media_caption_sweep_idx`) is the durability backstop.
 
-## Caption worker (part 2 — to build)
+## Caption worker (part 2 — implemented 2026-10-18)
 
 Python worker in `services/ai` (same process family as the chat agent;
 shares `app/db.py`'s pool + the advisory-locked migration runner):
+
+- `app/captions.py` — domain logic: CAPTION_* settings, the SQL
+  contract (claim/resolve/fail/sweep statements), WebVTT + SubRip
+  formatters, exponential backoff, job parsing. Fully unit-tested
+  (`tests/test_captions.py`, 14 tests).
+- `app/caption_worker.py` — `CaptionWorker`: consumer-group drain,
+  claim-then-transcribe, SeaweedFS round-trip (httpx), sidecar upload,
+  resolve/fail/DLQ, stuck-row sweep, TTL heartbeat. Deps are
+  constructor-injected (`Storage` / `Transcriber` / `StreamOps`), same
+  interface/fake pattern as the Go transcode worker.
+- `app/caption_main.py` — process entry point (fail-closed boot,
+  SIGTERM/SIGINT drain); `Dockerfile.caption` (own image so the
+  ~400MB whisper stack never bloats the FastAPI service); compose
+  `caption-worker` service with the `whisper-models` named volume.
+- `requirements-caption.txt` — caption-only pins
+  (`redis==8.1.0`, `faster-whisper==1.2.1`) on top of the shared base.
 
 - **Model:** faster-whisper, CPU, `base` (74M params — ~real-time on a
   modest CPU; ADR-006 notes ~6–7s per 15s clip). Model cache lives on a

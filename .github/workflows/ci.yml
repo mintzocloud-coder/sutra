@@ -47,6 +47,10 @@ jobs:
         # Gates E1: the Python AI service image must build on every push
         # (pip install of the pinned requirements runs inside).
         run: docker build -f services/ai/Dockerfile services/ai
+      - name: Build caption worker image
+        # Gates E3: the faster-whisper worker image must build on every
+        # push (pip install of requirements-caption.txt runs inside).
+        run: docker build -f services/ai/Dockerfile.caption services/ai
 
   smoke:
     name: Full-stack smoke test

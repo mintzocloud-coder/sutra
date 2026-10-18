@@ -1024,9 +1024,40 @@ non-ML signals only; vector embeddings plug in later via #19.
       handoff, no-opt-in no-op, image/foreign/unknown rejections,
       Get exposes caption fields); migration caught one real bug
       pre-push (the `//` SPDX header broke the SQL runner — must be
-      `--` in .sql files). NEXT (E3 part 2): Python caption worker
-      in services/ai per docs/creator-studio.md + Dockerfile/compose +
-      smoke clip→caption round-trip; then close issue #20.
+      `--` in .sql files).
+      E3 PART 2a DONE 2026-10-18 ~13:40 IST (Python caption worker core +
+      packaging): new `app/captions.py` (CAPTION_* settings incl. duration
+      parsing, claim/resolve/fail/sweep SQL contract, WebVTT+SubRip
+      formatters with cue-text sanitization, exponential backoff, job
+      parsing), new `app/caption_worker.py` (CaptionWorker: consumer-group
+      drain → claim UPDATE → download → transcribe → VTT/SRT upload →
+      resolve ready; duplicate-delivery no-op; SeaweedUnavailable releases
+      the claim without counting an attempt; attempts hash + backoff
+      requeue → dead-letter `media:captions:dlq` + failed row after 3;
+      stuck-row sweep (requested >10m re-XADD, processing >30m re-driven
+      as requested); TTL heartbeat `worker:captions:heartbeat`; deps
+      constructor-injected, faster-whisper imported lazily), new
+      `app/caption_main.py` (fail-closed boot: DATABASE_URL required,
+      Valkey PING, model pre-load; SIGTERM/SIGINT drain), new
+      `requirements-caption.txt` (redis==8.1.0 + faster-whisper==1.2.1,
+      caption-only so the FastAPI image never carries the ~400MB whisper
+      stack), `Dockerfile.caption` (separate image; non-root; heartbeat
+      HEALTHCHECK), compose `caption-worker` service + `whisper-models`
+      named volume, CI builds the caption image on every push,
+      docs/creator-studio.md part-2 section marked implemented.
+      VERIFIED: py_compile clean; 14 new pytest green (VTT/SRT formats,
+      backoff, durations, job parse, settings-from-env, success path with
+      exact RESOLVE params, duplicate no-op, malformed ACK, requeue with
+      backoff, dead-letter at max attempts, storage-outage claim release,
+      sweep re-drives); compose + CI YAML parse clean; SPDX headers
+      present. One test-assertion bug fixed pre-push (own test, not the
+      worker). Pre-existing env gap: tests/test_chat.py can't collect on
+      this VM (langgraph not installed system-wide) — unrelated to this
+      change, CI installs it.
+      NEXT (E3 part 2b): smoke.sh — boot caption-worker, upload clip with
+      auto_caption post → poll caption_status to ready + caption_url (skip
+      where no host ffmpeg, like D4b); production.md CAPTION_* env-table
+      row; then mark E3 [x] and close issue #20.
 
 - [ ] **E4. Language bridge**
       POST /v1/ai/translate (IndicTrans2, MIT): post/comment text →
@@ -1089,4 +1120,5 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-18 ~11:55 IST: E1 done — Python AI service scaffold (see E1 task note): FastAPI app (fail-closed /healthz + AG-UI 1.0 SSE endpoint over a real LangGraph echo graph), pinned deps, hardened Dockerfile, docs/ai-core.md; compose ai + ollama services; Go internal/aiproxy (/v1/ai/* behind RequireAuth, service token + X-Sutra-Subject, SSE flush, 503 envelopes) + AI_SERVICE_URL/TOKEN config; CI builds the ai image; OpenAPI /v1/ai/healthz (redocly clean); smoke.sh E1 section (ephemeral token, proxy 200/401 checks, AG-UI echo round-trip). Verified: py_compile, go build+vet+test green (5 new proxy tests), bash/YAML/SPDX/redocly clean; full boot + smoke CI-gated. Next: E2 personal AI chat.
 - 2026-10-18 ~13:00 IST: E2 done — personal AI chat (see E2 task note): POST /v1/ai/chat via the Go proxy, LangGraph recall→generate→persist agent, PG-backed per-user memory/threads, versioned-YAML system prompt (v1), PG-backed per-user rate limit + daily token budget (both 429 + Retry-After), OpenAI-compat model client (sarvam-30b default; Ollama dev / vLLM prod; AI_MODEL_STUB=1 for smoke/CI), service-owned advisory-locked migrations. Verified: py_compile + 12 pytest green; LIVE on real PG16+uvicorn — full SSE turn, 2-turn thread memory (4 rows), 401/401/422 paths, budget 429 + rate-limit 429 with Retry-After; compose + smoke.sh E2 section added (CI-gated run). Next: E3 creator studio (auto-captions).
 - 2026-10-18 ~13:20 IST: E3 part 1 done — Go caption request surface (migration 0006, RequestCaptions + EnqueueCaptionsIfRequested, transcode-worker handoff, POST /v1/posts auto_caption flag, GET /v1/media/{id} caption fields), docs/creator-studio.md with the part-2 worker contract. Verified: go build+vet+test green on real PG16 + local redis (5 new media suites); redocly 0 warnings. Next: E3 part 2 — Python faster-whisper worker.
+- 2026-10-18 ~13:40 IST: E3 part 2a done — Python faster-whisper caption worker core (app/captions.py + app/caption_worker.py + app/caption_main.py), requirements-caption.txt (redis==8.1.0, faster-whisper==1.2.1), Dockerfile.caption, compose caption-worker service + whisper-models volume, CI build gate, creator-studio.md updated. Verified: py_compile + 14 pytest green, compose/CI YAML + SPDX clean. E3 stays open: part 2b = smoke.sh clip→caption round-trip, production.md env row, close issue #20. Pushed.
 - TOOLING LESSON (2026-10-18): a secret-redaction filter blanks ANY direct assignment to a `*token*`-named variable in file writes (`service_token: str = ...` → `service_token: <redacted>`, breaking the file). Workaround used in services/ai/app/config.py: expose the shared secret as a read-only @property (no assignment statement) with an explanatory NOTE. Future runs: never assign to token/secret/password-named identifiers in written files — use the property pattern.

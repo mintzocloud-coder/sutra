@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# sutra-caption-worker: faster-whisper auto-captions (E3 part 2).
+# A SEPARATE image from the FastAPI AI service on purpose: the whisper
+# stack (ctranslate2 + PyAV, ~400MB) must never bloat the chat API image.
+# Multi-stage: builder installs services/ai/requirements-caption.txt
+# (pinned), runtime runs as non-root. The model cache is a named volume
+# (compose) so container restarts don't re-download the model; the first
+# boot downloads it (see the generous start-period on the HEALTHCHECK).
+# Liveness: the worker TTL-refreshes the worker:captions:heartbeat Valkey
+# key every loop — the compose/k8s probe reads it.
+
+FROM python:3.12-slim AS builder
+WORKDIR /build
+COPY requirements.txt requirements-caption.txt ./
+RUN pip install --no-cache-dir --prefix=/install -r requirements-caption.txt
+
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH=/install/bin:$PATH \
+    PYTHONPATH=/install/lib/python3.12/site-packages:/srv/ai
+WORKDIR /srv/ai
+COPY --from=builder /install /install
+COPY app ./app
+COPY migrations ./migrations
+
+RUN groupadd -r app && useradd -r -g app app \
+    && mkdir -p /srv/ai/models/whisper /tmp/captions \
+    && chown -R app:app /srv/ai /tmp/captions
+USER app
+
+# Model cache (named volume in compose): faster-whisper's download_root.
+VOLUME ["/srv/ai/models/whisper"]
+
+# Liveness: the heartbeat key the worker refreshes every loop iteration
+# (documented in docs/creator-studio.md). start-period covers the first-
+# boot model download.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
+  CMD python -c "import os,redis; h=os.environ.get('VALKEY_ADDR','valkey:6379'); host,_,port=h.partition(':'); r=redis.Redis(host=host or 'valkey',port=int(port or 6379),socket_timeout=3); raise SystemExit(0 if r.get('worker:captions:heartbeat') else 1)"
+
+ENTRYPOINT ["python", "-m", "app.caption_main"]

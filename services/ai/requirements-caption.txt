@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Caption-worker-only dependencies (E3 part 2). The caption worker is a
+# separate container (services/ai/Dockerfile.caption) precisely so the
+# FastAPI API image (services/ai/Dockerfile, requirements.txt) never
+# carries the ~400MB whisper stack: redis for the media:captions Valkey
+# stream (RESP — works against the Valkey 8 the compose stack runs),
+# faster-whisper for CPU transcription (MIT). CI installs this file for
+# the caption-worker image build.
+-r requirements.txt
+redis==8.1.0
+faster-whisper==1.2.1
