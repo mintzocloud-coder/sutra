@@ -1399,7 +1399,7 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
     POST /indexes/products/documents with the full doc (Bearer auth);
     archive → DELETE /indexes/products/documents/{id}; disabled mode →
     boots with WARN, 201, zero stub traffic.
-  - [ ] F2 part 2: variant-triggered reindex (Add/Update/ArchiveVariant
+  - [x] F2 part 2: variant-triggered reindex (Add/Update/ArchiveVariant
     → parent product doc rebuild), GET /v1/search proxy (filters,
     typo tolerance, keyset paging), docs/search.md, OpenAPI, smoke.sh
     section, production.md SEARCH_* env rows.
@@ -1713,6 +1713,27 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
     on the sutra stream (reserve inventory → confirm → ship with
     compensating actions on failure), saga state in Postgres,
     idempotent on (order_id, event_id).
+    - [x] F6 part 2a DONE 2026-10-19 ~03:35 IST: saga state store in
+      Go, against the migration-0013 schema (order_sagas +
+      saga_processed_events — already committed; NO new migration,
+      no duplicate schema). New internal/saga: Store with Start
+      (atomic row-create + event-claim via the xmax trick, isNew
+      only when row AND event are fresh), ClaimEvent (distinguishes
+      duplicate redelivery → skip from missing saga →
+      ErrNotFound), Transition (expected-state guarded, ErrStateMismatch
+      / ErrTerminalState, bumps attempts, clears last_error),
+      RecordFailure (attempts + verbatim last_error + next_retry_at
+      for the reconciler sweep), Get. States mirror 0013's CHECK
+      constraint exactly (started → reserved → confirmed →
+      awaiting_booking → shipped / compensated_cancelled /
+      dead_letter); a pure test pins the Go constants to the
+      migration's state list so drift fails fast. 6 integration
+      suites (fixture builds a real user→seller→order chain to
+      satisfy the orders FK) + 1 pure guard test, all gated on
+      TEST_DATABASE_URL. VERIFIED: gofmt/build/vet clean, full
+      `go test ./...` green (integration suites skip without a DB —
+      local PG16 vanished when the runtime VM was replaced mid-run,
+      so CI is the gate for them).
   - [ ] F6 part 3: rate limits on commerce endpoints, docs/commerce.md,
     production.md NATS_* env backfill, full smoke.sh green (incl. a
     NATS event round-trip section). Then Phase F complete.
@@ -1918,3 +1939,12 @@ Then report to founder: production-ready backend live on main.
   set-but-ignored absent). Verified: bash -n, SPDX headers, pattern
   matches real main.go WARN. No Go changes. F4 stays open: next is
   F5 (logistics gateway). Pushed.
+
+- 2026-10-19 ~03:40 IST: F6 part 2a done — internal/saga store against
+  the migration-0013 schema (no new migration, no parallel schema).
+  Caught two real problems pre-push: (1) my first draft created a
+  duplicate saga_states design + collided with the existing
+  0010_carts.sql version number (db migration-order test failed —
+  the test did its job); (2) the runtime VM was replaced mid-run,
+  wiping local PG16, so integration suites skip locally and CI is
+  the gate. Pushed.
