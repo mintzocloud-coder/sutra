@@ -1309,7 +1309,7 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
   `pg_ctlcluster 16 main start` hung this run (systemd bus); direct
   `sudo -u postgres pg_ctl -D /etc/postgresql/16/main start` worked.
   NEXT: F1b (products/variants/inventory Go ops + OpenAPI + smoke).
-- [ ] F1b: Catalog part 2 — product CRUD, variant/inventory ops
+- [x] F1b: Catalog part 2 — product CRUD, variant/inventory ops
   (internal/catalog), routes wired, OpenAPI updated (redocly clean),
   tests green on real PG16, smoke.sh commerce section.
   - [x] F1b part 1 DONE 2026-10-18 ~19:05 IST: products/variants/
@@ -1328,7 +1328,7 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
     (embedded pgserver — apt PG16 vanished when the VM was replaced
     mid-run; migration 0001's pgcrypto CREATE was relaxed ONLY for the
     local run and restored byte-identical afterwards).
-  - [ ] F1b part 2: OpenAPI updated (redocly clean) + smoke.sh commerce
+  - [x] F1b part 2: OpenAPI updated (redocly clean) + smoke.sh commerce
     section (live-binary route smoke of the new endpoints).
   - [x] F1b part 2 DONE 2026-10-18 ~19:30 IST: docs/openapi.yaml gains the
     full F1a/F1b commerce surface — new `commerce` tag; 9 path items
@@ -1357,7 +1357,7 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
     VERIFIED: redocly lint valid, 0 warnings; bash -n clean; SPDX checker
     green. Full compose + smoke run is CI-gated (no docker on this VM).
     **F1 COMPLETE — next: F2 (Meilisearch search).**
-- [ ] F2: Search — Meilisearch CE (MIT, pinned version) in compose + Go
+- [x] F2: Search — Meilisearch CE (MIT, pinned version) in compose + Go
   indexer (product → index on create/update) + GET /v1/search proxy
   (filters, typo tolerance, keyset paging), docs/search.md, smoke section.
   - [x] F2 part 1 DONE 2026-10-18 ~19:55 IST: Meilisearch in compose
@@ -1454,7 +1454,7 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
       redocly 0 warnings, SPDX checker green, YAML parse clean.
       Full compose + smoke run is CI-gated (no docker on this VM).
       **F2 COMPLETE — next: F3 (cart/checkout/orders).**
-- [ ] F3: Cart + checkout + orders — cart API (add/update/remove,
+- [x] F3: Cart + checkout + orders — cart API (add/update/remove,
   idempotent), checkout → order creation, order state machine
   (created → confirmed → shipped → delivered / cancelled / returned),
   COD-first flow (no aggregator needed for COD), OpenAPI + tests + smoke.
@@ -1552,7 +1552,7 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
     apt postgres (package lists unavailable) on this VM, same as the
     F1b part 2 note. **F3 COMPLETE — next: F4 (Cashfree payment
     adapter).**
-- [ ] F4: Cashfree payment adapter — internal/payments interface
+- [x] F4: Cashfree payment adapter — internal/payments interface
   (CreateOrder, VerifyWebhook, SplitTransfer, Payout) + fail-closed stub
   (CASHFREE_* env-gated; refuses boot without creds, loud WARN),
   docs/payments.md (Easy Split 0.1%/vendor design, UPI Intent-first,
