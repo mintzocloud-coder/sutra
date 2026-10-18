@@ -27,6 +27,14 @@
 #   - The D3 part-1 posts round-trip: A creates a post (201), an
 #     oversized body 422s, A's author timeline lists it, B's delete
 #     attempt 403s, A deletes it (204), the timeline is empty again.
+#   - The D3 part-2 home feed round-trip: A follows B, B's 3 posts fan
+#     out into A's home feed (newest first), cursor pagination walks
+#     cleanly (no dupes, terminates), deleting a post removes it from
+#     the follower's feed.
+#   - The D4 video round-trip: upload intent → PUT a sample clip to
+#     SeaweedFS → complete → the transcode worker turns it into HLS →
+#     poll to ready (poster + renditions + playback URL), then a post
+#     referencing the ready media (the posts media gate).
 # The chat release fails closed at boot without a real SECRET_KEY_BASE, so
 # this script generates an ephemeral one (kept in the environment only,
 # never written to disk or committed).
@@ -88,7 +96,8 @@ wait_for() { # wait_for <secs> <description> <command...>
 }
 
 echo "smoke: building service images"
-docker compose build --quiet api chat 2>/dev/null || docker compose build api chat
+docker compose build --quiet api chat transcode-worker 2>/dev/null \
+  || docker compose build api chat transcode-worker
 
 echo "smoke: starting postgres, valkey, seaweedfs"
 docker compose up -d postgres valkey seaweedfs
@@ -389,6 +398,97 @@ pass "delete propagation: post removed from follower feed"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
   -H "Authorization: Bearer $access_token" "$API_URL/v1/users/$id_b/follow")" = "204" ] \
   || fail "DELETE follow (feed teardown) did not return 204"
+
+# --- Video upload + transcode round-trip (D4) --------------------------------
+# The full clip journey: upload intent → PUT bytes to SeaweedFS →
+# complete → the transcode worker builds HLS + poster → poll the media
+# row to ready. The worker is started here (not with api/chat above) so
+# its liveness heartbeat gates only this section.
+echo "smoke: video upload + transcode round-trip (D4)"
+
+if ! command -v ffmpeg >/dev/null 2>&1; then
+  # The worker itself always runs ffmpeg (inside its image); only the
+  # sample-clip minting below needs a host ffmpeg. CI runners ship one;
+  # without it the section is skipped, not failed.
+  echo "smoke: SKIP — no host ffmpeg, cannot mint a sample clip"
+else
+  echo "smoke: starting transcode-worker"
+  docker compose up -d transcode-worker
+  worker_heartbeat() { # true once the worker's TTL heartbeat key exists
+    [ "$(docker compose exec -T valkey valkey-cli get worker:transcode:heartbeat \
+      2>/dev/null | tr -d '\r')" != "(nil)" ]
+  }
+  wait_for 90 "transcode-worker heartbeat" worker_heartbeat
+  pass "transcode-worker alive (heartbeat key present)"
+
+  # Mint a 2s 640x360 test clip on the host. 360p matches the lowest
+  # ladder rung exactly, so the worker never has to upscale a clip
+  # smaller than its rung widths.
+  clip="/tmp/sutra-smoke-clip.mp4"
+  ffmpeg -v error -y -f lavfi -i "testsrc=duration=2:size=640x360:rate=15" \
+    -c:v libx264 -pix_fmt yuv420p "$clip" \
+    || fail "ffmpeg could not mint the sample clip"
+
+  intent="$(curl -sf -X POST \
+    -H "Authorization: Bearer $access_token" -H 'Content-Type: application/json' \
+    -d '{"kind":"video","filename":"smoke-clip.mp4","mime_type":"video/mp4"}' \
+    "$API_URL/v1/media/upload")" || fail "POST /v1/media/upload failed"
+  media_id="$(jget "$intent" media_id)"
+  upload_url="$(jget "$intent" upload_url)"
+  [ -n "$media_id" ] && [ -n "$upload_url" ] || fail "upload intent response missing fields"
+  pass "upload intent minted ($media_id)"
+
+  # upload_url points at the compose-internal volume hostname; the host
+  # reaches the same server via localhost:8080 (seaweedfs publishes it).
+  host_upload_url="$(printf '%s' "$upload_url" | sed 's#^http://seaweedfs:8080#http://localhost:8080#')"
+  curl -sf -X PUT -H 'Content-Type: video/mp4' \
+    --data-binary "@$clip" "$host_upload_url" \
+    || fail "PUT of clip bytes to SeaweedFS failed"
+  pass "clip bytes PUT to SeaweedFS"
+
+  completed="$(curl -sf -X POST \
+    -H "Authorization: Bearer $access_token" \
+    "$API_URL/v1/media/$media_id/complete")" || fail "POST /v1/media/{id}/complete failed"
+  [ "$(jget "$completed" status)" = "uploaded" ] \
+    || fail "complete did not leave the video in 'uploaded' status"
+  pass "complete → video 'uploaded', transcode job enqueued"
+
+  # Poll for the worker to finish: ready carries poster + HLS renditions.
+  deadline=$((SECONDS + 180))
+  status=""
+  while [ $SECONDS -lt "$deadline" ]; do
+    status="$(jget "$(curl -sf -H "Authorization: Bearer $access_token" \
+      "$API_URL/v1/media/$media_id")" status)"
+    case "$status" in
+      ready|failed) break ;;
+    esac
+    sleep 3
+  done
+  [ "$status" = "ready" ] || fail "video never reached 'ready' (last status: '$status')"
+  final="$(curl -sf -H "Authorization: Bearer $access_token" \
+    "$API_URL/v1/media/$media_id")"
+  printf '%s' "$final" | python3 -c "
+import json,sys
+m=json.load(sys.stdin)
+assert m['poster_url'], 'poster_url missing'
+assert m['playback_url'], 'playback_url missing'
+assert len(m['renditions']) >= 1, 'no renditions'
+print('renditions:', ','.join(r['name'] for r in m['renditions']))
+" || fail "ready video missing poster/playback/renditions"
+  pass "video ready: poster + playback URL + HLS renditions published"
+
+  # The D4a posts gate: a post may reference the ready media.
+  media_post="$(curl -sf -X POST \
+    -H "Authorization: Bearer $access_token" -H 'Content-Type: application/json' \
+    -d "{\"text\":\"smoke clip post\",\"media_ids\":[\"$media_id\"]}" \
+    "$API_URL/v1/posts")" || fail "POST /v1/posts with ready media failed"
+  media_post_id="$(jget "$media_post" id)"
+  [ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+    -H "Authorization: Bearer $access_token" "$API_URL/v1/posts/$media_post_id")" = "204" ] \
+    || fail "cleanup delete of media post failed"
+  pass "post with ready media attached (201) — posts gate honored"
+  rm -f "$clip"
+fi
 
 # --- Chat websocket round-trip --------------------------------------------
 wait_for 90 "chat websocket listener" \

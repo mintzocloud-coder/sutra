@@ -730,7 +730,7 @@ every run. Gated items stay gated: real SMS/DLT stays post-incorporation
       needs SeaweedFS — covered by the smoke.sh D4 round-trip in part
       2 (CI has docker).
 
-- [ ] **D4b. Video pipeline part 2: transcode worker + docs + smoke**
+- [x] **D4b. Video pipeline part 2: transcode worker + docs + smoke**
       PART 1 DONE 2026-10-18 ~08:35 IST: `internal/transcode` package —
       Worker drains media:transcode via consumer group (Valkey, go-redis),
       per-job: download from SeaweedFS → ffprobe → ladder ≤ source
@@ -783,6 +783,20 @@ every run. Gated items stay gated: real SMS/DLT stays post-incorporation
       /v1/media/{id} to ready. Worker unit tests in CI.
       Accept: docs/video-pipeline.md; smoke green; worker unit tests
       in CI; OpenAPI already has the media paths (D4a).
+      PART 3 DONE 2026-10-18 ~09:30 IST: smoke.sh now carries the full
+      clip round-trip — builds + starts transcode-worker, gates on its
+      Valkey heartbeat (worker:transcode:heartbeat), mints a 2s 640x360
+      H.264 clip with host ffmpeg (matches the lowest ladder rung, no
+      upscale; SKIPs cleanly with a note where no host ffmpeg exists —
+      CI runners ship it), upload intent → PUT bytes (upload_url's
+      compose-internal hostname rewritten to localhost:8080 for the
+      host) → complete (video lands in 'uploaded') → polls GET
+      /v1/media/{id} to 'ready' → asserts poster_url + playback_url +
+      ≥1 HLS rendition → proves the D4a posts gate with a 201 media
+      post (then deletes it). VERIFIED: bash -n clean, SPDX checker
+      green, sed rewrite + clip-minting command proven live (valid
+      h264 640x360); end-to-end run is CI-gated (no docker on this VM)
+      via the smoke job. **D4b COMPLETE — next: D5 realtime post events.**
 
 - [ ] **D5. Realtime post events**
       API publishes post/follower events to the chat service over an
@@ -830,3 +844,5 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-18 ~05:15 IST: D2 done — profiles + follow graph: migration 0003 (profiles/follows, retired users.handle), new internal/social package (PATCH /v1/me/profile with presence-flag partials + explicit-null clears, first-come handle claims via UNIQUE → 409, per-user PATCH serialization, idempotent follows 201/200/204, self-follow 422, computed counts, keyset cursor pagination, subject never exposed), 5 routes wired, OpenAPI + redocly green, smoke.sh D2 round-trip (two Hydra clients, bypass off). Verified: go build+vet+test green on real PG16 (incl. 10-racer claim race → 1 winner, 3-page pagination, HTTP envelope matrix); 2 real bugs caught by tests pre-push (next_cursor off-by-one row, DisallowUnknownFields no-op on maps → explicit allowlist); live binary smoke of all routes. Pushed.- 2026-10-18 ~05:45 IST: D3a done — posts table + CRUD (D3 part 1): migration 0004 (posts + CHECKs + author-timeline index), new internal/posts package (Create w/ validation + rolling per-author velocity cap → 429 post_velocity_limited + computed Retry-After; Get; ListByAuthor keyset on (created_at,id); author-only Delete), routes POST /v1/posts / DELETE /v1/posts/{id} / GET /v1/users/{id}/posts wired, OpenAPI + redocly green, smoke.sh posts round-trip added. Verified: go build+vet+test green on real PG16 (7 suites); 1 real bug caught pre-push (LIMIT literal vs $N param); live binary smoke 201/405/200/204/404/400 + live 429 with Retry-After. D3b (Valkey hybrid fan-out + GET /v1/feed/home + docs/feeds.md) is the next task. Pushed.
 - 2026-10-18 ~07:50 IST: D4a done — media registry + presigned upload (D4 part 1): migration 0005, internal/media (SeaweedFS dir/assign + direct PUT URLs, GET status, complete with HEAD-byte-confirmation, CheckReady gate, MarkReady/MarkFailed), 3 routes wired in main.go with the posts media gate, OpenAPI media paths + schemas (redocly 0 warnings). Two build-red bugs caught this run: unused media import in posts.go, bench_test.go stale newHandler signature — both fixed. Verified: go build+vet+gofmt clean, go test ./... green on real PG16, live binary smoke (upload 400/400/422/503+Retry-After, GET 400/404, complete 404, 405; post w/ unknown media → 422 unknown_media, post w/o media → 201). Previous run wrote this code but timed out before verify/push (4th timeout — cron body now has strict scope discipline). Pushed. Next: D4b (transcode worker + docs/video-pipeline.md + smoke clip round-trip).
 - 2026-10-18 ~08:35 IST: D4b part 1 done — transcode worker core (`internal/transcode` + `cmd/transcode-worker` + TRANSCODE_* config). Consumer-group stream drain, FFmpeg HLS ladder (never upscale) + poster, SeaweedFS round-trip, exponential-backoff retries, dead-letter after 5 attempts, sweep of stuck rows, TTL heartbeat. Fixed a real D4a bug (scanMedia NULL-column crash) caught by the new tests. `go build`+`go vet`+gofmt clean; full `go test ./...` green on real PG16 (4 unit + 3 integration suites). Pushed.
+- 2026-10-18 ~09:10 IST: D4b part 2 done - worker packaging: services/api/Dockerfile.worker (Go build stage + alpine:3.20 runtime with ffmpeg apk, non-root app, own TMPDIR, pidof healthcheck backstop), compose transcode-worker service (build context services/api, DB/Valkey/SeaweedFS env, healthy-dependency ordering; consumer group splits jobs across replicas), CI compose job builds the worker image on every push, docs/video-pipeline.md (lifecycle diagram, media statuses, worker design, ladder table, outputs, failure modes, env reference, ops notes). Verified: compose + CI YAML parse clean, SPDX checker green; image build/boot are CI-gated (no docker on this VM). Next: smoke.sh full clip round-trip (D4b part 3). Rides the next push.
+- 2026-10-18 ~09:30 IST: D4b part 3 done — smoke.sh full clip round-trip (upload intent → PUT → complete → poll to ready → 201 media post). bash -n + SPDX green, clip-minting proven live; end-to-end CI-gated. **D4b complete.** Next: D5 realtime post events.
