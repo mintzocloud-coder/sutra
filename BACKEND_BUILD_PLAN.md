@@ -1145,6 +1145,37 @@ non-ML signals only; vector embeddings plug in later via #19.
       replace/extend — do NOT build embeddings here.
       Accept: docs/recsys.md with the v1 formula + #19 integration plan;
       ranking tests deterministic.
+      E5 PART 1 DONE 2026-10-18 ~15:30 IST (likes primitive + ranking
+      engine): migration 0007_likes.sql (composite PK (post_id,user_id),
+      FKs cascade, likes_user_idx); new internal/engagement package —
+      Like (idempotent 201/200 via ON CONFLICT+RETURNING, 404 unknown
+      post), Unlike (idempotent "ensure absent"), Signals (batch
+      total+trailing-24h counts, one GROUP BY per page),
+      AuthorFollowerCounts (one GROUP BY per page); routes wired in
+      main.go — POST/DELETE /v1/posts/{id}/like via methodGuard,
+      standard envelopes, 404/405 paths; new internal/feed/rank.go —
+      PURE RankScore (deterministic: recency 2^(-age/12h) + graph
+      log10(1+followers)/log10(1+100k) capped + velocity
+      min(likes24h/clamp(age,1,24)/10,1), weights env-tunable
+      REC_W_* default 0.5/0.2/0.3, normalized, degenerate→defaults) +
+      RankItems (stable, exact-tie falls back to (time,id) order, input
+      never mutated); docs/recsys.md (v1 formula table, per-page rerank
+      + pagination-cursor contract, like-spam guards deferred to E6,
+      #19 3-step integration plan: ANN candidate source → taste term →
+      eval-gate); OpenAPI like endpoints + LikeResult schema (redocly
+      0 warnings); production.md REC_W_* env rows; config.go weights.
+      VERIFIED: go build+vet+gofmt clean; full `go test ./...` green
+      on real PG16 — 14 new tests pass (6 engagement: idempotency,
+      unknown-post 404, 10-racer like → 1 row, signals batch incl.
+      aged-like window, follower counts, cascade-on-delete; 8 rank:
+      determinism ×100, hand-computed values, 3 monotonicities, [0,1]
+      bounds matrix, weight normalization/fallback, reorder, tie
+      determinism, no-mutate); live binary smoke on fresh PG (migration
+      0007 applies cleanly): like 201 → retry 200, unlike 200 count 0,
+      ghost 404 envelope, PUT 405.
+      NEXT (E5 part 2): wire ranking into GET /v1/feed/home (batch-load
+      signals per page, RankItems before translate decoration), smoke.sh
+      ranking assertion, then mark E5 [x].
 
 - [ ] **E6. Wave-2 hardening pass**
       Rate limits + abuse guards for E1–E5, eval harness skeleton
@@ -1195,4 +1226,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-18 ~13:40 IST: E3 part 2a done — Python faster-whisper caption worker core (app/captions.py + app/caption_worker.py + app/caption_main.py), requirements-caption.txt (redis==8.1.0, faster-whisper==1.2.1), Dockerfile.caption, compose caption-worker service + whisper-models volume, CI build gate, creator-studio.md updated. Verified: py_compile + 14 pytest green, compose/CI YAML + SPDX clean. E3 stays open: part 2b = smoke.sh clip→caption round-trip, production.md env row, close issue #20. Pushed.
 - TOOLING LESSON (2026-10-18): a secret-redaction filter blanks ANY direct assignment to a `*token*`-named variable in file writes (`service_token: str = ...` → `service_token: <redacted>`, breaking the file). Workaround used in services/ai/app/config.py: expose the shared secret as a read-only @property (no assignment statement) with an explanatory NOTE. Future runs: never assign to token/secret/password-named identifiers in written files — use the property pattern.
 - 2026-10-18 ~14:05 IST: E3 part 2b done — smoke.sh full auto-caption round-trip (caption-worker built+booted, heartbeat-gated; sample clip mints with a sine audio track for faster-whisper; post with auto_caption=true → RequestCaptions → poll caption_status→ready → caption_url VTT asserted → cleanup delete), production.md "Caption worker" env section (13 vars), issue #20 closed. bash -n + SPDX green; end-to-end CI-gated. **E3 COMPLETE.** Next: E4 language bridge (IndicTrans2).
-- 2026-10-18 ~14:45 IST: E4 part 2 done — feed ?translate=xx (see E4 task note): internal/feed/translate.go (Translator, 14-code allowlist, FeedItem, 6s-budget best-effort decoration), HomeFeedHandler + main.go wiring (fail-closed on bad URL, loud WARN when disabled), 9 new Go tests green, OpenAPI TranslateTarget + FeedItem/FeedPage schemas (redocly clean), smoke.sh E4 section (stub round-trip: /v1/ai/translate → "[hi] namaste duniya"; feed ?translate=gu decorates item; ?translate=xx → 400), production.md "AI service" env section, language-bridge.md feed section marked implemented. Full compose + CI smoke CI-gated. **E4 COMPLETE.** Next: E5 recommendations v1 (non-ML).
+- 2026-10-18 ~14:45 IST: E4 part 2 done — feed ?translate=xx (see E4 task note): internal/feed/translate.go (Translator, 14-code allowlist, FeedItem, 6s-budget best-effort decoration), HomeFeedHandler + main.go wiring (fail-closed on bad URL, loud WARN when disabled), 9 new Go tests green, OpenAPI TranslateTarget + FeedItem/FeedPage schemas (redocly clean), smoke.sh E4 section (stub round-trip: /v1/ai/translate → "[hi] namaste duniya"; feed ?translate=gu decorates item; ?translate=xx → 400), production.md "AI service" env section, language-bridge.md feed section marked implemented. Full compose + CI smoke CI-gated. **E4 COMPLETE.** Next: E5 recommendations v1 (non-ML).- 2026-10-18 ~15:30 IST: E5 part 1 done — likes primitive + ranking engine (see E5 task note): migration 0007, internal/engagement (Like/Unlike/Signals/AuthorFollowerCounts), POST+DELETE /v1/posts/{id}/like wired in main.go, internal/feed/rank.go pure deterministic scorer + RankItems, docs/recsys.md (v1 formula + #19 integration plan), OpenAPI like endpoints (redocly clean), production.md REC_W_* rows. Verified: go build+vet+gofmt clean, go test ./... green on real PG16 (14 new tests pass), live binary smoke of all like routes. E5 stays open: part 2 = feed/home wiring + smoke assertion. Pushed.

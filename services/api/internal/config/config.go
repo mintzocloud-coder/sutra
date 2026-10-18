@@ -34,6 +34,13 @@ type Config struct {
 	FanoutThreshold int // authors with MORE followers than this are served
 	// pull-on-read instead of fan-out-on-write; <=0 = default 10000
 	TimelineMax int // entries kept per user home timeline; <=0 = default 2000
+	// Recommendations v1 (E5): home-feed ranking weights — recency
+	// decay + follow-graph boost + engagement velocity. The ranker
+	// normalizes them to sum 1; non-positive/degenerate values fall
+	// back to the defaults (0.5/0.2/0.3).
+	RankWRecency    float64
+	RankWGraph      float64
+	RankWEngagement float64
 	// Media pipeline (D4): SeaweedFS object storage for uploads.
 	SeaweedMasterAddr  string // master for dir/assign, host:port; e.g. seaweedfs:9333
 	MediaPublicBaseURL string // client-reachable volume base URL for
@@ -117,6 +124,19 @@ func Load() Config {
 		TimelineMax: func() int {
 			n, _ := strconv.Atoi(getEnv("FEED_TIMELINE_MAX", "2000"))
 			return n
+		}(),
+		// Recommendations v1 (E5): ranking term weights.
+		RankWRecency: func() float64 {
+			f, _ := strconv.ParseFloat(getEnv("REC_W_RECENCY", "0.5"), 64)
+			return f
+		}(),
+		RankWGraph: func() float64 {
+			f, _ := strconv.ParseFloat(getEnv("REC_W_GRAPH", "0.2"), 64)
+			return f
+		}(),
+		RankWEngagement: func() float64 {
+			f, _ := strconv.ParseFloat(getEnv("REC_W_ENGAGEMENT", "0.3"), 64)
+			return f
 		}(),
 		SeaweedMasterAddr:  getEnv("SEAWEEDFS_MASTER_ADDR", "seaweedfs:9333"),
 		MediaPublicBaseURL: getEnv("MEDIA_PUBLIC_BASE_URL", "http://seaweedfs:8080"),

@@ -82,6 +82,9 @@ CORS_ORIGINS=https://app.sutra.example.com
 | `OTP_PROVIDER` | `stub` | Phone-OTP SMS gateway: only `stub` exists until DLT registration post-incorporation; any other value makes the API refuse to boot (fail-closed) (D1) |
 | `FANOUT_THRESHOLD` | `10000` | Authors above this follower count merge on read instead of fan-out-on-write (D3b) |
 | `FEED_TIMELINE_MAX` | `2000` | Home-timeline sorted-set trim: each user's `feed:home:{id}` keeps at most this many entries (D3b) |
+| `REC_W_RECENCY` | `0.5` | Home-feed rank weight: recency decay (12h half-life). Weights are normalized to sum 1; degenerate values fall back to defaults (E5) |
+| `REC_W_GRAPH` | `0.2` | Home-feed rank weight: follow-graph boost (log10 followers, 100k ref) (E5) |
+| `REC_W_ENGAGEMENT` | `0.3` | Home-feed rank weight: engagement velocity (recent likes/hour, capped 10/h) (E5) |
 | `SEAWEEDFS_MASTER_ADDR` | `seaweedfs:9333` | SeaweedFS master (dir/assign) for the media upload path (D4) |
 | `MEDIA_PUBLIC_BASE_URL` | `http://seaweedfs:8080` | Volume-server base used for presigned PUT URLs and playback/poster URLs (D4) |
 | `TRANSCODE_GROUP` | `transcode-workers` | Valkey consumer-group for the `media:transcode` stream; replicas share it so jobs distribute (D4b) |

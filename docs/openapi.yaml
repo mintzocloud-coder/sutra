@@ -849,6 +849,114 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /v1/posts/{id}/like:
+    post:
+      tags: [posts, engagement]
+      summary: Like a post
+      description: |
+        Records the caller's like. Idempotent: liking twice is a no-op
+        (201 first time, 200 on retry — mirroring follow). Likes are the
+        engagement signal feeding the v1 home-feed ranker (docs/recsys.md).
+      operationId: likePost
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PostId'
+      responses:
+        '201':
+          description: Post liked (first time).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LikeResult'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '200':
+          description: Already liked (idempotent retry); current count returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LikeResult'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed post id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No such post.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '405':
+          description: Wrong method — this route only supports POST and DELETE.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Allow:
+              description: Supported methods for this route
+              schema:
+                type: string
+                example: POST, DELETE
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [posts, engagement]
+      summary: Unlike a post
+      description: |
+        Removes the caller's like. Idempotent "ensure absent": unliking an
+        unliked (or unknown) post is a no-op success — 200 with the current
+        count so clients can update UI state without a refetch.
+      operationId: unlikePost
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PostId'
+      responses:
+        '200':
+          description: Like removed (or was already absent).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LikeResult'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed post id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /v1/media/upload:
     post:
       tags: [media]
@@ -1470,6 +1578,18 @@ components:
           type: [string, 'null']
           description: |
             Opaque cursor for the next page; null on the last page.
+
+    LikeResult:
+      type: object
+      required: [liked, like_count]
+      properties:
+        liked:
+          type: boolean
+          description: Whether the caller currently likes the post.
+        like_count:
+          type: integer
+          minimum: 0
+          description: Current all-time like count of the post.
 
     FeedItem:
       allOf:

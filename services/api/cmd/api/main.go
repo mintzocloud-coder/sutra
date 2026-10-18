@@ -18,6 +18,7 @@ import (
 	"github.com/mintzocloud-coder/sutra/services/api/internal/aiproxy"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/config"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/db"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/engagement"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/feed"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/media"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/middleware"
@@ -201,6 +202,12 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedS
 		posts.CreatePostHandler(postsSvc, feedHooks, log)))
 	v1.Handle("/v1/posts/{id}", methodGuard([]string{http.MethodDelete},
 		posts.DeletePostHandler(postsSvc, feedHooks, log)))
+	// Recommendations v1 (E5): likes are the engagement signal feeding
+	// the home-feed ranker. One route dispatches POST (like) and DELETE
+	// (unlike); both are idempotent.
+	engagementSvc := engagement.NewService(pool)
+	v1.Handle("/v1/posts/{id}/like", methodGuard([]string{http.MethodPost, http.MethodDelete},
+		engagement.LikeHandler(pool, engagementSvc, log)))
 	v1.Handle("/v1/users/{id}/posts", methodGuard([]string{http.MethodGet},
 		posts.UserPostsHandler(postsSvc, pool, log)))
 
