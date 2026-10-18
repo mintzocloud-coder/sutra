@@ -2,6 +2,7 @@
 package posts
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -18,6 +19,26 @@ import (
 // maxPostBody caps POST bodies: posts are small (500 runes + metadata);
 // anything bigger is abuse, not a post.
 const maxPostBody = 64 << 10
+
+// PublishHooks are side effects the post handlers run after a post is
+// durably stored or deleted. The home-feed fan-out (D3b, internal/feed)
+// plugs in here; the zero value is a no-op so the posts package stays
+// usable standalone (and unit-testable without Valkey).
+type PublishHooks struct {
+	// AfterCreate fans a new post out to secondary stores (home
+	// timelines). A non-nil error triggers the compensating rollback:
+	// the post is deleted again and the request fails 503 — 201 always
+	// means "visible in home timelines", so a client retry is safe.
+	AfterCreate func(ctx context.Context, p *Post) error
+	// AfterDelete removes a post from secondary stores. Best-effort:
+	// the feed read path drops posts missing from PostgreSQL, so a
+	// failure here is logged, never fatal.
+	AfterDelete func(ctx context.Context, postID string) error
+}
+
+// noHooks is the explicit "no secondary stores" PublishHooks for
+// call sites that want the zero value spelled out.
+var noHooks = PublishHooks{}
 
 // writeJSON encodes v as a JSON response.
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -105,7 +126,10 @@ func postError(w http.ResponseWriter, r *http.Request, log *slog.Logger, op stri
 
 // CreatePostHandler serves POST /v1/posts: publish a post as the caller.
 // Unknown JSON fields are rejected (strict API, same rule as profiles).
-func CreatePostHandler(svc *Service, log *slog.Logger) http.HandlerFunc {
+// After the row is durably stored, hooks.AfterCreate fans it out; if the
+// fan-out fails the post is rolled back and the request fails 503, so a
+// 201 always means "visible in home timelines" and a retry is safe.
+func CreatePostHandler(svc *Service, hooks PublishHooks, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		authorID, ok := social.CallerUUID(w, r, svc.pool, log)
 		if !ok {
@@ -151,14 +175,37 @@ func CreatePostHandler(svc *Service, log *slog.Logger) http.HandlerFunc {
 			postError(w, r, log, "create post", err)
 			return
 		}
+		if hooks.AfterCreate != nil {
+			if err := hooks.AfterCreate(r.Context(), post); err != nil {
+				// Compensating rollback: the post never became visible,
+				// so the client can safely retry the whole request.
+				postID, perr := social.ParseUserID(post.ID)
+				if perr == nil {
+					if rerr := svc.Delete(r.Context(), postID, authorID); rerr != nil {
+						log.Error("posts: fan-out failed AND rollback failed — orphan post",
+							"post_id", post.ID, "fanout_err", err, "rollback_err", rerr,
+							"request_id", middleware.FromContext(r.Context()))
+					}
+				}
+				log.Error("posts: fan-out failed; post rolled back", "post_id", post.ID,
+					"err", err, "request_id", middleware.FromContext(r.Context()))
+				// 503, not 500: this is an infrastructure outage — the
+				// client should back off and retry, not treat it as a bug.
+				w.Header().Set("Retry-After", "5")
+				middleware.WriteJSONError(w, r, http.StatusServiceUnavailable,
+					"feed_unavailable", "home feed temporarily unavailable; please retry")
+				return
+			}
+		}
 		writeJSON(w, http.StatusCreated, post)
 	}
 }
 
 // DeletePostHandler serves DELETE /v1/posts/{id}: author-only delete.
 // 204 on success; 404 for unknown posts; 403 when the caller is not
-// the author.
-func DeletePostHandler(svc *Service, log *slog.Logger) http.HandlerFunc {
+// the author. hooks.AfterDelete un-fans the post out of home timelines
+// (best-effort — the read path drops missing posts anyway).
+func DeletePostHandler(svc *Service, hooks PublishHooks, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := targetPostID(w, r)
 		if !ok {
@@ -171,6 +218,16 @@ func DeletePostHandler(svc *Service, log *slog.Logger) http.HandlerFunc {
 		if err := svc.Delete(r.Context(), id, callerID); err != nil {
 			postError(w, r, log, "delete post", err)
 			return
+		}
+		if hooks.AfterDelete != nil {
+			if err := hooks.AfterDelete(r.Context(), id.String()); err != nil {
+				// Best-effort: the feed read path rehydrates pushed ids
+				// against PostgreSQL and drops missing rows, so a lost
+				// unfan-out leaves a hole, never a ghost post.
+				log.Warn("posts: feed unfan-out failed (best-effort; read path self-heals)",
+					"post_id", id.String(), "err", err,
+					"request_id", middleware.FromContext(r.Context()))
+			}
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}

@@ -28,7 +28,7 @@ import (
 // the only route that dereferences it.
 func benchHandler(b *testing.B) http.Handler {
 	b.Helper()
-	return newHandler(testConfig(false), nil, testVerifier(), testLogger())
+	return newHandler(testConfig(false), nil, testVerifier(), nil, testLogger())
 }
 
 // serveOnce runs one request through h; shared by the sequential

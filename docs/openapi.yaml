@@ -711,6 +711,81 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /v1/feed/home:
+    get:
+      tags: [feed]
+      summary: Get the caller's home timeline
+      description: |
+        The caller's home feed: posts by followed authors plus the
+        caller's own posts, newest first. Hybrid fan-out / fan-in
+        (see docs/feeds.md): normal authors are fanned out to Valkey
+        timelines on write; authors with more than FANOUT_THRESHOLD
+        followers (default 10,000) are merged in from PostgreSQL at read
+        time. Keyset-paginated — pass `next_cursor` for the next page;
+        null `next_cursor` means the last page. A downed timeline store
+        is 503 `feed_unavailable` with Retry-After (infrastructure
+        outage, not a client bug); author timelines and post CRUD are
+        unaffected.
+      operationId: getHomeFeed
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageLimit'
+        - $ref: '#/components/parameters/PageCursor'
+      responses:
+        '200':
+          description: One page of the home feed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostPage'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Bad limit or malformed cursor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '405':
+          description: Wrong method — this route only supports GET.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Allow:
+              description: Supported methods for this route
+              schema:
+                type: string
+                example: GET
+        '503':
+          description: Timeline store unavailable — back off and retry.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying
+              schema:
+                type: integer
+                example: 5
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                error:
+                  code: feed_unavailable
+                  message: home feed temporarily unavailable; please retry
+                  request_id: 01J... (echoed)
   /v1/users/{id}/posts:
     get:
       tags: [posts]

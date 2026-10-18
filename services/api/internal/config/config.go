@@ -27,6 +27,10 @@ type Config struct {
 	OTPProvider     string   // SMS gateway for phone OTP: "stub" until DLT
 	// registration post-incorporation (see internal/otp, docs/identity.md)
 	PostVelocityCap int // posts per rolling hour per author (D3); <=0 = default 30
+	// Home feed (D3b): hybrid fan-out / fan-in on Valkey sorted sets.
+	FanoutThreshold int // authors with MORE followers than this are served
+	// pull-on-read instead of fan-out-on-write; <=0 = default 10000
+	TimelineMax int // entries kept per user home timeline; <=0 = default 2000
 }
 
 func getEnv(key, fallback string) string {
@@ -74,6 +78,14 @@ func Load() Config {
 		OTPProvider:     getEnv("OTP_PROVIDER", "stub"),
 		PostVelocityCap: func() int {
 			n, _ := strconv.Atoi(getEnv("POST_VELOCITY_PER_HOUR", "30"))
+			return n
+		}(),
+		FanoutThreshold: func() int {
+			n, _ := strconv.Atoi(getEnv("FANOUT_THRESHOLD", "10000"))
+			return n
+		}(),
+		TimelineMax: func() int {
+			n, _ := strconv.Atoi(getEnv("FEED_TIMELINE_MAX", "2000"))
 			return n
 		}(),
 	}

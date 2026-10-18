@@ -666,7 +666,7 @@ every run. Gated items stay gated: real SMS/DLT stays post-incorporation
       201/405/200/204/404/400 all correct; POST_VELOCITY_PER_HOUR=1 →
       live 429 `post_velocity_limited` + `Retry-After: 3584`. Pushed.
 
-- [ ] **D3b. Feed timelines: Valkey hybrid fan-out (D3 part 2)**
+- [x] **D3b. Feed timelines: Valkey hybrid fan-out (D3 part 2)**
       Valkey sorted-set home timelines: fan-out-on-write to followers'
       home timelines, except high-follower authors (FANOUT_THRESHOLD env,
       default 10k) whose posts merge on read. Go API: GET /v1/feed/home
@@ -677,6 +677,23 @@ every run. Gated items stay gated: real SMS/DLT stays post-incorporation
       already exists; compose already runs valkey:8.
       Accept: docs/feeds.md documents the hybrid model; tests cover
       push path, pull path, merge ordering, delete propagation.
+      DONE 2026-10-18 ~07:10 IST: `internal/feed` (Service: FanoutPost/
+      UnfanoutPost/HomeFeed; GET /v1/feed/home handler; publish hooks in
+      posts handlers with compensating rollback on fan-out failure →
+      503), config FANOUT_THRESHOLD/FEED_TIMELINE_MAX, docs/feeds.md,
+      OpenAPI + redocly green, smoke.sh D3-part-2 round-trip.
+      VERIFIED: `go build`+`go vet`+gofmt clean; full `go test ./...`
+      green on real PG16 + real Redis — 6 pure unit + 7 integration
+      suites. Review caught 2 REAL pagination bugs pre-push, both with
+      regression tests (proven to FAIL on the old code): (1) the cursor
+      path emitted the same-score tail AFTER lower scores, corrupting
+      newest-first order and dropping a tied post; (2) a merge-starved
+      stream was marked done with entries unconsumed, silently losing
+      posts. Live binary smoke: follow → 3 posts → feed newest-first,
+      2+2 pagination terminates, pre-follow post correctly absent,
+      delete → 204 + propagation, author sees own posts, 400 on bad
+      cursor/limit. `go mod tidy` promoted go-redis to a direct require.
+      Next: D4 (video upload pipeline).
 
 - [ ] **D4. Video upload pipeline**
       Presigned SeaweedFS upload (POST /v1/media/upload → upload URL +

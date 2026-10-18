@@ -12,8 +12,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/mintzocloud-coder/sutra/services/api/internal/config"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/db"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/feed"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/middleware"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/oidc"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/otp"
@@ -38,7 +41,9 @@ func methodGuard(allowed []string, h http.Handler) http.HandlerFunc {
 
 // newHandler builds the full HTTP serving stack (routes + middleware) so
 // integration tests can exercise the exact same wiring as production.
-func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, log *slog.Logger) http.Handler {
+// feedSvc may be nil (unit tests): the feed route is then unregistered
+// and post handlers run without fan-out hooks.
+func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, log *slog.Logger) http.Handler {
 	auth := middleware.RequireAuth(verifier, log, middleware.AuthOptions{
 		Bypass:        cfg.AuthBypass,
 		BypassSubject: cfg.BypassSubject,
@@ -99,13 +104,27 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, log *
 	v1.Handle("/v1/users/{id}/following", methodGuard([]string{http.MethodGet},
 		social.FollowingHandler(pool, log)))
 
-	// Posts (D3 part 1): publish, author timeline, author-only delete.
-	// The home feed (Valkey fan-out) lands in D3 part 2.
+	// Posts (D3): publish, author timeline, author-only delete.
 	postsSvc := posts.NewService(pool, cfg.PostVelocityCap)
+
+	// Home feed (D3b): fan-out hooks plug the Valkey timelines into the
+	// post lifecycle. The zero value (feedSvc == nil, e.g. unit tests)
+	// disables them: posts stay pure-PostgreSQL.
+	feedHooks := posts.PublishHooks{}
+	if feedSvc != nil {
+		feedHooks.AfterCreate = func(ctx context.Context, p *posts.Post) error {
+			return feedSvc.FanoutPost(ctx, p)
+		}
+		feedHooks.AfterDelete = func(ctx context.Context, postID string) error {
+			return feedSvc.UnfanoutPost(ctx, postID)
+		}
+		v1.Handle("/v1/feed/home", methodGuard([]string{http.MethodGet},
+			feed.HomeFeedHandler(pool, feedSvc, log)))
+	}
 	v1.Handle("/v1/posts", methodGuard([]string{http.MethodPost},
-		posts.CreatePostHandler(postsSvc, log)))
+		posts.CreatePostHandler(postsSvc, feedHooks, log)))
 	v1.Handle("/v1/posts/{id}", methodGuard([]string{http.MethodDelete},
-		posts.DeletePostHandler(postsSvc, log)))
+		posts.DeletePostHandler(postsSvc, feedHooks, log)))
 	v1.Handle("/v1/users/{id}/posts", methodGuard([]string{http.MethodGet},
 		posts.UserPostsHandler(postsSvc, pool, log)))
 
@@ -180,7 +199,25 @@ func main() {
 	startupCancel()
 	defer pool.Close()
 
-	handler := newHandler(cfg, pool, verifier, log)
+	// Home-feed timeline store (D3b): fail closed at boot. Without
+	// Valkey, post creation could never satisfy its "201 means visible
+	// in home timelines" contract (the handler rolls back on fan-out
+	// failure), so refuse to start rather than serve a silently broken
+	// feed. Mid-run outages degrade to 503s on feed paths and self-heal.
+	rdb := redis.NewClient(&redis.Options{Addr: cfg.ValkeyAddr})
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := rdb.Ping(pingCtx).Err(); err != nil {
+		pingCancel()
+		log.Error("valkey unavailable at startup — refusing to start",
+			"addr", cfg.ValkeyAddr, "err", err)
+		os.Exit(1)
+	}
+	pingCancel()
+	defer rdb.Close()
+	log.Info("valkey connected", "addr", cfg.ValkeyAddr)
+	feedSvc := feed.NewService(pool, rdb, cfg.FanoutThreshold, cfg.TimelineMax)
+
+	handler := newHandler(cfg, pool, verifier, feedSvc, log)
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: handler}
 
 	go func() {

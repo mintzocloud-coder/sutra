@@ -322,6 +322,74 @@ timeline_after="$(curl -sf -H "Authorization: Bearer $access_token" \
   || fail "author timeline not empty after delete"
 pass "author timeline empty after delete"
 
+# --- Home feed round-trip (D3 part 2) ---------------------------------------
+# A follows B again; B posts; A's home feed carries B's post (fan-out on
+# write). Pagination walks cleanly (no dupes, terminates), and deleting a
+# post removes it from the follower's feed (delete propagation).
+echo "smoke: home feed round-trip (D3 part 2)"
+
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $access_token" "$API_URL/v1/users/$id_b/follow")" = "201" ] \
+  || fail "POST follow A→B (feed setup) did not return 201"
+
+feed_post() {
+  curl -sf -X POST \
+    -H "Authorization: Bearer $token_b" -H 'Content-Type: application/json' \
+    -d "{\"text\":\"$1\"}" \
+    "$API_URL/v1/posts" || fail "POST /v1/posts (feed setup) failed"
+}
+fp1="$(feed_post "feed post one")"; fpid1="$(jget "$fp1" id)"
+fp2="$(feed_post "feed post two")"; fpid2="$(jget "$fp2" id)"
+fp3="$(feed_post "feed post three")"; fpid3="$(jget "$fp3" id)"
+[ -n "$fpid1" ] && [ -n "$fpid2" ] && [ -n "$fpid3" ] || fail "feed post ids missing"
+pass "B published 3 posts (fan-out on write)"
+
+# A's home feed lists all three, newest first.
+feed1="$(curl -sf -H "Authorization: Bearer $access_token" \
+  "$API_URL/v1/feed/home?limit=10")" || fail "GET /v1/feed/home failed"
+[ "$(printf '%s' "$feed1" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["items"]))')" = "3" ] \
+  || fail "home feed does not list all 3 posts"
+[ "$(printf '%s' "$feed1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["items"][0]["id"])')" = "$fpid3" ] \
+  || fail "home feed not newest-first"
+pass "home feed lists B's 3 posts, newest first"
+
+# Pagination: limit=2 → pages of 2 and 1, no dupes, terminates.
+p1="$(curl -sf -H "Authorization: Bearer $access_token" \
+  "$API_URL/v1/feed/home?limit=2")" || fail "feed page 1 failed"
+c1="$(printf '%s' "$p1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["next_cursor"] or "")')"
+[ -n "$c1" ] || fail "feed page 1 missing next_cursor"
+p2="$(curl -sf -H "Authorization: Bearer $access_token" \
+  "$API_URL/v1/feed/home?limit=2&cursor=$c1")" || fail "feed page 2 failed"
+c2="$(printf '%s' "$p2" | python3 -c 'import json,sys; print(json.load(sys.stdin)["next_cursor"] or "")')"
+[ -z "$c2" ] || fail "feed page 2 should be the last page"
+all_ids="$(printf '%s\n%s' "$p1" "$p2" | python3 -c '
+import json,sys
+ids=[it["id"] for pg in sys.stdin for it in json.loads(pg)["items"]]
+print(len(ids), len(set(ids)))')"
+[ "$all_ids" = "3 3" ] || fail "feed pagination lost/duplicated posts ($all_ids)"
+pass "feed pagination: 2+1 pages, no dupes, terminates"
+
+# Delete propagation: B deletes post two → it leaves A's feed.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+  -H "Authorization: Bearer $token_b" "$API_URL/v1/posts/$fpid2")" = "204" ] \
+  || fail "delete of feed post did not return 204"
+feed_after="$(curl -sf -H "Authorization: Bearer $access_token" \
+  "$API_URL/v1/feed/home?limit=10")" || fail "GET /v1/feed/home after delete failed"
+[ "$(printf '%s' "$feed_after" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["items"]))')" = "2" ] \
+  || fail "deleted post still in home feed"
+printf '%s' "$feed_after" | python3 -c "
+import json,sys
+ids=[it['id'] for it in json.load(sys.stdin)['items']]
+assert '$fpid2' not in ids, 'deleted post id still present'
+assert '$fpid1' in ids and '$fpid3' in ids, 'wrong posts remain'
+" || fail "delete propagation left wrong state"
+pass "delete propagation: post removed from follower feed"
+
+# A unfollows B so later runs start clean.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+  -H "Authorization: Bearer $access_token" "$API_URL/v1/users/$id_b/follow")" = "204" ] \
+  || fail "DELETE follow (feed teardown) did not return 204"
+
 # --- Chat websocket round-trip --------------------------------------------
 wait_for 90 "chat websocket listener" \
   python3 -c "import socket; socket.create_connection(('$CHAT_HOST', $CHAT_PORT), timeout=3).close()"
