@@ -1267,6 +1267,43 @@ non-ML signals only; vector embeddings plug in later via #19.
       finishes — the next worker run checks the four jobs and reports.
       **E6 COMPLETE — Phase E complete (CI confirmation pending).**
 
+## Phase F — Wave 3: Commerce (marketplace + payments + logistics)
+
+Builds Mintzo's commerce core: seller catalog, search, cart/checkout,
+COD-first orders, Cashfree payment adapter (fail-closed stub until
+post-incorporation onboarding), logistics gateway, order saga over NATS
+JetStream. Follows the Wave-3 research: custom Go marketplace (Meesho
+0%-commission model), Meilisearch CE (MIT, pinned) self-hosted, Cashfree
+Easy Split + Payouts (Razorpay Route discontinued 1 Jan 2026; UPI Collect
+deprecated 28 Feb 2026 → Intent-first). GATED: real payment-aggregator
+onboarding + KYC start AFTER investors (founder order 2026-10-17) — the
+Cashfree adapter stays a fail-closed stub with the integration contract
+documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
+
+- [ ] F1: Seller + catalog data model — migrations (sellers, categories,
+  products, product_variants, inventory), internal/catalog Go package
+  (seller record, product CRUD, variant/inventory ops, 0%-commission price
+  model), routes wired, OpenAPI (redocly clean), tests green on real PG16.
+- [ ] F2: Search — Meilisearch CE (MIT, pinned version) in compose + Go
+  indexer (product → index on create/update) + GET /v1/search proxy
+  (filters, typo tolerance, keyset paging), docs/search.md, smoke section.
+- [ ] F3: Cart + checkout + orders — cart API (add/update/remove,
+  idempotent), checkout → order creation, order state machine
+  (created → confirmed → shipped → delivered / cancelled / returned),
+  COD-first flow (no aggregator needed for COD), OpenAPI + tests + smoke.
+- [ ] F4: Cashfree payment adapter — internal/payments interface
+  (CreateOrder, VerifyWebhook, SplitTransfer, Payout) + fail-closed stub
+  (CASHFREE_* env-gated; refuses boot without creds, loud WARN), 
+  docs/payments.md (Easy Split 0.1%/vendor design, UPI Intent-first,
+  post-incorporation onboarding checklist).
+- [ ] F5: Logistics gateway — internal/logistics interface (CreateShipment,
+  Track, Cancel) + stub provider, shipment events → Elixir realtime
+  (user:<id> topics), COD remittance tracking fields, docs/logistics.md.
+- [ ] F6: Order saga + Wave-3 hardening — NATS JetStream order events, Go
+  saga orchestrator (reserve inventory → confirm → ship, compensating
+  actions on failure), rate limits on commerce endpoints, docs/commerce.md,
+  production.md env backfill, full smoke.sh green. Then Phase F complete.
+
 ## Done when
 
 All boxes ticked, CI green, `scripts/smoke.sh` passes, docs complete.
