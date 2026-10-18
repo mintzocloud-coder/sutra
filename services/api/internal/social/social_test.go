@@ -500,7 +500,7 @@ func testServer(t *testing.T, pool *db.Pool, subject string) *httptest.Server {
 	}
 	mux.Handle("/v1/me/profile", allow([]string{http.MethodPatch}, ProfileHandler(pool, log)))
 	mux.Handle("/v1/users/{id}", allow([]string{http.MethodGet}, UserHandler(pool, log)))
-	mux.Handle("/v1/users/{id}/follow", FollowHandler(pool, log))
+	mux.Handle("/v1/users/{id}/follow", FollowHandler(pool, FollowHooks{}, log))
 	mux.Handle("/v1/users/{id}/followers", allow([]string{http.MethodGet}, FollowersHandler(pool, log)))
 	mux.Handle("/v1/users/{id}/following", allow([]string{http.MethodGet}, FollowingHandler(pool, log)))
 

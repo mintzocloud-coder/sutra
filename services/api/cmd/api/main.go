@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/mintzocloud-coder/sutra/services/api/internal/config"
@@ -22,6 +23,7 @@ import (
 	"github.com/mintzocloud-coder/sutra/services/api/internal/oidc"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/otp"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/posts"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/realtime"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/social"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/users"
 )
@@ -45,7 +47,8 @@ func methodGuard(allowed []string, h http.Handler) http.HandlerFunc {
 // feedSvc may be nil (unit tests): the feed route is then unregistered
 // and post handlers run without fan-out hooks. mediaSvc may likewise be
 // nil: the media routes are unregistered and the post media gate is off.
-func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, mediaSvc *media.Service, log *slog.Logger) http.Handler {
+// rt may be nil: realtime event hooks are then unregistered.
+func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, mediaSvc *media.Service, rt realtime.Publisher, log *slog.Logger) http.Handler {
 	auth := middleware.RequireAuth(verifier, log, middleware.AuthOptions{
 		Bypass:        cfg.AuthBypass,
 		BypassSubject: cfg.BypassSubject,
@@ -100,7 +103,22 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedS
 	v1.Handle("/v1/users/{id}", methodGuard([]string{http.MethodGet},
 		social.UserHandler(pool, log)))
 	// FollowHandler dispatches POST/DELETE itself (405 + Allow inside).
-	v1.Handle("/v1/users/{id}/follow", social.FollowHandler(pool, log))
+	// The AfterFollow hook publishes follower:new to the chat service
+	// (D5) — best-effort, after the 201 is already written.
+	followHooks := social.FollowHooks{}
+	if rt != nil && rt.Enabled() {
+		followHooks.AfterFollow = func(ctx context.Context, follower, followee pgtype.UUID) {
+			go func() {
+				fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+				defer cancel()
+				if err := realtime.PublishFollowerNew(fctx, pool, follower, followee, rt); err != nil {
+					log.Warn("realtime: follower:new publish failed (best-effort)",
+						"err", err)
+				}
+			}()
+		}
+	}
+	v1.Handle("/v1/users/{id}/follow", social.FollowHandler(pool, followHooks, log))
 	v1.Handle("/v1/users/{id}/followers", methodGuard([]string{http.MethodGet},
 		social.FollowersHandler(pool, log)))
 	v1.Handle("/v1/users/{id}/following", methodGuard([]string{http.MethodGet},
@@ -123,11 +141,27 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedS
 
 	// Home feed (D3b): fan-out hooks plug the Valkey timelines into the
 	// post lifecycle. The zero value (feedSvc == nil, e.g. unit tests)
-	// disables them: posts stay pure-PostgreSQL.
+	// disables them: posts stay pure-PostgreSQL. Realtime events (D5)
+	// ride along: after a successful fan-out, post:new is published to
+	// the followers' user topics on the chat service — best-effort, in a
+	// detached goroutine, so a slow chat service can never delay the 201.
 	feedHooks := posts.PublishHooks{}
 	if feedSvc != nil {
 		feedHooks.AfterCreate = func(ctx context.Context, p *posts.Post) error {
-			return feedSvc.FanoutPost(ctx, p)
+			if err := feedSvc.FanoutPost(ctx, p); err != nil {
+				return err
+			}
+			if rt != nil && rt.Enabled() {
+				go func() {
+					pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+					defer cancel()
+					if err := realtime.PublishPostNew(pctx, pool, p, cfg.FanoutThreshold, rt); err != nil {
+						log.Warn("realtime: post:new publish failed (best-effort)",
+							"post_id", p.ID, "err", err)
+					}
+				}()
+			}
+			return nil
 		}
 		feedHooks.AfterDelete = func(ctx context.Context, postID string) error {
 			return feedSvc.UnfanoutPost(ctx, postID)
@@ -243,7 +277,20 @@ func main() {
 		log.Info("seaweedfs master reachable", "master", cfg.SeaweedMasterAddr)
 	}
 
-	handler := newHandler(cfg, pool, verifier, feedSvc, mediaSvc, log)
+	// Realtime events (D5): publish post:new / follower:new to the chat
+	// service's internal signed endpoint. Empty token = disabled (dev
+	// default); a token with a bad URL is a configuration bug — refuse
+	// to boot rather than silently drop events.
+	rtPub, err := realtime.NewPublisher(cfg.ChatInternalURL, cfg.ChatInternalToken, log)
+	if err != nil {
+		log.Error("invalid realtime config — refusing to start", "err", err)
+		os.Exit(1)
+	}
+	if rtPub.Enabled() {
+		log.Info("realtime events enabled", "chat", cfg.ChatInternalURL)
+	}
+
+	handler := newHandler(cfg, pool, verifier, feedSvc, mediaSvc, rtPub, log)
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: handler}
 
 	go func() {

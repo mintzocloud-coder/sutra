@@ -2,6 +2,7 @@
 package social
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -18,6 +19,15 @@ import (
 // maxPatchBody caps PATCH bodies: profiles are small; anything bigger is
 // abuse, not a profile.
 const maxPatchBody = 64 << 10
+
+// FollowHooks are side effects the follow handler runs after a NEW follow
+// edge is created. Idempotent retries of an existing edge (200) do NOT
+// fire hooks — the user already got their notification the first time.
+type FollowHooks struct {
+	// AfterFollow runs after a new follow edge is committed. Best-effort:
+	// a failure is logged by the hook owner, never returned to the client.
+	AfterFollow func(ctx context.Context, follower, followee pgtype.UUID)
+}
 
 // writeJSON encodes v as a JSON response.
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -195,7 +205,7 @@ func UserHandler(pool *db.Pool, log *slog.Logger) http.HandlerFunc {
 // FollowHandler serves POST and DELETE /v1/users/{id}/follow.
 // POST is idempotent: 201 on a new edge, 200 when it already existed.
 // DELETE is idempotent: 204 whether or not the edge existed.
-func FollowHandler(pool *db.Pool, log *slog.Logger) http.HandlerFunc {
+func FollowHandler(pool *db.Pool, hooks FollowHooks, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost, http.MethodDelete:
@@ -226,6 +236,9 @@ func FollowHandler(pool *db.Pool, log *slog.Logger) http.HandlerFunc {
 				"following": true,
 				"user_id":   followee.String(),
 			})
+			if isNew && hooks.AfterFollow != nil {
+				hooks.AfterFollow(r.Context(), follower, followee)
+			}
 			return
 		}
 

@@ -44,6 +44,12 @@ type Config struct {
 	TranscodeBackoffBase   time.Duration
 	TranscodeBackoffMax    time.Duration
 	TranscodeSweepInterval time.Duration
+	// Realtime events (D5): publish post:new / follower:new to the chat
+	// service's internal signed endpoint. Empty ChatInternalToken disables
+	// eventing entirely (dev default); a token with a bad URL makes the
+	// API refuse to boot (fail-closed).
+	ChatInternalURL   string // e.g. http://chat:4000; path /internal/events appended
+	ChatInternalToken string // shared service-to-service secret; never commit
 }
 
 func getEnv(key, fallback string) string {
@@ -142,5 +148,7 @@ func Load() Config {
 			}
 			return d
 		}(),
+		ChatInternalURL:   getEnv("CHAT_INTERNAL_URL", "http://chat:4000"),
+		ChatInternalToken: getEnv("CHAT_INTERNAL_TOKEN", ""),
 	}
 }

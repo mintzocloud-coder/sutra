@@ -29,7 +29,7 @@ import (
 // dereference them.
 func benchHandler(b *testing.B) http.Handler {
 	b.Helper()
-	return newHandler(testConfig(false), nil, testVerifier(), nil, nil, testLogger())
+	return newHandler(testConfig(false), nil, testVerifier(), nil, nil, nil, testLogger())
 }
 
 // serveOnce runs one request through h; shared by the sequential

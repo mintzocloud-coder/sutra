@@ -146,6 +146,14 @@ services:
       # Dev-only auth bypass for scripts/smoke.sh (the API logs a loud
       # WARN when this is set; never enable in production).
       AUTH_BYPASS: ${AUTH_BYPASS:-}
+      # Realtime social events (D5): the chat service's internal signed
+      # endpoint. URL default is the compose service name; the token is
+      # empty by default, which DISABLES eventing (dev default — the API
+      # logs a WARN at startup). Set CHAT_INTERNAL_TOKEN to a long random
+      # secret (same value as the chat service's) to enable post:new /
+      # follower:new delivery. Never commit a real token here.
+      CHAT_INTERNAL_URL: "http://chat:4000"
+      CHAT_INTERNAL_TOKEN: ${CHAT_INTERNAL_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy
