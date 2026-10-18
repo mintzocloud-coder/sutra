@@ -35,6 +35,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/mintzocloud-coder/sutra/services/api/internal/db"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/events"
 )
 
 // Status is an order lifecycle status.
@@ -143,10 +144,38 @@ type Summary struct {
 }
 
 // Service owns the orders tables.
-type Service struct{ pool *db.Pool }
+type Service struct {
+	pool *db.Pool
+	// EventHook fires AFTER the database write commits — once per
+	// order from Checkout, once per Transition. The zero value (nil)
+	// disables event emission. The hook receives the request context;
+	// implementations must detach and bound their own deadline (see
+	// cmd/api/main.go) so publishing can never delay the response.
+	EventHook func(ctx context.Context, ev events.OrderEvent)
+}
 
 // NewService wires the service to the shared pool.
 func NewService(pool *db.Pool) *Service { return &Service{pool: pool} }
+
+// emitEvent builds the order event envelope and fires the hook. It
+// is a no-op when no hook is installed (unit tests, disabled bus).
+func (s *Service) emitEvent(ctx context.Context, event string, o *Order) {
+	if s.EventHook == nil {
+		return
+	}
+	s.EventHook(ctx, events.OrderEvent{
+		Event:         event,
+		EventID:       events.NewEventID(),
+		OrderID:       o.ID,
+		BuyerID:       o.BuyerID,
+		SellerID:      o.SellerID,
+		Status:        o.Status,
+		TotalPaise:    o.TotalPaise,
+		PaymentMethod: o.PaymentMethod,
+		OccurredAt:    time.Now().Unix(),
+		Version:       1,
+	})
+}
 
 // lineIn is one verified checkout line (cart data + live snapshot).
 type lineIn struct {
@@ -311,6 +340,11 @@ func (s *Service) Checkout(ctx context.Context, buyerID pgtype.UUID) ([]*Order, 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
+	// Events fire only after the commit lands: the bus is a
+	// notification channel, Postgres is the system of record.
+	for _, ord := range out {
+		s.emitEvent(ctx, events.OrderCreated, ord)
+	}
 	return out, nil
 }
 
@@ -452,6 +486,8 @@ func (s *Service) Transition(ctx context.Context, callerID, orderID pgtype.UUID,
 	if err != nil {
 		return nil, err
 	}
+	// Fire after the commit above: consumers see only durable state.
+	s.emitEvent(ctx, events.OrderStatusChanged, &ord)
 	return &ord, nil
 }
 

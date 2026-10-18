@@ -40,6 +40,17 @@ services:
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-sutra-dev-master-key}
     volumes: [meili_data:/meili_data]
 
+  # Events (F6 part 1): NATS JetStream order event bus. JetStream (-js)
+  # with a persistent store dir; the API creates the "sutra" stream on
+  # boot (sutra.orders.>). No healthcheck: the image is scratch-based
+  # (no shell/curl) and the API's connect-retry covers slow starts —
+  # the meilisearch precedent applies.
+  nats:
+    image: nats:2.11
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    ports: ["4222:4222", "8222:8222"]
+    volumes: [nats_data:/data]
+
   seaweedfs:
     image: chrislusf/seaweedfs:3.92
     command: "server -dir=/data -volume.max=10 -master.volumeSizeLimitMB=1024 -ip=seaweedfs"
@@ -246,6 +257,10 @@ services:
       # enable product search. Never commit a real key here.
       SEARCH_URL: "http://meilisearch:7700"
       SEARCH_MASTER_KEY: ${SEARCH_MASTER_KEY:-}
+      # Events (F6 part 1): NATS JetStream order event bus. Set in
+      # compose so checkout/status transitions publish order.created
+      # and order.status_changed; empty (local dev) disables the bus.
+      NATS_URL: "nats://nats:4222"
       # Payments (F4 part 1): payment-aggregator seam. Only "stub" boots
       # until the Cashfree onboarding completes post-investors — any other
       # PAYMENTS_PROVIDER makes the API refuse to boot (fail-closed), and
@@ -343,5 +358,6 @@ volumes:
   pgdata:
   weeddata:
   meili_data:
+  nats_data:
   ollama-data:
   whisper-models:

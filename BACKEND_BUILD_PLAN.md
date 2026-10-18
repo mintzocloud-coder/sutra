@@ -1676,6 +1676,46 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
   saga orchestrator (reserve inventory → confirm → ship, compensating
   actions on failure), rate limits on commerce endpoints, docs/commerce.md,
   production.md env backfill, full smoke.sh green. Then Phase F complete.
+  - [x] F6 part 1 DONE 2026-10-19 ~02:10 IST: event bus seam (NATS
+    JetStream in compose + new internal/events package + order event
+    wiring). Compose: `nats` service (`nats:2.11` pin verified on
+    Docker Hub, `-js` with persistent /data on nats_data volume; no
+    healthcheck — scratch image ships no shell, API connect-retry
+    covers slow starts, the meilisearch precedent) + api NATS_URL
+    passthrough. New internal/events package: OrderEvent envelope
+    (order.created / order.status_changed; uuid ids, paise totals,
+    unix timestamps, version 1; strict Validate), EventBus interface,
+    NewBus with the standard contracts (empty NATS_URL = disabled
+    no-op + loud WARN; bad scheme or unreachable URL = fail-closed,
+    refuse-to-boot, credentials redacted), JetStream stream "sutra"
+    (subjects sutra.orders.>, 24h msg-id dedupe), idempotent
+    ensure-once, PublishOrderEvent (validate → marshal → publish with
+    Nats-Msg-Id = event_id, 5s inner bound). nats.go v1.37.0 pinned
+    (go-1.20 compatible — v1.54.0 needs go >= 1.26 and CI pins 1.22).
+    orders.Service gains EventHook (nil = disabled); Checkout fires
+    order.created per order and Transition fires order.status_changed
+    AFTER the commit; read paths (Get) untouched. main.go: bus built
+    fail-closed next to the search client; hook installed in newHandler
+    (bus passed as a param like searchClient, nil in tests) —
+    detached, best-effort, 15s ctx, WARN on failure, never delays the
+    201. config NatsURL (empty default = disabled).
+    VERIFIED: gofmt/build/vet clean; 8 new events unit suites green
+    (validation matrix, subject mapping, event-id uniqueness, disabled
+    no-op, bad-scheme + unreachable fail-closed, validate-before-wire,
+    URL redaction); cmd/api tests green; compose YAML parses; SPDX
+    checker green; LIVE proof vs real nats-server 2.11.17 (JetStream):
+    stream auto-created, double publish deduped to 1 message, payload
+    round-tripped on sutra.orders.created. The live proof caught a real
+    nil-Header panic in PublishOrderEvent (nats.Msg Header is a nil map
+    — fixed by initializing it before Set); unit tests could not have
+    caught it.
+  - [ ] F6 part 2: Go saga orchestrator — durable JetStream consumer
+    on the sutra stream (reserve inventory → confirm → ship with
+    compensating actions on failure), saga state in Postgres,
+    idempotent on (order_id, event_id).
+  - [ ] F6 part 3: rate limits on commerce endpoints, docs/commerce.md,
+    production.md NATS_* env backfill, full smoke.sh green (incl. a
+    NATS event round-trip section). Then Phase F complete.
 
 ## Done when
 

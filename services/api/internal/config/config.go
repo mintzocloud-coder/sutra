@@ -70,6 +70,11 @@ type Config struct {
 	// (fail-closed), mirroring the AI proxy contract.
 	SearchURL       string // e.g. http://meilisearch:7700
 	SearchMasterKey string // Meilisearch master key; never commit
+	// Events (F6): NATS JetStream order event bus. Empty NatsURL
+	// disables publishing (dev default — the API logs a WARN); a URL
+	// that will not connect refuses to boot (fail-closed), mirroring
+	// the search contract.
+	NatsURL string // e.g. nats://nats:4222; empty = bus disabled
 	// Payments (F4): payment-aggregator seam. PAYMENTS_PROVIDER is
 	// "stub" until the Cashfree onboarding completes post-investors
 	// (see internal/payments, docs/payments.md); any other value
@@ -211,6 +216,7 @@ func Load() Config {
 		AIServiceToken:    getEnv("AI_SERVICE_TOKEN", ""),
 		SearchURL:         getEnv("SEARCH_URL", "http://meilisearch:7700"),
 		SearchMasterKey:   getEnv("SEARCH_MASTER_KEY", ""),
+		NatsURL:           getEnv("NATS_URL", ""),
 		PaymentsProvider:  getEnv("PAYMENTS_PROVIDER", "stub"),
 		CashfreeAppID:     getEnv("CASHFREE_APP_ID", ""),
 		CashfreeSecret:    getEnv("CASHFREE_SECRET_KEY", ""),

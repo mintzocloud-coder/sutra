@@ -22,6 +22,7 @@ import (
 	"github.com/mintzocloud-coder/sutra/services/api/internal/config"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/db"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/engagement"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/events"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/feed"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/logistics"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/media"
@@ -60,7 +61,7 @@ func methodGuard(allowed []string, h http.Handler) http.HandlerFunc {
 // be nil: the /v1/ai/* proxy routes are then unregistered. translator
 // may be nil or disabled: ?translate= is then a no-op and feed items
 // keep their original text.
-func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, mediaSvc *media.Service, rt realtime.Publisher, aiProxy *aiproxy.Proxy, log *slog.Logger, translator *feed.Translator, searchClient *search.Client) http.Handler {
+func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, mediaSvc *media.Service, rt realtime.Publisher, aiProxy *aiproxy.Proxy, log *slog.Logger, translator *feed.Translator, searchClient *search.Client, orderBus events.EventBus) http.Handler {
 	auth := middleware.RequireAuth(verifier, log, middleware.AuthOptions{
 		Bypass:        cfg.AuthBypass,
 		BypassSubject: cfg.BypassSubject,
@@ -315,6 +316,20 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedS
 	// (list, ?role=buyer|seller) itself (405 + Allow inside);
 	// OrderStatusHandler takes PATCH only (405 + Allow inside).
 	ordersSvc := orders.NewService(pool)
+	// Order events (F6 part 1): the hook detaches with its own 15s
+	// deadline — publishing is best-effort and never delays the order
+	// response. A nil bus (tests) means no event emission.
+	if orderBus != nil && orderBus.Enabled() {
+		ordersSvc.EventHook = func(ctx context.Context, ev events.OrderEvent) {
+			go func() {
+				cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+				defer cancel()
+				if err := orderBus.PublishOrderEvent(cctx, ev); err != nil {
+					log.Warn("events: order event publish failed", "event", ev.Event, "order_id", ev.OrderID, "err", err)
+				}
+			}()
+		}
+	}
 	v1.Handle("/v1/orders", orders.OrdersHandler(pool, ordersSvc, log))
 	v1.Handle("/v1/orders/{id}", methodGuard([]string{http.MethodGet},
 		orders.OrderDetailHandler(pool, ordersSvc, log)))
@@ -534,7 +549,20 @@ func main() {
 		log.Info("product search indexing enabled", "search", cfg.SearchURL)
 	}
 
-	handler := newHandler(cfg, pool, verifier, feedSvc, mediaSvc, rtPub, aiProxy, log, translator, searchClient)
+	// Order events (F6 part 1): NATS JetStream order bus. Empty URL =
+	// disabled (loud WARN, no-op bus); a URL that will not connect is
+	// a configuration bug — refuse to boot, same as search/realtime/
+	// aiproxy.
+	orderBus, err := events.NewBus(cfg.NatsURL, log)
+	if err != nil {
+		log.Error("invalid NATS config — refusing to start", "err", err)
+		os.Exit(1)
+	}
+	if orderBus.Enabled() {
+		log.Info("order event bus enabled", "nats", cfg.NatsURL)
+	}
+
+	handler := newHandler(cfg, pool, verifier, feedSvc, mediaSvc, rtPub, aiProxy, log, translator, searchClient, orderBus)
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: handler}
 
 	go func() {
