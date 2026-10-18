@@ -890,6 +890,63 @@ every run. Gated items stay gated: real SMS/DLT stays post-incorporation
       clean; full smoke + CI green are CI-gated (no docker on this VM).
       **D6 COMPLETE — Phase D (Wave 1) complete.**
 
+## Phase E — Wave 2: AI core (epic #11)
+
+E-tasks build the AI layer on the Wave-1 product: a Python AI service
+(LangGraph + AG-UI), personal AI, creator studio, language bridge, and
+recommendations v1. Same rules as A–D: no placeholders, CI-gated
+verification, push every run, scope discipline (§6 of the cron body).
+
+CONFLICT RULE: issue #19 (pgvector embeddings pipeline) is reserved for
+Hacktoberfest contributors — the worker MUST NOT implement it. E5 uses
+non-ML signals only; vector embeddings plug in later via #19.
+
+- [ ] **E1. Python AI service scaffold**
+      New `services/ai` (FastAPI): /healthz, AG-UI protocol endpoint
+      skeleton, LangGraph graph stub with one echo node, Ollama added to
+      docker-compose.yml (dev model pull documented), vLLM noted for prod
+      in docs/ai-core.md. Go API proxies /v1/ai/* → ai service (internal
+      service token). Implements issue #18 → close it when done.
+      Accept: compose boots ai service; smoke hits /v1/ai/healthz 200.
+
+- [ ] **E2. Personal AI chat**
+      POST /v1/ai/chat (SSE streaming): LangGraph agent with PG-backed
+      conversation memory (per-user threads), Sarvam-30B via Ollama in
+      dev (model name env-configurable; vLLM endpoint env for prod),
+      system prompt from versioned YAML (never hardcode persona), per-user
+      rate limit + daily token budget guard.
+      Accept: streaming chat round-trip in smoke; token-budget 429 path
+      tested.
+
+- [ ] **E3. Creator studio: auto-captions**
+      faster-whisper worker (CPU) consuming the transcode pipeline:
+      on media ready → transcribe → VTT/SRT sidecar in SeaweedFS →
+      media status exposes caption_url. POST /v1/posts accepts
+      auto_caption flag. Implements issue #20 → close it when done.
+      Accept: docs/creator-studio.md; smoke uploads clip, polls caption
+      ready (CI-gated where no ffmpeg).
+
+- [ ] **E4. Language bridge**
+      POST /v1/ai/translate (IndicTrans2, MIT): post/comment text →
+      target language (hi/gu/ta/bn/te/en…); cached in Valkey by
+      (hash, target); per-user rate limit. Feed endpoint gains
+      ?translate=xx convenience (best-effort, never blocks feed read).
+      Accept: translation round-trip test (CI-gated model download).
+
+- [ ] **E5. Recommendations v1 (non-ML)**
+      Home-feed ranking v1: score = recency decay + follow-graph boost +
+      engagement velocity, computed in Go at read time (no new infra).
+      Documented as the baseline that #19's vector embeddings will
+      replace/extend — do NOT build embeddings here.
+      Accept: docs/recsys.md with the v1 formula + #19 integration plan;
+      ranking tests deterministic.
+
+- [ ] **E6. Wave-2 hardening pass**
+      Rate limits + abuse guards for E1–E5, eval harness skeleton
+      (golden prompt set, run script, results gitignored), OpenAPI for
+      /v1/ai/*, production.md + benchmarks.md updated, full smoke green.
+      Accept: CI green, smoke green, docs complete. **Phase E complete.**
+
 ## Done when
 
 All boxes ticked, CI green, `scripts/smoke.sh` passes, docs complete.
