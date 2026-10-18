@@ -6,7 +6,15 @@ config :sutra_chat, SutraChatWeb.Endpoint,
   adapter: Bandit.PhoenixAdapter,
   http: [ip: {0, 0, 0, 0}, port: 4000],
   server: true,
-  secret_key_base: "dev-only-secret-key-base-replace-in-prod-0123456789abcdef"
+  secret_key_base: "dev-only-secret-key-base-replace-in-prod-0123456789abcdef",
+  # PubSub the endpoint broadcasts/subscribes through. Started as
+  # {Phoenix.PubSub, name: SutraChat.PubSub} in the application
+  # supervision tree; Phoenix.Presence uses the same server. Without
+  # this, Endpoint.broadcast/3 + Endpoint.subscribe/2 raise
+  # "no :pubsub_server configured" — which broke both the
+  # D5 /internal/events fan-out and every channel test that subscribes
+  # via the endpoint (CI red 2026-10-18).
+  pubsub_server: SutraChat.PubSub
 
 # Lets `mix ecto.*` find the repo. Connection details: dev defaults here,
 # prod comes from DATABASE_URL in config/runtime.exs.

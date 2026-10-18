@@ -44,6 +44,9 @@
 #     a throwaway Hydra identity proves post 429 (post_velocity_limited
 #     + Retry-After) and follow 429 (follow_velocity_limited +
 #     Retry-After), while an idempotent follow retry still 200s.
+#   - The E6 AG-UI abuse guard: the ai service is recreated with
+#     AI_AGUI_RPM=1 and a throwaway Hydra identity proves the echo
+#     endpoint streams first, then 429s (ai_rate_limited + Retry-After).
 # The chat release fails closed at boot without a real SECRET_KEY_BASE, so
 # this script generates an ephemeral one (kept in the environment only,
 # never written to disk or committed).
@@ -315,6 +318,73 @@ wait_for 120 "ai /healthz (defaults restored)" curl -sf http://localhost:8000/he
 # NOTE: the api is intentionally left running WITHOUT the bypass from here
 # on — the more production-faithful state. Nothing later in this script
 # needs the bypass (chat keeps its own for the websocket round-trip).
+
+# --- AG-UI rate-limit guard (E6) -------------------------------------------
+# The /ag-ui/run echo endpoint costs no model tokens, but before E6 it was
+# the one AI endpoint with no per-user limit — an unbounded SSE stream is
+# an abuse vector. E6 closed it with the same PG-backed fixed-window
+# limiter as /chat (AI_AGUI_RPM, default 60/min; the token budget does not
+# apply because an echo turn spends zero tokens).
+echo "smoke: AG-UI rate-limit guard (E6)"
+
+echo "smoke: recreating ai with AI_AGUI_RPM=1"
+AI_AGUI_RPM=1 docker compose up -d --no-deps ai
+wait_for 120 "ai /healthz (agui rpm=1)" curl -sf http://localhost:8000/healthz
+
+agui_client="sutra-smoke-g-$(date +%s)"
+echo "smoke: creating hydra oauth2 client '$agui_client'"
+SMOKE_HYDRA_CLIENT_G_SECRET="${SMOKE_HYDRA_CLIENT_G_SECRET:-$(openssl rand -hex 16)}"
+if ! docker compose run --rm hydra hydra create client \
+    --endpoint http://hydra:4445 \
+    --id "$agui_client" \
+    --secret "$SMOKE_HYDRA_CLIENT_G_SECRET" \
+    --grant-type client_credentials \
+    --grant-type urn:ietf:params:oauth:grant-type:jwt-bearer \
+    --response-type token \
+    --scope openid \
+    --audience sutra-api \
+    --token-endpoint-auth-method client_secret_basic \
+    >/tmp/sutra-hydra-client-g.out 2>&1; then
+  cat /tmp/sutra-hydra-client-g.out >&2
+  fail "hydra oauth2 client '$agui_client' creation failed"
+else
+  pass "hydra oauth2 client '$agui_client' created"
+fi
+
+token_g_json="$(curl -sf -u "$agui_client:$SMOKE_HYDRA_CLIENT_G_SECRET" \
+  --data-urlencode 'grant_type=client_credentials' \
+  --data-urlencode 'audience=sutra-api' \
+  --data-urlencode 'scope=openid' \
+  http://localhost:4444/oauth2/token)" || fail "hydra token request for '$agui_client' failed"
+token_g="$(printf '%s' "$token_g_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
+
+# A fresh subject gets a fresh fixed window: with rpm=1 the first run
+# streams normally and the second must 429. Loop (like the E2 chat guard)
+# to survive a minute-boundary rollover between attempts; each attempt
+# captures status + body + headers so the final 429's envelope and
+# Retry-After header can be asserted (the D6 velocity pattern).
+agui_body="$(mktemp)"
+agui_hdr="$(mktemp)"
+agui_code="200"
+for _ in 1 2 3 4 5; do
+  agui_code="$(curl -s -o "$agui_body" -D "$agui_hdr" -w '%{http_code}' \
+    -H "Authorization: Bearer $token_g" \
+    -H 'Content-Type: application/json' \
+    -d '{"messages":[{"role":"user","content":"agui guard ping"}]}' \
+    "$API_URL/v1/ai/ag-ui/run" || true)"
+  [ "$agui_code" = "429" ] && break
+done
+[ "$agui_code" = "429" ] || { rm -f "$agui_body" "$agui_hdr"; fail "ag-ui rate limit never triggered a 429 (last got $agui_code)"; }
+grep -qi '^Retry-After: [1-9]' "$agui_hdr" \
+  || { rm -f "$agui_body" "$agui_hdr"; fail "ag-ui 429 missing Retry-After header"; }
+[ "$(python3 -c 'import json; print(json.load(open("'"$agui_body"'"))["error"]["code"])')" = "ai_rate_limited" ] \
+  || { rm -f "$agui_body" "$agui_hdr"; fail "ag-ui 429 envelope code is not ai_rate_limited"; }
+rm -f "$agui_body" "$agui_hdr"
+pass "AG-UI per-user rate limit: first call streams, over-cap 429 ai_rate_limited + Retry-After"
+
+# Restore the default ai configuration for the rest of the run.
+docker compose up -d --no-deps ai
+wait_for 120 "ai /healthz (defaults restored, post-E6)" curl -sf http://localhost:8000/healthz
 
 # --- Social graph round-trip (D2) --------------------------------------------
 # Two real Hydra-issued identities exercise profiles + follows through the

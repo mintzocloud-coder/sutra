@@ -20,7 +20,13 @@ defmodule SutraChat.PresenceTest do
     # CI this branch is a no-op. The fallback keeps the test runnable with
     # --no-start: Presence only exposes child_spec/1 (no start_link/0),
     # so both children are started through a throwaway supervisor.
-    unless Process.whereis(SutraChat.PresenceSupervisor) do
+    # NOTE: the probe must be SutraChat.Presence — the registered name of
+    # the tracker process itself (started directly in the application
+    # tree). A stale version probed SutraChat.PresenceSupervisor, which
+    # does not exist, so the fallback started a SECOND PubSub under the
+    # same name and every test died with "already started" (CI red
+    # 2026-10-18).
+    unless Process.whereis(SutraChat.Presence) do
       {:ok, _} =
         Supervisor.start_link([{Phoenix.PubSub, name: @pubsub}, SutraChat.Presence],
           strategy: :one_for_one

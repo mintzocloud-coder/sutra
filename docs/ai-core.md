@@ -103,6 +103,7 @@ runtime-agnostic.
 | `AI_MODEL_STUB` | `0` | `1` = deterministic stub replies (smoke/CI only) |
 | `AI_DAILY_TOKEN_BUDGET` | `50000` | Per-user daily token cap (UTC day); over → 429 `ai_budget_exhausted` |
 | `AI_CHAT_RPM` | `20` | Per-user requests/minute (fixed window); over → 429 `ai_rate_limited` |
+| `AI_AGUI_RPM` | `60` | Per-user requests/minute on `/ag-ui/run` (fixed window, E6); over → 429 `ai_rate_limited` (no token budget — echo spends zero tokens) |
 | `AI_MAX_HISTORY` | `30` | Messages of history fed to the model per turn |
 | `AI_MAX_INPUT_CHARS` | `8000` | Max user message length; over → 422 |
 | `AI_PROMPT_VERSION` | `v1` | Selects `prompts/system/{version}.yaml` |

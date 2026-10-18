@@ -122,6 +122,14 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt pytest
       - name: Run unit tests
+        # app/config.py refuses to import without AI_SERVICE_TOKEN and
+        # DATABASE_URL (fail-closed boot). The unit tests never touch a
+        # real database or the network (fake pools / stub backends), so
+        # dummy values are safe here — production still refuses to boot
+        # without real ones.
+        env:
+          AI_SERVICE_TOKEN: ci-unit-test-dummy-token
+          DATABASE_URL: postgresql://dummy:dummy@localhost:5432/sutra_ci_unit
         run: python -m pytest tests/ -q
       - name: Validate eval golden set
         # The eval harness skeleton's golden files must at least parse

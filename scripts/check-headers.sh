@@ -15,7 +15,7 @@ while IFS= read -r f; do
   fi
 done < <(git ls-files \
   | grep -vE '^LICENSE$|^NOTICE$|\.md$|\.json$|\.ya?ml$|\.toml$|\.lock$|\.sum$|^\.github/' \
-  | grep -vE '^\.git/')
+  | grep -vE '^\.git/|\.pytest_cache/')
 
 if [ "$FAIL" -eq 1 ]; then
   echo ""

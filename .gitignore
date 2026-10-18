@@ -4,6 +4,7 @@ _build/
 deps/
 node_modules/
 __pycache__/
+.pytest_cache/
 *.pyc
 .next/
 dist/
