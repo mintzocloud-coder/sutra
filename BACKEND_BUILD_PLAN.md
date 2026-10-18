@@ -798,7 +798,7 @@ every run. Gated items stay gated: real SMS/DLT stays post-incorporation
       h264 640x360); end-to-end run is CI-gated (no docker on this VM)
       via the smoke job. **D4b COMPLETE — next: D5 realtime post events.**
 
-- [ ] **D5. Realtime post events**
+- [x] **D5. Realtime post events**
       API publishes post/follower events to the chat service over an
       internal signed endpoint (service-to-service token); fanned out
       on Phoenix `user:<id>` topics: post:new, follower:new.
@@ -806,6 +806,39 @@ every run. Gated items stay gated: real SMS/DLT stays post-incorporation
       — Wave 2 adds the inbox).
       Accept: docs/realtime-events.md contract; channel tests cover
       topic auth (users get only their own) + event shape.
+      DONE 2026-10-18 ~10:35 IST: PART 1 (Go, previous run) + PART 2
+      (Elixir, this run): new `SutraChatWeb.UserChannel` (`user:*`
+      topics — join allowed ONLY on the socket's own subject; users can
+      never subscribe to someone else's events); `POST /internal/events`
+      via new `SutraChatWeb.Router` (plugged into the endpoint) +
+      `InternalEventsController` — shared Bearer token compared with
+      `Plug.Crypto.secure_compare/2` (constant-time; unset token fails
+      closed: every request 401s), strict envelope validation
+      (topics `^user:[^:]+$`, known events, non-empty dedupe_key,
+      per-event required payload fields) → 422 with the shared JSON
+      error envelope, 202 `{"status":"accepted","event","topics"}` +
+      `Endpoint.broadcast/3` fan-out on success; `config/runtime.exs`
+      reads `CHAT_INTERNAL_TOKEN` (test default `test-internal-token`);
+      compose chat service gains the env var (internal network only);
+      docs/realtime-events.md dedupe bullet made precise (no server-side
+      dedupe store in Wave 1 — stable payload ids are the client dedupe
+      keys; Wave 2 inbox owns server-side dedupe); smoke.sh generates an
+      ephemeral token for both services and asserts the live endpoint:
+      401 no token / 401 wrong token / 422 unknown event / 202 valid
+      envelope (the API's now-enabled publisher also exercises the real
+      publish path best-effort during the D2–D4 sections).
+      VERIFIED: all 10 new/edited Elixir files `Code.string_to_quoted!`
+      clean; `secure_compare/2` (false on size mismatch, no raise),
+      `use Phoenix.Router, helpers: false`, and `Endpoint.broadcast/3`
+      all confirmed against the real dep sources; `bash -n` + compose
+      YAML parse clean; new tests: UserChannelTest (6: own-topic join,
+      cross-user refused, anonymous refused, malformed topics, post:new
+      shape + topic isolation via broadcast struct, follower:new shape)
+      + InternalEventsControllerTest (10: 401×3 auth, 422×5 validation,
+      202×2 broadcast fan-out) with new ConnCase support (in-process
+      ConnTest dispatch, no listener). Full `mix test` is CI-gated
+      (Elixir 1.18) — local 1.14 still can't build phoenix_template.
+      Pushed. **D5 COMPLETE — next: D6 Wave-1 hardening pass.**
 
 - [ ] **D6. Wave-1 hardening pass**
       Rate limits + abuse guards for D2–D5 (post/follow velocity caps),
@@ -847,3 +880,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-18 ~09:10 IST: D4b part 2 done - worker packaging: services/api/Dockerfile.worker (Go build stage + alpine:3.20 runtime with ffmpeg apk, non-root app, own TMPDIR, pidof healthcheck backstop), compose transcode-worker service (build context services/api, DB/Valkey/SeaweedFS env, healthy-dependency ordering; consumer group splits jobs across replicas), CI compose job builds the worker image on every push, docs/video-pipeline.md (lifecycle diagram, media statuses, worker design, ladder table, outputs, failure modes, env reference, ops notes). Verified: compose + CI YAML parse clean, SPDX checker green; image build/boot are CI-gated (no docker on this VM). Next: smoke.sh full clip round-trip (D4b part 3). Rides the next push.
 - 2026-10-18 ~09:30 IST: D4b part 3 done — smoke.sh full clip round-trip (upload intent → PUT → complete → poll to ready → 201 media post). bash -n + SPDX green, clip-minting proven live; end-to-end CI-gated. **D4b complete.** Next: D5 realtime post events.
 - 2026-10-18 ~10:00 IST: D5 part 1 done — Go-side realtime publisher (`internal/realtime`): Envelope (topics/event/payload/dedupe_key), HTTPPublisher (Bearer service token, 5s timeout, 500-topic chunking, envelope validation, 2xx-required), disabled no-op publisher when CHAT_INTERNAL_TOKEN empty (loud WARN), NewPublisher fail-closed on bad URL with token set (proven live: refuses boot); PublishPostNew (follower-subject resolution mirroring feed's celebrity threshold — no realtime fan-out for celebrity posts, same as pull-on-read) + PublishFollowerNew (new edges only) helpers; wired in main.go — post:new fires detached after successful fan-out (never delays the 201), follower:new via new social.FollowHooks; config CHAT_INTERNAL_URL/CHAT_INTERNAL_TOKEN + compose api env; new docs/realtime-events.md (endpoint contract, topic model + join-auth rule, event catalog post:new/follower:new + reserved names, best-effort delivery semantics, celebrity policy, config table, client guidance). VERIFIED: go build+vet+gofmt clean, full `go test ./...` green on real PG16 (8 pure + 4 integration suites); live binary end-to-end vs a stub chat server — follow → `follower:new` to `user:<followee-subject>`, post → `post:new` to `user:<follower-subject>`, both with Bearer auth + dedupe keys; fail-closed boot refusal proven. NOTE: VM lost apt Go mid-run — installed Go 1.22.12 tarball to ~/golang (persists across VM replacements; add to PATH in future runs). NEXT: D5 part 2 — Elixir chat side: POST /internal/events endpoint with constant-time token check, `user:<id>` topic join auth, channel tests (topic auth + event shape), smoke.sh round-trip.
+- 2026-10-18 ~10:35 IST: D5 part 2 done — Elixir chat side of realtime events (see D5 task note): UserChannel (own-topic-only join auth), Router + InternalEventsController (constant-time Bearer auth, strict envelope validation, 202+broadcast fan-out, shared error envelope), runtime.exs CHAT_INTERNAL_TOKEN config, compose chat env, smoke.sh live endpoint checks (401/401/422/202), docs dedupe precision. 16 new tests (6 channel + 10 controller). Syntax-checked all files; full mix test CI-gated (Elixir 1.18). **D5 COMPLETE.** Next: D6 Wave-1 hardening pass.

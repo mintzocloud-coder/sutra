@@ -24,7 +24,8 @@ Request body:
 }
 ```
 
-Response: `202 Accepted` on receipt (broadcast is async).
+Response: `202 Accepted` with `{"status":"accepted","event":...,"topics":N}`
+on receipt (broadcast is async).
 Error responses use the same JSON error envelope as the public API.
 
 Auth: the token is compared in constant time against `CHAT_INTERNAL_TOKEN`
@@ -38,7 +39,12 @@ Validation (chat side, before any broadcast):
 
 - `topics` non-empty; every topic matches `^user:[^:]+$`
 - `event` is a known name (unknown → `422`)
-- `dedupe_key` present (the chat dedupes repeat deliveries on it)
+- `dedupe_key` present and non-empty (required). The chat does NOT keep
+  a server-side dedupe store in Wave 1 — the key exists so a future
+  retrying publisher and Wave 2's persistent inbox stay idempotent.
+  Wave 1 clients dedupe on the stable ids already in the payload
+  (`post_id` for post:new; `follower_id` + the recipient topic for
+  follower:new).
 - payload shape validated per event below
 
 ## Topic model

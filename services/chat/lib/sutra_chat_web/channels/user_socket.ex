@@ -21,6 +21,9 @@ defmodule SutraChatWeb.UserSocket do
   alias SutraChat.Auth.TokenVerifier
 
   channel "room:*", SutraChatWeb.ChatChannel
+  # D5: per-user event topics (`user:<subject>`) for post:new /
+  # follower:new fan-out. Join auth (own topic only) lives in the channel.
+  channel "user:*", SutraChatWeb.UserChannel
 
   @impl true
   def connect(%{"token" => token}, socket, _connect_info) when is_binary(token) do

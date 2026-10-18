@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Fail if any source file lacks the AGPLv3 SPDX header.
-# Skips: LICENSE, NOTICE, .md docs, configs, vendored dirs, .git.
+# Skips: LICENSE, NOTICE, .md docs, configs, vendored dirs, .git,
+# generated checksum/lock files (go.sum, *.lock).
 set -euo pipefail
 
 HEADER="SPDX-License-Identifier: AGPL-3.0-or-later"
@@ -13,7 +14,7 @@ while IFS= read -r f; do
     FAIL=1
   fi
 done < <(git ls-files \
-  | grep -vE '^LICENSE$|^NOTICE$|\.md$|\.json$|\.ya?ml$|\.toml$|\.lock$|^\.github/' \
+  | grep -vE '^LICENSE$|^NOTICE$|\.md$|\.json$|\.ya?ml$|\.toml$|\.lock$|\.sum$|^\.github/' \
   | grep -vE '^\.git/')
 
 if [ "$FAIL" -eq 1 ]; then

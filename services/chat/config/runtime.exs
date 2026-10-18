@@ -41,6 +41,20 @@ if config_env() == :prod do
     bypass_subject: System.get_env("AUTH_BYPASS_SUBJECT") || "dev-user"
 end
 
+# -- D5 realtime social events --------------------------------------
+# Service-to-service auth for POST /internal/events. The Go API sends
+# this value as a Bearer token; the chat compares it in constant time
+# (Plug.Crypto.secure_compare/2). Empty = fail-closed: the endpoint 401s
+# every request, so a chat without the secret can never accept (or
+# silently swallow) events from an API that has one — both sides must
+# agree on the secret. In :test the suite uses a known token so the
+# controller tests can exercise the auth boundary.
+internal_token =
+  System.get_env("CHAT_INTERNAL_TOKEN") ||
+    if config_env() == :test, do: "test-internal-token", else: ""
+
+config :sutra_chat, :internal_events, token: internal_token
+
 # -- Multi-node clustering (B5) ---------------------------------------
 # Phoenix.Presence / Phoenix.PubSub are CRDTs: presence converges across
 # chat nodes ONLY when the BEAM nodes are connected. Clustering is opt-in

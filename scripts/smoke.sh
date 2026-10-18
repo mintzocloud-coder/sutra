@@ -64,6 +64,11 @@ docker compose version >/dev/null 2>&1 || {
 }
 
 export SECRET_KEY_BASE="${SECRET_KEY_BASE:-$(openssl rand -base64 48)}"
+# D5: shared service-to-service secret for the API→chat realtime event
+# endpoint (POST /internal/events). Ephemeral per smoke run, kept in the
+# environment only, never written to disk or committed. Both services
+# read it from the environment (compose ${CHAT_INTERNAL_TOKEN:-}).
+export CHAT_INTERNAL_TOKEN="${CHAT_INTERNAL_TOKEN:-$(openssl rand -hex 32)}"
 export AUTH_BYPASS=1
 
 cleanup() {
@@ -489,6 +494,43 @@ print('renditions:', ','.join(r['name'] for r in m['renditions']))
   pass "post with ready media attached (201) — posts gate honored"
   rm -f "$clip"
 fi
+
+# --- Realtime events round-trip (D5) ----------------------------------------
+# The API publishes post:new / follower:new to the chat's internal
+# endpoint; the chat fans them out on Phoenix `user:<subject>` topics.
+# Both services share CHAT_INTERNAL_TOKEN (generated at the top of this
+# script; the API's publisher is therefore enabled for this run, so the
+# follows/posts above already exercised the real API→chat publish path
+# best-effort). Prove the endpoint is live and auth is enforced:
+# no token → 401, wrong token → 401, unknown event → 422, and a valid
+# envelope → 202 accepted for broadcast. Topic join-auth (users get only
+# their own topic) is covered by the chat channel tests in CI.
+echo "smoke: realtime events endpoint (D5)"
+
+CHAT_URL="http://$CHAT_HOST:$CHAT_PORT"
+internal_status() { # internal_status [token] <json> — POST /internal/events, print the HTTP status
+  local token="$1" body="$2" args=(-s -o /dev/null -w '%{http_code}' -X POST)
+  [ -n "$token" ] && args+=(-H "Authorization: Bearer $token")
+  args+=(-H 'Content-Type: application/json' -d "$body" "$CHAT_URL/internal/events")
+  curl "${args[@]}"
+}
+
+evt='{"topics":["user:sutra-smoke-b"],"event":"follower:new","dedupe_key":"follow:smoke-d5","payload":{"follower_id":"smoke-d5","follower_handle":"smoke_a","created_at":"2026-10-18T10:00:00Z"}}'
+[ "$(internal_status "" "$evt")" = "401" ] \
+  || fail "/internal/events without token did not 401"
+pass "internal/events 401 without token"
+
+[ "$(internal_status "wrong-token" "$evt")" = "401" ] \
+  || fail "/internal/events with wrong token did not 401"
+pass "internal/events 401 with wrong token"
+
+[ "$(internal_status "$CHAT_INTERNAL_TOKEN" '{"topics":["user:x"],"event":"nope","dedupe_key":"k","payload":{}}')" = "422" ] \
+  || fail "/internal/events with unknown event did not 422"
+pass "internal/events 422 on unknown event"
+
+[ "$(internal_status "$CHAT_INTERNAL_TOKEN" "$evt")" = "202" ] \
+  || fail "/internal/events valid envelope did not 202"
+pass "internal/events 202: follower:new accepted for user:sutra-smoke-b"
 
 # --- Chat websocket round-trip --------------------------------------------
 wait_for 90 "chat websocket listener" \

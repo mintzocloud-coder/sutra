@@ -20,16 +20,30 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/mintzocloud-coder/sutra/services/api/internal/config"
 )
 
+// benchConfig mirrors testConfig but with the rate limiter fully disabled
+// (RateLimitRPS <= 0 means "always allow" in internal/middleware). The
+// benchmarks measure the HTTP stack, not the limiter: testConfig's
+// 1000 rps / 2000 burst is "effectively unlimited" for sequential tests,
+// but b.RunParallel bursts straight through it and the run 429s itself
+// into a FAIL (seen in CI and reproduced locally).
+func benchConfig() config.Config {
+	c := testConfig(false)
+	c.RateLimitRPS = 0
+	return c
+}
+
 // benchHandler builds the exact production wiring (newHandler) with the
-// rate limiter effectively disabled so benchmarks measure the stack,
+// rate limiter disabled so benchmarks measure the stack,
 // not the limiter. pool/feedSvc/mediaSvc are nil: none of these
 // benchmarks touch /readyz, /v1/feed/* or /v1/media/*, the routes that
 // dereference them.
 func benchHandler(b *testing.B) http.Handler {
 	b.Helper()
-	return newHandler(testConfig(false), nil, testVerifier(), nil, nil, nil, testLogger())
+	return newHandler(benchConfig(), nil, testVerifier(), nil, nil, nil, testLogger())
 }
 
 // serveOnce runs one request through h; shared by the sequential

@@ -111,6 +111,13 @@ services:
       # API's 401s).
       HYDRA_ISSUER: "http://hydra:4444"
       JWT_AUDIENCE: "sutra-api"
+      # D5 realtime social events: the API POSTs post:new / follower:new
+      # envelopes to this service's POST /internal/events with this value
+      # as the Bearer token (compared in constant time). Empty = the
+      # endpoint 401s everything (fail-closed). smoke.sh generates an
+      # ephemeral value; production must set a long random secret.
+      # Internal network only — never expose this endpoint publicly.
+      CHAT_INTERNAL_TOKEN: ${CHAT_INTERNAL_TOKEN:-}
       # Multi-node presence clustering (B5, docs/presence.md): opt-in.
       # Single chat replica needs nothing. For >1 chat node, releases (B7)
       # honor RELEASE_NODE/RELEASE_COOKIE natively — set CLUSTER_ENABLED=1
