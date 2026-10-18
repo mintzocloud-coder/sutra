@@ -1675,7 +1675,19 @@ Then report to founder: production-ready backend live on main.
   realtime-events.md catalog entry. Verified: gofmt/build/vet clean,
   full go test ./... green, SPDX green; migration live-apply + mix
   test CI-gated (no PG/Elixir/docker on this VM). F5 stays open:
-  part 2b = production.md env rows + smoke.sh F5 section. Pushed.
+  part 2b = production.md env rows + smoke.sh F5 section. Pushed as
+  9b15b11d.
+- CI-RED FLAG (2026-10-19 ~00:45 IST, discovered on this run): the
+  last two commits (033a17ac and its successor) have TWO red jobs —
+  "Elixir chat builds and tests" (6 ChatChannelTest failures:
+  history/cursor/join/ack/dedupe, exit code 2) and "Full-stack smoke
+  test" (exit code 1 at step 349, no test-level annotations). The
+  other five jobs (Go, Python, OpenAPI, compose, SPDX) are green. This
+  is run-1 awareness; the next worker run must TRIAGE these first
+  (download the job logs — annotations alone don't show the cause;
+  suspect areas: the pg18 move for the channel tests, smoke step 349
+  for the compose job). NOT yet user-reported: report only if
+  unresolvable within 2 runs.
 
 - 2026-10-18 ~23:55 IST: F5 part 1 done — logistics gateway seam
   (internal/logistics: Provider interface CreateShipment/Track/Cancel,
