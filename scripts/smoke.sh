@@ -76,6 +76,11 @@
 #     400 param matrix → archive all → hits vanish from the index. The
 #     api is then restored searchless and /v1/search → 503
 #     search_unavailable + Retry-After is proven.
+#   - The F5 logistics round-trip: the api boot log carries the fail-closed
+#     logistics stub WARN (and no set-but-ignored WARN while the creds are
+#     unset); the shipment:update event round-trips through
+#     POST /internal/events: valid envelope → 202, missing order_id → 422,
+#     string or negative cod_expected_paise → 422.
 # The chat release fails closed at boot without a real SECRET_KEY_BASE, so
 # this script generates an ephemeral one (kept in the environment only,
 # never written to disk or committed).
@@ -215,6 +220,18 @@ pass "api boot log carries the fail-closed payments WARN"
 docker compose logs api 2>/dev/null | grep -q "payments: CASHFREE_" \
   && fail "api boot log claims CASHFREE_* set-but-ignored (creds are unset in smoke)"
 pass "api boot log has no set-but-ignored CASHFREE_* WARN"
+
+# --- Fail-closed logistics seam (F5) -----------------------------------------
+# Compose pins LOGISTICS_PROVIDER=stub with empty LOGISTICS_API_KEY /
+# LOGISTICS_SECRET, so the api must boot with the loud "fail-closed stub"
+# WARN — and must NOT log the set-but-ignored WARN (the creds are unset
+# here). Assert on the boot log.
+docker compose logs api 2>/dev/null | grep -q "logistics: running with the fail-closed stub" \
+  || fail "api boot log missing the fail-closed logistics WARN"
+pass "api boot log carries the fail-closed logistics WARN"
+docker compose logs api 2>/dev/null | grep -q "LOGISTICS_\* credentials are set" \
+  && fail "api boot log claims LOGISTICS_* set-but-ignored (creds are unset in smoke)"
+pass "api boot log has no set-but-ignored LOGISTICS_* WARN"
 
 # --- Real-issuer identity loop (D1) -----------------------------------------
 # The checks above ran with AUTH_BYPASS=1, which skips JWT verification
@@ -928,6 +945,32 @@ pass "internal/events 422 on unknown event"
 [ "$(internal_status "$CHAT_INTERNAL_TOKEN" "$evt")" = "202" ] \
   || fail "/internal/events valid envelope did not 202"
 pass "internal/events 202: follower:new accepted for user:sutra-smoke-b"
+
+# --- Shipment event round-trip (F5) ------------------------------------------
+# The F5 part-2a shipment:update event rides the same POST /internal/events
+# path: a fully-valid envelope 202s; a missing required field 422s; and
+# cod_expected_paise must be a non-negative integer on the wire — a string
+# or a negative value 422s (the field is effectively required: its absence
+# is also a 422 on the chat side).
+evt_shipment='{"topics":["user:sutra-smoke-b"],"event":"shipment:update","dedupe_key":"ship:smoke-f5","payload":{"shipment_id":"ship-smoke-f5","order_id":"ord-smoke-f5","status":"created","updated_at":"2026-10-18T10:00:00Z","cod_expected_paise":49900}}'
+[ "$(internal_status "$CHAT_INTERNAL_TOKEN" "$evt_shipment")" = "202" ] \
+  || fail "/internal/events shipment:update valid envelope did not 202"
+pass "internal/events 202: shipment:update accepted for user:sutra-smoke-b"
+
+evt_missing='{"topics":["user:x"],"event":"shipment:update","dedupe_key":"k","payload":{"shipment_id":"s","status":"created","updated_at":"2026-10-18T10:00:00Z"}}'
+[ "$(internal_status "$CHAT_INTERNAL_TOKEN" "$evt_missing")" = "422" ] \
+  || fail "/internal/events shipment:update missing order_id did not 422"
+pass "internal/events 422: shipment:update missing required field"
+
+evt_strmoney='{"topics":["user:x"],"event":"shipment:update","dedupe_key":"k","payload":{"shipment_id":"s","order_id":"o","status":"created","updated_at":"2026-10-18T10:00:00Z","cod_expected_paise":"49900"}}'
+[ "$(internal_status "$CHAT_INTERNAL_TOKEN" "$evt_strmoney")" = "422" ] \
+  || fail "/internal/events shipment:update string cod_expected_paise did not 422"
+pass "internal/events 422: shipment:update string cod_expected_paise rejected"
+
+evt_negmoney='{"topics":["user:x"],"event":"shipment:update","dedupe_key":"k","payload":{"shipment_id":"s","order_id":"o","status":"created","updated_at":"2026-10-18T10:00:00Z","cod_expected_paise":-1}}'
+[ "$(internal_status "$CHAT_INTERNAL_TOKEN" "$evt_negmoney")" = "422" ] \
+  || fail "/internal/events shipment:update negative cod_expected_paise did not 422"
+pass "internal/events 422: shipment:update negative cod_expected_paise rejected"
 
 # --- Velocity abuse guards (D6) -------------------------------------------
 # Tighten the rolling abuse caps to 1/hour and prove the 429 contract:

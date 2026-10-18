@@ -67,6 +67,15 @@ CORS_ORIGINS=https://app.sutra.example.com
 #CASHFREE_APP_ID=
 #CASHFREE_SECRET_KEY=
 #CASHFREE_ENV=
+# LOGISTICS_PROVIDER stays "stub" until the post-investors logistics onboarding
+# (see docs/logistics.md). The LOGISTICS_API_KEY / LOGISTICS_SECRET /
+# LOGISTICS_ENV below are intentionally EMPTY until then — the stub ignores
+# them (loud WARN if set) and the API refuses to boot with any other
+# LOGISTICS_PROVIDER value. Never commit real keys.
+#LOGISTICS_PROVIDER=stub
+#LOGISTICS_API_KEY=
+#LOGISTICS_SECRET=
+#LOGISTICS_ENV=
 ```
 
 > Never set `AUTH_BYPASS=1` in production. Both services log a loud
@@ -114,6 +123,10 @@ CORS_ORIGINS=https://app.sutra.example.com
 | `CASHFREE_APP_ID` | *(unset)* | Cashfree App ID (post-investors); loaded, never logged, ignored by the stub (loud WARN when set) |
 | `CASHFREE_SECRET_KEY` | *(unset)* | Cashfree Secret Key; same handling as the App ID |
 | `CASHFREE_ENV` | *(unset)* | `sandbox` or `prod`; malformed values refuse boot |
+| `LOGISTICS_PROVIDER` | `stub` | Logistics gateway: only `stub` boots until the post-investors logistics onboarding; any other value makes the API refuse to boot (fail-closed). See `docs/logistics.md` (F5) |
+| `LOGISTICS_API_KEY` | *(unset)* | Logistics provider API key (post-investors); loaded, never logged, ignored by the stub (loud WARN when set) |
+| `LOGISTICS_SECRET` | *(unset)* | Logistics provider secret; same handling as the API key |
+| `LOGISTICS_ENV` | *(unset)* | `sandbox` or `prod`; malformed values refuse boot |
 | `SHUTDOWN_TIMEOUT` | `10` | Graceful-shutdown seconds |
 | `AUTH_BYPASS` | *(unset)* | Dev-only identity hatch — **never in prod** |
 
@@ -372,6 +385,10 @@ Every API error response carries the envelope
       processing is DISABLED" WARN in the api boot log is the healthy
       pre-investor state (its *absence* with `PAYMENTS_PROVIDER=cashfree`
       is the observable "payments are live" signal)
+- [ ] `LOGISTICS_PROVIDER=stub` is **expected** until the post-investors
+      logistics onboarding — the "fail-closed stub — shipment booking is
+      DISABLED" WARN in the api boot log is the healthy pre-investor
+      state
 
 ## 12. Rollback
 

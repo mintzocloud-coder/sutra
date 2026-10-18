@@ -1605,7 +1605,7 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
     matches the real main.go WARN string byte-for-byte. No Go
     changes — go build/vet/CI unaffected. Full smoke run CI-gated
     (no docker on this VM).
-- [ ] F5: Logistics gateway — internal/logistics interface (CreateShipment, Track, Cancel) + stub provider, shipment events → Elixir realtime (user:<id> topics), COD remittance tracking fields, docs/logistics.md.
+- [x] F5: Logistics gateway — internal/logistics interface (CreateShipment, Track, Cancel) + stub provider, shipment events → Elixir realtime (user:<id> topics), COD remittance tracking fields, docs/logistics.md.
   - [x] F5 part 1 DONE 2026-10-18 ~23:55 IST: `internal/logistics`
     package mirroring the F4 payments seam — Provider interface
     (CreateShipment/Track/Cancel, integer-paise money, COD-first v1:
@@ -1650,9 +1650,25 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
     this VM); SQL CHECK values machine-matched to the Go enum; SPDX
     green. Elixir mix test CI-gated (Elixir 1.18; no Elixir on this
     VM).
-    F5 STAYS OPEN: part 2b = production.md LOGISTICS_*/shipment env
-    rows + smoke.sh F5 section (shipment-update event round-trip
-    202/422 matrix) → then F5 [x].
+  - [x] F5 part 2b DONE 2026-10-19 ~01:10 IST: production.md gains the
+    LOGISTICS_* surface — four commented sample env lines next to the
+    PAYMENTS block (all EMPTY until the post-investors onboarding), four
+    env-table rows (LOGISTICS_PROVIDER default `stub` → fail-closed on
+    anything else; LOGISTICS_API_KEY/LOGISTICS_SECRET unset, loaded never
+    logged, loud WARN when set-but-ignored; LOGISTICS_ENV sandbox/prod,
+    malformed refuses boot), + a pre-launch checklist line matching the
+    payments one. scripts/smoke.sh: (a) fail-closed F5 boot-log section
+    after the F4 block — asserts "logistics: running with the
+    fail-closed stub" WARN present and no "LOGISTICS_* credentials are
+    set" set-but-ignored WARN (pattern matches main.go byte-for-byte);
+    (b) shipment:update event round-trip matrix after the D5 block —
+    valid envelope 202, missing order_id 422, string
+    cod_expected_paise 422, negative cod_expected_paise 422 (all reuse
+    the D5 internal_status helper); header comment bullet added.
+    VERIFIED: bash -n clean; SPDX checker green; patterns cross-checked
+    against cmd/api/main.go and InternalEventsController. No Go/Elixir
+    changes — go build/vet/CI unaffected. Full compose smoke run
+    CI-gated (no docker on this VM).
 - [ ] F6: Order saga + Wave-3 hardening — NATS JetStream order events, Go
   saga orchestrator (reserve inventory → confirm → ship, compensating
   actions on failure), rate limits on commerce endpoints, docs/commerce.md,
