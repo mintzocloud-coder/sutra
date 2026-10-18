@@ -1672,7 +1672,9 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
     against cmd/api/main.go and InternalEventsController. No Go/Elixir
     changes — go build/vet/CI unaffected. Full compose smoke run
     CI-gated (no docker on this VM).
-- [ ] F6: Order saga + Wave-3 hardening — NATS JetStream order events, Go
+- [x] F6: Order saga + Wave-3 hardening — NATS JetStream order events, Go
+  (closed out 2026-10-19 ~05:30 IST by main agent: all sub-parts 1, 2a, 2b, 3
+  are [x] and pushed; parent boxes ticked to close the phase)
   saga orchestrator (reserve inventory → confirm → ship, compensating
   actions on failure), rate limits on commerce endpoints, docs/commerce.md,
   production.md env backfill, full smoke.sh green. Then Phase F complete.
@@ -1709,7 +1711,8 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
     nil-Header panic in PublishOrderEvent (nats.Msg Header is a nil map
     — fixed by initializing it before Set); unit tests could not have
     caught it.
-  - [ ] F6 part 2: Go saga orchestrator — durable JetStream consumer
+  - [x] F6 part 2: Go saga orchestrator — durable JetStream consumer
+    (closed out 2026-10-19 ~05:30 IST by main agent: 2a + 2b both [x])
     on the sutra stream (reserve inventory → confirm → ship with
     compensating actions on failure), saga state in Postgres,
     idempotent on (order_id, event_id).
@@ -1811,6 +1814,61 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
     engine never fakes shipments; cmd/saga-worker + compose wiring +
     reconciler sweep remain future work (engine + durable consumer
     exist and are unit-tested).
+
+## Phase G — Wave 4: Live + Mini-apps + Dev platform
+
+Builds Mintzo's realtime-live and mini-app ecosystem: LiveKit live media
+(adopted — the ONE blessed exception per Wave-4 research), Svix webhooks
+(adopted), custom mini-app runtime (Telegram model: directory + sandboxed
+runtime + registry), and the developer platform (OpenAPI as single source
+of truth, Docusaurus docs site). Everything else custom-built; no
+readymade for core. Elixir keeps the narrow realtime footprint (live
+orchestration joins chat/presence).
+
+- [ ] G1: LiveKit live media — livekit service in compose (pinned), Go
+  token minting (POST /v1/live/token, room-scoped, expiring), Elixir live
+  orchestration (room lifecycle events → user:<id> topics), docs/live.md,
+  OpenAPI + smoke (token mint + webhook round-trip).
+- [ ] G2: Svix webhooks — Svix server in compose (pinned) + Go webhook
+  dispatcher (platform events → per-app endpoints, signing, retries,
+  delivery log), developer-facing webhook docs, OpenAPI + tests + smoke.
+- [ ] G3: Mini-app runtime — mini-app registry (migration + CRUD), sandboxed
+  runtime contract (Telegram model: iframe/WebView bridge, permission
+  manifest, JS API surface), directory listing + install flow, Go service,
+  docs/mini-apps.md, OpenAPI + tests + smoke.
+- [ ] G4: Dev platform — OpenAPI promoted to single source of truth
+  (SDK stub generation check in CI), Docusaurus docs site skeleton (MIT),
+  developer onboarding guide (app keys, webhooks, mini-app submission),
+  docs/dev-platform.md. Then Phase G complete.
+
+## Phase H — Wave 5: Business AI + Ads + Subscriptions
+
+Builds Mintzo's business tier: business AI on the Wave-2 stack (LangGraph +
+AG-UI, "never invent attributes" guardrail, DPDP duties from May 2027),
+business integrations (WhatsApp via Meta Cloud API DIRECT — no BSP; Tally
+on-premise bridge; Zoho Books default), ads platform (custom Go GSP
+auction core + Promovolve Apache-2.0; Revive REJECTED — GPL-2.0), and
+subscriptions (Cashfree + UPI AutoPay default; powers the 70/30 creator
+memberships). GATED like payments: real WhatsApp/Tally/Zoho credentials
+and Cashfree production keys are post-investors — adapters fail closed
+with documented contracts until then.
+
+- [ ] H1: Business AI — Wave-2 stack reuse (LangGraph + AG-UI 1.0) for
+  business copilots (catalog Q&A, order insights), "never invent
+  attributes" guardrail in prompts + eval, DPDP consent/purpose-limitation
+  notes (duties live May 2027), docs/business-ai.md, tests + smoke.
+- [ ] H2: Business integrations — WhatsApp Cloud API direct adapter
+  (fail-closed stub; no BSP), Tally on-premise bridge design + stub,
+  Zoho Books default adapter (fail-closed stub), docs/integrations.md
+  with post-investors onboarding checklists.
+- [ ] H3: Ads platform — custom Go GSP auction core (bid → rank → price),
+  Promovolve (Apache-2.0) for creative serving, advertiser API
+  (campaigns, budgets, targeting), reporting, docs/ads.md, OpenAPI +
+  tests + smoke.
+- [ ] H4: Subscriptions — Cashfree + UPI AutoPay subscription adapter
+  (fail-closed stub), plans/entitlements model, creator-membership
+  billing wiring (70/30 split), docs/subscriptions.md, OpenAPI + tests +
+  smoke. Then Phase H complete — ALL WAVES DONE.
 
 ## Done when
 
