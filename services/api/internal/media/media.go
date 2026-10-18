@@ -59,6 +59,23 @@ const (
 // jobs onto for the D4-part-2 transcode worker.
 const TranscodeStream = "media:transcode"
 
+// CaptionStream is the Valkey stream caption jobs go onto for the E3
+// faster-whisper worker. Jobs are added by RequestCaptions (media
+// already ready) or EnqueueCaptionsIfRequested (video becoming ready
+// while auto_caption was set); the worker's sweep of caption_status
+// rows is the durability backstop, same as the transcode path.
+const CaptionStream = "media:captions"
+
+// Caption lifecycle statuses. Mirror the migration 0006 CHECK
+// constraint; keep them in sync.
+const (
+	CaptionNone       = "none"       // never requested
+	CaptionRequested  = "requested"  // enqueued (or about to be), awaiting the worker
+	CaptionProcessing = "processing" // worker holds the job
+	CaptionReady      = "ready"      // caption_vtt_fid/srt_fid set, CaptionURL live
+	CaptionFailed     = "failed"     // worker gave up; see caption_error
+)
+
 var (
 	// ErrUnknownMedia is returned when a media id was never minted.
 	ErrUnknownMedia = errors.New("media: unknown media id")
@@ -81,6 +98,9 @@ var (
 	// ErrMasterUnreachable is returned when the SeaweedFS master cannot
 	// be reached for dir/assign.
 	ErrMasterUnreachable = errors.New("media: storage backend temporarily unavailable")
+	// ErrCaptionsVideoOnly is returned when captions are requested for
+	// non-video media (there is nothing to transcribe).
+	ErrCaptionsVideoOnly = errors.New("media: captions are only available for video")
 )
 
 // Media is the API representation of one media row.
@@ -99,8 +119,14 @@ type Media struct {
 	Renditions  []Rendition `json:"renditions"`
 	PlaybackURL string      `json:"playback_url,omitempty"`
 	Error       string      `json:"error,omitempty"`
-	CreatedAt   time.Time   `json:"created_at"`
-	UpdatedAt   time.Time   `json:"updated_at"`
+	// Caption fields (E3): AutoCaption is the sticky opt-in,
+	// CaptionStatus the worker lifecycle, CaptionURL the VTT sidecar
+	// once CaptionStatus == "ready" (the SRT sidecar lives alongside).
+	AutoCaption   bool      `json:"auto_caption,omitempty"`
+	CaptionStatus string    `json:"caption_status"`
+	CaptionURL    string    `json:"caption_url,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // Rendition is one HLS rendition the worker produced (video only).
@@ -257,11 +283,15 @@ func (s *Service) scanMedia(row pgx.Row) (*Media, error) {
 		filename       *string
 		mimeType       *string
 		errorText      *string
+		captionVttFid  *string
+		captionError   *string
 		renditionsJSON []byte
 	)
 	if err := row.Scan(&id, &owner, &m.Kind, &m.Status, &fid, &filename,
 		&mimeType, &m.SizeBytes, &m.Width, &m.Height, &m.DurationMs,
-		&posterFid, &renditionsJSON, &errorText, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		&posterFid, &renditionsJSON, &errorText, &m.AutoCaption,
+		&m.CaptionStatus, &captionVttFid, &captionError,
+		&m.CreatedAt, &m.UpdatedAt); err != nil {
 		return nil, err
 	}
 	m.ID = id.String()
@@ -281,6 +311,13 @@ func (s *Service) scanMedia(row pgx.Row) (*Media, error) {
 	if posterFid != nil {
 		m.PosterURL = s.publicBaseURL + "/" + *posterFid
 	}
+	// The VTT sidecar is the primary caption URL (web players load VTT
+	// natively); the SRT fid is kept for download clients and is not
+	// exposed separately. caption_error stays internal — clients see
+	// only the status.
+	if captionVttFid != nil {
+		m.CaptionURL = s.publicBaseURL + "/" + *captionVttFid
+	}
 	m.Renditions = []Rendition{}
 	if len(renditionsJSON) > 0 {
 		var rs []Rendition
@@ -293,6 +330,7 @@ func (s *Service) scanMedia(row pgx.Row) (*Media, error) {
 
 const mediaColumns = `id, owner_id, kind, status, fid, filename, mime_type,
 	size_bytes, width, height, duration_ms, poster_fid, renditions, error,
+	auto_caption, caption_status, caption_vtt_fid, caption_error,
 	created_at, updated_at`
 
 // Get returns one media row by id. Unknown ids are ErrMediaNotFound.
@@ -472,4 +510,95 @@ func (s *Service) MarkFailed(ctx context.Context, id pgtype.UUID, reason string)
 		return ErrMediaNotFound
 	}
 	return nil
+}
+
+// RequestCaptions flags one video for auto-captioning (E3). Ownership
+// is enforced and images are rejected — there is nothing to
+// transcribe. The opt-in is sticky (auto_caption = true); the worker
+// lifecycle moves none/failed → requested. When the row is already
+// ready the caption job is enqueued onto CaptionStream immediately;
+// otherwise the transcode worker enqueues it via
+// EnqueueCaptionsIfRequested when the video finishes. Retries of an
+// already-requested row are a no-op (idempotent), so a client that
+// never saw its caption answer can safely ask again.
+func (s *Service) RequestCaptions(ctx context.Context, id, callerID pgtype.UUID) error {
+	var (
+		owner     pgtype.UUID
+		kind      string
+		status    string
+		autoCap   bool
+		capStatus string
+	)
+	err := s.pool.QueryRow(ctx, `
+		SELECT owner_id, kind, status, auto_caption, caption_status
+		FROM media WHERE id = $1`, id).
+		Scan(&owner, &kind, &status, &autoCap, &capStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrMediaNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if owner != callerID {
+		return ErrMediaNotOwned
+	}
+	if kind != KindVideo {
+		return ErrCaptionsVideoOnly
+	}
+
+	// Flip the lifecycle forward; a row already requested/processing/
+	// ready keeps its progress (second request = no-op).
+	var flipped bool
+	err = s.pool.QueryRow(ctx, `
+		UPDATE media
+		SET auto_caption = true, caption_status = $2
+		WHERE id = $1 AND caption_status IN ('none', 'failed')
+		RETURNING true`, id, CaptionRequested).Scan(&flipped)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	if flipped && status == StatusReady {
+		s.enqueueCaptions(ctx, id)
+	}
+	return nil
+}
+
+// EnqueueCaptionsIfRequested is the transcode worker's handoff: called
+// right after a video's MarkReady. If the row opted into captions and
+// no caption job is already outstanding, the job goes onto
+// CaptionStream. Safe to call for videos that never asked — it is a
+// single guarded UPDATE and a no-op for them.
+func (s *Service) EnqueueCaptionsIfRequested(ctx context.Context, id pgtype.UUID) error {
+	var flipped bool
+	err := s.pool.QueryRow(ctx, `
+		UPDATE media
+		SET caption_status = $2
+		WHERE id = $1 AND kind = 'video' AND status = 'ready'
+		  AND auto_caption
+		  AND caption_status IN ('none', 'requested', 'failed')
+		RETURNING true`, id, CaptionRequested).Scan(&flipped)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil // captions never asked for — nothing to do
+	}
+	if err != nil {
+		return err
+	}
+	if flipped {
+		s.enqueueCaptions(ctx, id)
+	}
+	return nil
+}
+
+// enqueueCaptions is the best-effort XADD onto the caption stream. A
+// lost add only delays the job: the caption worker sweeps
+// caption_status IN (requested, processing) rows on its interval
+// (see docs/creator-studio.md).
+func (s *Service) enqueueCaptions(ctx context.Context, id pgtype.UUID) {
+	if s.rdb == nil {
+		return
+	}
+	_ = s.rdb.XAdd(ctx, &redis.XAddArgs{
+		Stream: CaptionStream,
+		Values: map[string]any{"media_id": id.String()},
+	}).Err()
 }

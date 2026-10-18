@@ -1341,6 +1341,14 @@ components:
             type: string
             pattern: '^[A-Za-z0-9_-]{1,128}$'
           example: []
+        auto_caption:
+          type: boolean
+          default: false
+          description: |
+            E3: request auto-captions for the post's video attachments.
+            The caption worker transcribes ready videos and publishes
+            VTT/SRT sidecars on the media row (caption_url). Best-effort
+            and async — the 201 never waits for it.
       additionalProperties: false
 
     PostPage:
@@ -1412,7 +1420,7 @@ components:
 
     Media:
       type: object
-      required: [id, owner_id, kind, status, renditions, created_at, updated_at]
+      required: [id, owner_id, kind, status, caption_status, renditions, created_at, updated_at]
       properties:
         id:
           type: string
@@ -1464,6 +1472,25 @@ components:
         error:
           type: string
           description: Failure reason when status is failed.
+        auto_caption:
+          type: boolean
+          description: |
+            Sticky opt-in (E3): true once captions were requested for
+            this video (upload intent or POST /v1/posts auto_caption).
+        caption_status:
+          type: string
+          enum: [none, requested, processing, ready, failed]
+          description: |
+            Caption worker lifecycle. none: never requested. requested:
+            enqueued, awaiting the worker. processing: worker holds the
+            job. ready: sidecars published, caption_url live. failed:
+            worker gave up (reason is internal-only).
+        caption_url:
+          type: string
+          format: uri
+          description: |
+            VTT sidecar of the transcription (caption_status=ready).
+            Web players load VTT natively; an SRT twin sits alongside.
         created_at:
           type: string
           format: date-time

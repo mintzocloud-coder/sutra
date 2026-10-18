@@ -171,6 +171,30 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedS
 		v1.Handle("/v1/feed/home", methodGuard([]string{http.MethodGet},
 			feed.HomeFeedHandler(pool, feedSvc, log)))
 	}
+	// E3 creator studio: auto_caption=true on POST /v1/posts asks the
+	// caption worker to transcribe the post's video attachments.
+	// Best-effort per attachment (logged, never fatal to the 201);
+	// the media row's auto_caption flag + caption_status are the
+	// durable record, so a missed request is safe to retry.
+	if mediaSvc != nil {
+		feedHooks.AfterCreateCaptions = func(ctx context.Context, p *posts.Post) error {
+			authorID, err := social.ParseUserID(p.AuthorID)
+			if err != nil {
+				return nil // AuthorID came from a provisioned user; cannot be bad
+			}
+			for _, mid := range p.MediaIDs {
+				mediaID, err := social.ParseUserID(mid)
+				if err != nil {
+					continue // shape-validated at create; skip defensively
+				}
+				if err := mediaSvc.RequestCaptions(ctx, mediaID, authorID); err != nil {
+					log.Warn("captions: request failed for attachment",
+						"post_id", p.ID, "media_id", mid, "err", err)
+				}
+			}
+			return nil
+		}
+	}
 	v1.Handle("/v1/posts", methodGuard([]string{http.MethodPost},
 		posts.CreatePostHandler(postsSvc, feedHooks, log)))
 	v1.Handle("/v1/posts/{id}", methodGuard([]string{http.MethodDelete},

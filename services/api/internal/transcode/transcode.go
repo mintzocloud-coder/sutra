@@ -463,7 +463,17 @@ func (w *Worker) transcodeOne(ctx context.Context, log *slog.Logger, id pgtype.U
 		return fmt.Errorf("upload renditions: %w", err)
 	}
 
-	return w.mediaSvc.MarkReady(ctx, id, probe.Width, probe.Height, probe.DurationMs, posterFID, renditions)
+	if err := w.mediaSvc.MarkReady(ctx, id, probe.Width, probe.Height, probe.DurationMs, posterFID, renditions); err != nil {
+		return err
+	}
+	// E3: the video is ready — if captions were requested while it was
+	// transcoding, hand the job to the caption worker now. Enqueue is
+	// best-effort (the worker sweeps); never fail the transcode job
+	// over it.
+	if err := w.mediaSvc.EnqueueCaptionsIfRequested(ctx, id); err != nil {
+		w.log.Warn("transcode: caption handoff failed", "media_id", id, "err", err)
+	}
+	return nil
 }
 
 // uploadRenditions uploads each variant playlist + its segments, then

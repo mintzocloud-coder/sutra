@@ -35,6 +35,12 @@ type PublishHooks struct {
 	// the feed read path drops posts missing from PostgreSQL, so a
 	// failure here is logged, never fatal.
 	AfterDelete func(ctx context.Context, postID string) error
+	// AfterCreateCaptions requests auto-captions for the post's video
+	// media (E3) when the client passed auto_caption=true. Best-effort
+	// and never rolled back: captioning is async, the post is already
+	// durable, and a caption request that never got its answer can be
+	// retried. A nil value is a no-op.
+	AfterCreateCaptions func(ctx context.Context, p *Post) error
 }
 
 // noHooks is the explicit "no secondary stores" PublishHooks for
@@ -156,7 +162,7 @@ func CreatePostHandler(svc *Service, hooks PublishHooks, log *slog.Logger) http.
 		}
 		for key := range raw {
 			switch key {
-			case "text", "media_ids":
+			case "text", "media_ids", "auto_caption":
 			default:
 				middleware.WriteJSONError(w, r, http.StatusBadRequest,
 					"unknown_field", "unknown field: "+key)
@@ -177,6 +183,17 @@ func CreatePostHandler(svc *Service, hooks PublishHooks, log *slog.Logger) http.
 			if err := json.Unmarshal(v, &mediaIDs); err != nil {
 				middleware.WriteJSONError(w, r, http.StatusBadRequest,
 					"invalid_json", "field media_ids must be an array of strings")
+				return
+			}
+		}
+		// E3: auto_caption asks the caption worker to transcribe the
+		// post's video attachments (VTT/SRT sidecars on the media row).
+		// Absent = false; non-bool = 400.
+		var autoCaption bool
+		if v, present := raw["auto_caption"]; present && string(v) != "null" {
+			if err := json.Unmarshal(v, &autoCaption); err != nil {
+				middleware.WriteJSONError(w, r, http.StatusBadRequest,
+					"invalid_json", "field auto_caption must be a boolean")
 				return
 			}
 		}
@@ -206,6 +223,15 @@ func CreatePostHandler(svc *Service, hooks PublishHooks, log *slog.Logger) http.
 				middleware.WriteJSONError(w, r, http.StatusServiceUnavailable,
 					"feed_unavailable", "home feed temporarily unavailable; please retry")
 				return
+			}
+		}
+		// E3: caption requests are best-effort and never roll the post
+		// back — captioning is async, the post is durable, and
+		// RequestCaptions is idempotent, so a client can safely retry.
+		if autoCaption && hooks.AfterCreateCaptions != nil {
+			if err := hooks.AfterCreateCaptions(r.Context(), post); err != nil {
+				log.Error("posts: caption request failed", "post_id", post.ID,
+					"err", err, "request_id", middleware.FromContext(r.Context()))
 			}
 		}
 		writeJSON(w, http.StatusCreated, post)

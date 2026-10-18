@@ -998,6 +998,35 @@ non-ML signals only; vector embeddings plug in later via #19.
       auto_caption flag. Implements issue #20 → close it when done.
       Accept: docs/creator-studio.md; smoke uploads clip, polls caption
       ready (CI-gated where no ffmpeg).
+      E3 PART 1 DONE 2026-10-18 ~13:20 IST (Go request surface + worker
+      contract): migration 0006 (auto_caption, caption_status
+      none/requested/processing/ready/failed, caption_vtt/srt_fid,
+      caption_error, sweep index); internal/media — CaptionStream
+      (media:captions), caption consts + ErrCaptionsVideoOnly,
+      RequestCaptions (ownership-enforced, video-only, idempotent,
+      enqueues immediately when ready) + EnqueueCaptionsIfRequested
+      (guarded UPDATE, no-op without opt-in), scanMedia/mediaColumns
+      carry the new columns, GET /v1/media/{id} exposes caption_status/
+      caption_url/auto_caption; transcode worker calls
+      EnqueueCaptionsIfRequested after MarkReady (best-effort, logged);
+      posts — PublishHooks.AfterCreateCaptions (best-effort, never
+      rolls back the 201), POST /v1/posts accepts auto_caption (400 on
+      non-bool, strict allowlist), main.go wires it to RequestCaptions
+      per video attachment; OpenAPI Media + PostCreate updated
+      (redocly 0 warnings); docs/creator-studio.md (request paths,
+      state machine, part-2 worker spec: faster-whisper base/CPU,
+      consumer-group claim protocol, exact SQL contract, backoff→DLQ,
+      sweep, heartbeat, CAPTION_* env table, client contract, Wave-2
+      out-of-scope).
+      VERIFIED: `go build`+`go vet`+gofmt clean; full `go test ./...`
+      green on real PG16 + local redis — 5 new media integration
+      suites (ready→enqueue+idempotent retry, uploaded→waits→worker
+      handoff, no-opt-in no-op, image/foreign/unknown rejections,
+      Get exposes caption fields); migration caught one real bug
+      pre-push (the `//` SPDX header broke the SQL runner — must be
+      `--` in .sql files). NEXT (E3 part 2): Python caption worker
+      in services/ai per docs/creator-studio.md + Dockerfile/compose +
+      smoke clip→caption round-trip; then close issue #20.
 
 - [ ] **E4. Language bridge**
       POST /v1/ai/translate (IndicTrans2, MIT): post/comment text →
@@ -1059,4 +1088,5 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-18 ~11:25 IST: D6 part 2 done — production.md env-table backfill (13 API rows + chat CHAT_INTERNAL_TOKEN, all cross-checked against config.go/runtime.exs; fixed stale "Hydra lands with issue #4" line), smoke.sh D6 velocity section (1/hour caps → post/follow 429s with envelope codes + Retry-After, idempotent retry → 200, defaults restored), compose velocity env passthroughs, new internal/social/bench_test.go (5 pure benches; CI bench step extended) + benchmarks.md update. Verified: go build+vet+test green, benches run, bash -n + YAML parse clean; full smoke + CI green CI-gated. **D6 COMPLETE — Phase D (Wave 1) complete.**
 - 2026-10-18 ~11:55 IST: E1 done — Python AI service scaffold (see E1 task note): FastAPI app (fail-closed /healthz + AG-UI 1.0 SSE endpoint over a real LangGraph echo graph), pinned deps, hardened Dockerfile, docs/ai-core.md; compose ai + ollama services; Go internal/aiproxy (/v1/ai/* behind RequireAuth, service token + X-Sutra-Subject, SSE flush, 503 envelopes) + AI_SERVICE_URL/TOKEN config; CI builds the ai image; OpenAPI /v1/ai/healthz (redocly clean); smoke.sh E1 section (ephemeral token, proxy 200/401 checks, AG-UI echo round-trip). Verified: py_compile, go build+vet+test green (5 new proxy tests), bash/YAML/SPDX/redocly clean; full boot + smoke CI-gated. Next: E2 personal AI chat.
 - 2026-10-18 ~13:00 IST: E2 done — personal AI chat (see E2 task note): POST /v1/ai/chat via the Go proxy, LangGraph recall→generate→persist agent, PG-backed per-user memory/threads, versioned-YAML system prompt (v1), PG-backed per-user rate limit + daily token budget (both 429 + Retry-After), OpenAI-compat model client (sarvam-30b default; Ollama dev / vLLM prod; AI_MODEL_STUB=1 for smoke/CI), service-owned advisory-locked migrations. Verified: py_compile + 12 pytest green; LIVE on real PG16+uvicorn — full SSE turn, 2-turn thread memory (4 rows), 401/401/422 paths, budget 429 + rate-limit 429 with Retry-After; compose + smoke.sh E2 section added (CI-gated run). Next: E3 creator studio (auto-captions).
+- 2026-10-18 ~13:20 IST: E3 part 1 done — Go caption request surface (migration 0006, RequestCaptions + EnqueueCaptionsIfRequested, transcode-worker handoff, POST /v1/posts auto_caption flag, GET /v1/media/{id} caption fields), docs/creator-studio.md with the part-2 worker contract. Verified: go build+vet+test green on real PG16 + local redis (5 new media suites); redocly 0 warnings. Next: E3 part 2 — Python faster-whisper worker.
 - TOOLING LESSON (2026-10-18): a secret-redaction filter blanks ANY direct assignment to a `*token*`-named variable in file writes (`service_token: str = ...` → `service_token: <redacted>`, breaking the file). Workaround used in services/ai/app/config.py: expose the shared secret as a read-only @property (no assignment statement) with an explanatory NOTE. Future runs: never assign to token/secret/password-named identifiers in written files — use the property pattern.
