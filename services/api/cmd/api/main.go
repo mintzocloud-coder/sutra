@@ -49,8 +49,10 @@ func methodGuard(allowed []string, h http.Handler) http.HandlerFunc {
 // and post handlers run without fan-out hooks. mediaSvc may likewise be
 // nil: the media routes are unregistered and the post media gate is off.
 // rt may be nil: realtime event hooks are then unregistered. aiProxy may
-// be nil: the /v1/ai/* proxy routes are then unregistered.
-func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, mediaSvc *media.Service, rt realtime.Publisher, aiProxy *aiproxy.Proxy, log *slog.Logger) http.Handler {
+// be nil: the /v1/ai/* proxy routes are then unregistered. translator
+// may be nil or disabled: ?translate= is then a no-op and feed items
+// keep their original text.
+func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, mediaSvc *media.Service, rt realtime.Publisher, aiProxy *aiproxy.Proxy, log *slog.Logger, translator *feed.Translator) http.Handler {
 	auth := middleware.RequireAuth(verifier, log, middleware.AuthOptions{
 		Bypass:        cfg.AuthBypass,
 		BypassSubject: cfg.BypassSubject,
@@ -169,7 +171,7 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedS
 			return feedSvc.UnfanoutPost(ctx, postID)
 		}
 		v1.Handle("/v1/feed/home", methodGuard([]string{http.MethodGet},
-			feed.HomeFeedHandler(pool, feedSvc, log)))
+			feed.HomeFeedHandler(pool, feedSvc, translator, log)))
 	}
 	// E3 creator studio: auto_caption=true on POST /v1/posts asks the
 	// caption worker to transcribe the post's video attachments.
@@ -342,7 +344,22 @@ func main() {
 		log.Warn("AI_SERVICE_TOKEN empty — /v1/ai/* disabled (503 service_unavailable)")
 	}
 
-	handler := newHandler(cfg, pool, verifier, feedSvc, mediaSvc, rtPub, aiProxy, log)
+	// Feed translation (E4 part 2): ?translate=xx decorates home-feed
+	// reads via the AI service. Empty token = disabled (a loud WARN;
+	// ?translate= then no-ops best-effort). A token with a bad URL is a
+	// configuration bug — refuse to boot, same as the AI proxy.
+	translator, err := feed.NewTranslator(cfg.AIServiceURL, cfg.AIServiceToken, log)
+	if err != nil {
+		log.Error("invalid feed-translator config — refusing to start", "err", err)
+		os.Exit(1)
+	}
+	if translator.Enabled() {
+		log.Info("feed translation enabled", "ai", cfg.AIServiceURL)
+	} else {
+		log.Warn("AI_SERVICE_TOKEN empty — ?translate= disabled (feed items keep original text)")
+	}
+
+	handler := newHandler(cfg, pool, verifier, feedSvc, mediaSvc, rtPub, aiProxy, log, translator)
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: handler}
 
 	go func() {

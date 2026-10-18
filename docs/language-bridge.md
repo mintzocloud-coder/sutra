@@ -111,11 +111,16 @@ TTLs are safe and there is no invalidation path by design.
 
 ## Feed integration (E4 part 2)
 
-`GET /v1/feed/home?translate=xx` is the planned convenience: the Go API
-translates post text best-effort through this endpoint and never blocks
-the feed read on it (a translation failure returns the original text
-with `translated: false`). Not yet implemented — the endpoint above is
-the contract it will call.
+`GET /v1/feed/home?translate=xx` is IMPLEMENTED (Go,
+`internal/feed/translate.go`): the API translates item bodies
+best-effort through this endpoint and never blocks the feed read on
+it. Items carry `translated_text` / `translated_from` (omitempty —
+absent when untranslated); an unsupported target is 400
+`invalid_translate_target`. Translation work is bounded per page
+(`translatePageBudget`, 6s); per-item calls carry the caller's verified
+subject as `X-Sutra-Subject` so the Python per-user rate limit applies.
+An empty `AI_SERVICE_TOKEN` disables the decorator with a loud WARN at
+boot — `?translate=` then no-ops.
 
 ## Out of scope (Wave 2+)
 

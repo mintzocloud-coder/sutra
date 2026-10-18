@@ -282,8 +282,18 @@ type pulledEntry struct {
 
 // FeedPage is one merged home-feed page, newest first.
 type FeedPage struct {
-	Items      []posts.Post `json:"items"`
-	NextCursor *string      `json:"next_cursor"`
+	Items      []FeedItem `json:"items"`
+	NextCursor *string    `json:"next_cursor"`
+}
+
+// FeedItem is one feed entry: the post plus, when ?translate= was
+// requested and translation succeeded, the translated rendering of
+// the body. TranslatedText/TranslatedFrom are nil (omitted) on every
+// other read, so plain feed consumers see the exact Post shape.
+type FeedItem struct {
+	posts.Post
+	TranslatedText *string `json:"translated_text,omitempty"`
+	TranslatedFrom *string `json:"translated_from,omitempty"`
 }
 
 // fetchPushed reads the caller's Valkey timeline: limit+1 entries
@@ -539,10 +549,10 @@ func (s *Service) HomeFeed(ctx context.Context, userID pgtype.UUID, limit int, c
 		}
 	}
 
-	page := &FeedPage{Items: []posts.Post{}}
+	page := &FeedPage{Items: []FeedItem{}}
 	for _, m := range merged {
 		if p, ok := byID[m.id]; ok {
-			page.Items = append(page.Items, *p)
+			page.Items = append(page.Items, FeedItem{Post: *p})
 		}
 	}
 

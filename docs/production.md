@@ -133,6 +133,26 @@ whisper stack never bloats the chat API. Full spec in
 | `CAPTION_WORK_DIR` | `/tmp/captions` | Download + sidecar scratch (E3) |
 | `CAPTION_MODEL_DIR` | `/srv/ai/models/whisper` | faster-whisper cache inside the image (E3) |
 
+### AI service (`services/ai` — `app/config.py`, read at boot)
+
+FastAPI service behind the Go API's `/v1/ai/*` proxy (E1/E2). The
+language bridge (E4) runs here: POST `/translate` (served by the proxy
+as `/v1/ai/translate`) + the feed `?translate=xx` convenience (the Go
+API calls `/translate` directly with the same service credential).
+
+| Var | Default | Purpose |
+|---|---|---|
+| `TRANSLATE_BACKEND` | `indictrans2` | `indictrans2` = real AI4Bharat checkpoints (MIT); `stub` = deterministic test double (smoke/CI only, returns `[tgt] text`). Unknown value → refuses to boot; the stub is never a silent fallback (E4) |
+| `TRANSLATE_MODEL_SIZE` | `dist-200M` | `dist-200M` (fast, CPU-viable) or `1B` (better quality); picks the per-direction checkpoint (E4) |
+| `TRANSLATE_MODEL_DIR` | `/srv/ai/models/translate` | Local checkpoint cache so deploys download once (E4) |
+| `TRANSLATE_RPM` | `30` | Per-user fixed-window translate rate limit; over the cap → 429 + Retry-After (E4) |
+| `TRANSLATE_MAX_INPUT_CHARS` | `4000` | Max input chars per request (E4) |
+| `TRANSLATE_CACHE_TTL` | `2592000` (30d) | Valkey cache TTL for `(backend, src, tgt, text)` translations — deterministic, so long TTLs are safe (E4) |
+| `VALKEY_ADDR` | `valkey:6379` | REQUIRED — translation cache + per-user rate limits; the service refuses to boot without it (fail-closed) (E4) |
+| `AI_MODEL_STUB` | *(unset)* | `1` = deterministic stub chat model for smoke/CI instead of sarvam-30B (E2) |
+| `AI_DAILY_TOKEN_BUDGET` | `50000` | Per-user daily token budget; over the cap → 429 `ai_budget_exhausted` (E2) |
+| `AI_CHAT_RPM` | `20` | Per-user chat rate limit; over the cap → 429 `ai_rate_limited` (E2) |
+
 ## 4. Build the images
 
 ```bash

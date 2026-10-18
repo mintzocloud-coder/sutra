@@ -523,6 +523,72 @@ pass "delete propagation: post removed from follower feed"
   -H "Authorization: Bearer $access_token" "$API_URL/v1/users/$id_b/follow")" = "204" ] \
   || fail "DELETE follow (feed teardown) did not return 204"
 
+# --- Language bridge round-trip (E4) ----------------------------------------
+# The stub backend stands in for IndicTrans2 (CI has no model to pull);
+# it returns a visibly-marked "[tgt] text" so the round-trip proves the
+# plumbing without pretending to translate. Exercises: direct
+# POST /v1/ai/translate through the Go proxy, then the ?translate=xx
+# feed convenience (best-effort decoration of the home timeline).
+echo "smoke: language bridge round-trip (E4)"
+TRANSLATE_BACKEND=stub docker compose up -d --no-deps ai
+wait_for 120 "ai /healthz (translate stub)" curl -sf http://localhost:8000/healthz
+
+tr_out="$(curl -sf -X POST -H "Authorization: Bearer $access_token" \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"namaste duniya","target":"hi"}' "$API_URL/v1/ai/translate")" \
+  || fail "POST /v1/ai/translate through the proxy failed"
+printf '%s' "$tr_out" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+assert d["text"]=="[hi] namaste duniya", d
+assert d["target"]=="hi", d
+assert d["source"]=="en", d
+' || fail "/v1/ai/translate did not return the stub translation"
+pass "POST /v1/ai/translate 200 through the proxy (stub backend, subject forwarded)"
+
+# Feed convenience: A follows B; B posts; A's feed with ?translate=gu
+# carries the translated rendering alongside the original.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $access_token" "$API_URL/v1/users/$id_b/follow")" = "201" ] \
+  || fail "POST follow A→B (translate setup) did not return 201"
+tr_post="$(curl -sf -X POST -H "Authorization: Bearer $token_b" \
+  -H 'Content-Type: application/json' -d '{"text":"translate me please"}' \
+  "$API_URL/v1/posts")" || fail "POST /v1/posts (translate setup) failed"
+tr_pid="$(jget "$tr_post" id)"
+[ -n "$tr_pid" ] || fail "translate post id missing"
+
+feed_tr="$(curl -sf -H "Authorization: Bearer $access_token" \
+  "$API_URL/v1/feed/home?limit=10&translate=gu")" \
+  || fail "GET /v1/feed/home?translate=gu failed"
+printf '%s' "$feed_tr" | python3 -c '
+import json,sys
+items=json.load(sys.stdin)["items"]
+it=[x for x in items if x["id"]=="'"$tr_pid"'"]
+assert it, "translated post missing from feed"
+assert it[0]["text"]=="translate me please", "original text mutated"
+assert it[0].get("translated_text")=="[gu] translate me please", it[0]
+assert it[0].get("translated_from")=="en", it[0]
+' || fail "?translate=gu did not decorate the feed item"
+pass "feed ?translate=gu decorates items best-effort (translated_text + translated_from)"
+
+# Unsupported target is a client bug: 400, not a feed failure.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $access_token" \
+  "$API_URL/v1/feed/home?translate=xx")" = "400" ] \
+  || fail "?translate=xx did not 400 invalid_translate_target"
+pass "feed ?translate=xx 400s on unsupported targets"
+
+# Teardown: B deletes the post, A unfollows.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+  -H "Authorization: Bearer $token_b" "$API_URL/v1/posts/$tr_pid")" = "204" ] \
+  || fail "delete of translate post did not return 204"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+  -H "Authorization: Bearer $access_token" "$API_URL/v1/users/$id_b/follow")" = "204" ] \
+  || fail "DELETE follow (translate teardown) did not return 204"
+
+# Restore the ai service to its compose defaults for later sections.
+docker compose up -d --no-deps ai
+wait_for 120 "ai /healthz (translate defaults restored)" curl -sf http://localhost:8000/healthz
+
 # --- Video upload + transcode round-trip (D4) --------------------------------
 # The full clip journey: upload intent → PUT bytes to SeaweedFS →
 # complete → the transcode worker builds HLS + poster → poll the media

@@ -21,10 +21,16 @@ import (
 //   - `cursor`: the opaque `next_cursor` from the previous page; empty
 //     starts from the newest. Malformed cursors are 400, never a
 //     store error.
+//   - `translate`: ISO 639-1 target language (hi/gu/ta/bn/te/… — the
+//     full set lives in SupportedTranslateTargets). When set, each
+//     item's body is translated best-effort (see translate.go);
+//     items carry `translated_text` / `translated_from` only when a
+//     translation actually happened. An unsupported value is 400 — a
+//     client bug, not a feed failure.
 //   - A downed timeline store is 503 `feed_unavailable` with Retry-After
 //     (infrastructure outage, not a client bug); author timelines and
 //     post CRUD keep working — they are pure PostgreSQL.
-func HomeFeedHandler(pool *db.Pool, svc *Service, log *slog.Logger) http.HandlerFunc {
+func HomeFeedHandler(pool *db.Pool, svc *Service, translator *Translator, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		callerID, ok := social.CallerUUID(w, r, pool, log)
 		if !ok {
@@ -56,6 +62,14 @@ func HomeFeedHandler(pool *db.Pool, svc *Service, log *slog.Logger) http.Handler
 			cursor = c
 		}
 
+		target := r.URL.Query().Get("translate")
+		if target != "" && !SupportedTranslateTargets[target] {
+			middleware.WriteJSONError(w, r, http.StatusBadRequest,
+				"invalid_translate_target",
+				"translate must be a supported ISO 639-1 code (hi, gu, ta, bn, te, kn, ml, mr, pa, or, as, ur, ne, en)")
+			return
+		}
+
 		page, err := svc.HomeFeed(r.Context(), callerID, limit, cursor)
 		if err != nil {
 			if errors.Is(err, ErrFeedUnavailable) {
@@ -69,6 +83,14 @@ func HomeFeedHandler(pool *db.Pool, svc *Service, log *slog.Logger) http.Handler
 			middleware.WriteStatusError(w, r, http.StatusInternalServerError,
 				"internal server error")
 			return
+		}
+
+		if target != "" {
+			// Best-effort decoration: translation failures never touch
+			// the 200. The subject comes from RequireAuth — it feeds the
+			// AI service's per-user translate rate limit.
+			subject := middleware.SubjectFromContext(r.Context())
+			page.Items = translator.decorateItems(r.Context(), subject, target, page.Items)
 		}
 
 		w.Header().Set("Content-Type", "application/json")

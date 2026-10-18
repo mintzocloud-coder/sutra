@@ -1067,25 +1067,27 @@ paths:
         null `next_cursor` means the last page. A downed timeline store
         is 503 `feed_unavailable` with Retry-After (infrastructure
         outage, not a client bug); author timelines and post CRUD are
-        unaffected.
+        unaffected. `?translate=xx` (E4) translates item bodies
+        best-effort into the requested language — see the parameter docs.
       operationId: getHomeFeed
       security:
         - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/PageLimit'
         - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/TranslateTarget'
       responses:
         '200':
           description: One page of the home feed
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PostPage'
+                $ref: '#/components/schemas/FeedPage'
           headers:
             X-Request-ID:
               $ref: '#/components/headers/XRequestID'
         '400':
-          description: Bad limit or malformed cursor.
+          description: Bad limit, malformed cursor, or unsupported translate target.
           content:
             application/json:
               schema:
@@ -1243,6 +1245,21 @@ components:
         cursors are 400.
       schema:
         type: string
+    TranslateTarget:
+      name: translate
+      in: query
+      required: false
+      description: |
+        E4 language bridge. When set, each item's body is translated
+        best-effort into this language alongside the original
+        (`translated_text` / `translated_from` appear on the item only
+        when a translation actually happened). Translation is
+        read-time decoration: a downed or slow translation backend
+        degrades to the original text, never a feed failure. An
+        unsupported value is 400 `invalid_translate_target`.
+      schema:
+        type: string
+        enum: [hi, gu, ta, bn, te, kn, ml, mr, pa, or, as, ur, ne, en]
 
   securitySchemes:
     bearerAuth:
@@ -1449,6 +1466,35 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Post'
+        next_cursor:
+          type: [string, 'null']
+          description: |
+            Opaque cursor for the next page; null on the last page.
+
+    FeedItem:
+      allOf:
+        - $ref: '#/components/schemas/Post'
+        - type: object
+          description: |
+            A home-feed entry. `translated_text` / `translated_from`
+            appear only when GET /v1/feed/home was called with
+            ?translate= and the translation succeeded (best-effort).
+          properties:
+            translated_text:
+              type: string
+              description: The post body rendered in the requested target language.
+            translated_from:
+              type: string
+              description: Detected source language (ISO 639-1) of the original text.
+
+    FeedPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/FeedItem'
         next_cursor:
           type: [string, 'null']
           description: |
