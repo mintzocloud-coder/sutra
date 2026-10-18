@@ -26,6 +26,7 @@ import (
 	"github.com/mintzocloud-coder/sutra/services/api/internal/media"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/middleware"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/oidc"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/orders"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/otp"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/posts"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/realtime"
@@ -306,6 +307,17 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedS
 	v1.Handle("/v1/cart/items", methodGuard([]string{http.MethodPost},
 		cart.AddItemHandler(pool, cartSvc, log)))
 	v1.Handle("/v1/cart/items/{variant_id}", cart.CartItemHandler(pool, cartSvc, log))
+
+	// Commerce orders (F3 part 2a): COD-first checkout + the order
+	// state machine. OrdersHandler dispatches POST (checkout) / GET
+	// (list, ?role=buyer|seller) itself (405 + Allow inside);
+	// OrderStatusHandler takes PATCH only (405 + Allow inside).
+	ordersSvc := orders.NewService(pool)
+	v1.Handle("/v1/orders", orders.OrdersHandler(pool, ordersSvc, log))
+	v1.Handle("/v1/orders/{id}", methodGuard([]string{http.MethodGet},
+		orders.OrderDetailHandler(pool, ordersSvc, log)))
+	v1.Handle("/v1/orders/{id}/status", methodGuard([]string{http.MethodPatch},
+		orders.OrderStatusHandler(pool, ordersSvc, log)))
 
 	// AI core (E1): /v1/ai/* proxies to the Python AI service. Runs
 	// behind the same RequireAuth as everything else under /v1/, so the

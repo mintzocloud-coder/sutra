@@ -1486,10 +1486,43 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
     F3 STAYS OPEN: part 2 = checkout → order creation + order state
     machine (created → confirmed → shipped → delivered / cancelled /
     returned), COD-first, OpenAPI, smoke.sh section.
-  - [ ] F3 part 2: checkout → order creation (COD-first, price snapshot
-    into order_items, stock re-verify + reserve), order state machine
-    transitions (seller/buyer roles), OpenAPI updated (redocly clean),
-    tests green on real PG16, smoke.sh commerce-order round-trip.
+  - [x] F3 part 2a DONE 2026-10-18 ~21:55 IST: checkout → order creation +
+    order state machine. Migration 0011_orders.sql (orders: buyer/seller/
+    status CHECK, payment_method='cod', total>0; order_items: immutable
+    price snapshot per line, line_total CHECK, RESTRICT refs so orders
+    are legal history; buyer/seller/status indexes; IF NOT EXISTS,
+    applies cleanly). New internal/orders package: Checkout (single tx:
+    live buyable-line read, per-line stock re-verify with inventory
+    FOR UPDATE, reserve, snapshot prices into order_items, one order per
+    seller for mixed carts, cart cleared; empty cart → 422; stock
+    overflow → 409 with cart intact, nothing reserved), Transition
+    (role-aware state machine: created→confirmed→shipped→delivered by
+    seller; created→cancelled by buyer/seller; confirmed→cancelled by
+    seller; delivered→returned by buyer/seller; cancel/return releases
+    the reservation, deliver converts it into a sale; FOR UPDATE row
+    lock; unknown statuses → 422), Get/ListBuyer/ListSeller (buyer or
+    seller only; stranger → 403; ghost id → 404; non-seller list →
+    empty). Routes wired in main.go: POST+GET /v1/orders (list
+    ?role=buyer|seller, limit/offset), GET /v1/orders/{id},
+    PATCH /v1/orders/{id}/status (405+Allow discipline preserved).
+    Standard envelopes via orderErrorCode (cart_empty 422 /
+    order_not_found 404 / forbidden 403 / invalid_status 422 /
+    invalid_transition 422 / variant_not_available 422 /
+    insufficient_stock 409).
+    VERIFIED: gofmt/build/vet clean; full `go test ./...` green on
+    real PG16 — 9 new suites (checkout happy path + cart cleared +
+    reserved accounting, multi-seller split into 2 orders, price
+    snapshot at checkout-time price, insufficient-stock rollback with
+    cart intact, empty cart 422, full lifecycle → delivered with
+    (quantity,reserved) conversion (10,0)→(7,0), buyer cancel releases
+    reservation, terminal-state rejections, buyer-cannot-confirm /
+    stranger-403 / ghost-404 / seller-view + both lists, error-code map).
+    F3 STAYS OPEN: part 2b = OpenAPI (redocly clean) + smoke.sh
+    commerce-order round-trip + live binary check of the 4 routes.
+  - [ ] F3 part 2b: OpenAPI updated (paths + schemas for the order
+    endpoints, redocly clean), tests green on real PG16 (done via 2a
+    suites — re-run after), smoke.sh commerce-order round-trip
+    (checkout → status transitions → cancel), live binary route check.
 - [ ] F4: Cashfree payment adapter — internal/payments interface
   (CreateOrder, VerifyWebhook, SplitTransfer, Payout) + fail-closed stub
   (CASHFREE_* env-gated; refuses boot without creds, loud WARN), 
