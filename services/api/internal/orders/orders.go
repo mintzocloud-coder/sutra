@@ -76,6 +76,13 @@ const (
 	roleNone role = iota
 	roleBuyer
 	roleSeller
+	// roleSystem is the order-saga orchestrator (F6 part 2b): the only
+	// actor allowed to drive COD orders without being the buyer or the
+	// seller's user. Its edges are the two created-state moves the saga
+	// needs (auto-confirm, compensate-cancel); it can never take any
+	// other edge, and it is never assigned via actorRole — only the
+	// explicit TransitionSystem method sets it.
+	roleSystem
 )
 
 // transition is one legal state-machine edge and who may take it.
@@ -88,8 +95,8 @@ type transition struct {
 // transitions is the full, closed edge list — the only transitions
 // that exist. Anything else is ErrInvalidTransition.
 var transitions = []transition{
-	{StatusCreated, StatusConfirmed, []role{roleSeller}},
-	{StatusCreated, StatusCancelled, []role{roleBuyer, roleSeller}},
+	{StatusCreated, StatusConfirmed, []role{roleSeller, roleSystem}},
+	{StatusCreated, StatusCancelled, []role{roleBuyer, roleSeller, roleSystem}},
 	{StatusConfirmed, StatusShipped, []role{roleSeller}},
 	{StatusConfirmed, StatusCancelled, []role{roleSeller}},
 	{StatusShipped, StatusDelivered, []role{roleSeller}},
@@ -380,6 +387,24 @@ func edgeFor(from, to string, r role) bool {
 // roles enforced) and applies the stock side effects: cancel/return
 // releases the reservation; deliver converts it into a sale.
 func (s *Service) Transition(ctx context.Context, callerID, orderID pgtype.UUID, to string) (*Order, error) {
+	return s.transitionWith(ctx, callerID, orderID, to, false)
+}
+
+// TransitionSystem drives an order transition as the order-saga
+// orchestrator (F6 part 2b): it bypasses the buyer/seller identity
+// check but keeps the state machine and the stock side effects
+// intact. Only the created→confirmed (COD auto-confirm) and
+// created→cancelled (compensation) edges admit roleSystem — anything
+// else is ErrInvalidTransition, so the saga can never take an edge
+// the design didn't intend.
+func (s *Service) TransitionSystem(ctx context.Context, orderID pgtype.UUID, to string) (*Order, error) {
+	return s.transitionWith(ctx, pgtype.UUID{}, orderID, to, true)
+}
+
+// transitionWith is the single transition implementation. system=true
+// runs as roleSystem (the saga); otherwise the caller's role is
+// resolved from their identity as before.
+func (s *Service) transitionWith(ctx context.Context, callerID, orderID pgtype.UUID, to string, system bool) (*Order, error) {
 	if !knownStatus(to) {
 		return nil, ErrInvalidStatus
 	}
@@ -405,9 +430,14 @@ func (s *Service) Transition(ctx context.Context, callerID, orderID pgtype.UUID,
 		}
 		return nil, err
 	}
-	r := actorRole(callerID, buyerID, sellerUserID)
-	if r == roleNone {
-		return nil, ErrForbidden
+	var r role
+	if system {
+		r = roleSystem
+	} else {
+		r = actorRole(callerID, buyerID, sellerUserID)
+		if r == roleNone {
+			return nil, ErrForbidden
+		}
 	}
 	if !edgeFor(status, to, r) {
 		return nil, ErrInvalidTransition
@@ -529,6 +559,28 @@ func (s *Service) itemsFor(ctx context.Context, orderID pgtype.UUID) ([]*Item, e
 // Get returns the full order view for the buyer or the seller only;
 // everyone else gets ErrForbidden.
 func (s *Service) Get(ctx context.Context, callerID, orderID pgtype.UUID) (*Order, error) {
+	ord, buyerID, sellerUserID, err := s.loadOrder(ctx, orderID)
+	if err != nil {
+		return nil, err
+	}
+	if actorRole(callerID, buyerID, sellerUserID) == roleNone {
+		return nil, ErrForbidden
+	}
+	return ord, nil
+}
+
+// GetSystem reads the full order view as the order-saga orchestrator
+// (F6 part 2b): no buyer/seller identity check. Internal use only —
+// never exposed on an HTTP route.
+func (s *Service) GetSystem(ctx context.Context, orderID pgtype.UUID) (*Order, error) {
+	ord, _, _, err := s.loadOrder(ctx, orderID)
+	return ord, err
+}
+
+// loadOrder reads the full order view plus the buyer/seller user ids
+// the role check needs, without any authorization. Get and GetSystem
+// apply their own authorization on top.
+func (s *Service) loadOrder(ctx context.Context, orderID pgtype.UUID) (*Order, pgtype.UUID, pgtype.UUID, error) {
 	var ord Order
 	var id, buyerID, sellerID, sellerUserID pgtype.UUID
 	var status string
@@ -544,12 +596,9 @@ func (s *Service) Get(ctx context.Context, callerID, orderID pgtype.UUID) (*Orde
 		&status, &total, &createdAt, &updatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrOrderNotFound
+			return nil, pgtype.UUID{}, pgtype.UUID{}, ErrOrderNotFound
 		}
-		return nil, err
-	}
-	if actorRole(callerID, buyerID, sellerUserID) == roleNone {
-		return nil, ErrForbidden
+		return nil, pgtype.UUID{}, pgtype.UUID{}, err
 	}
 	ord.ID = id.String()
 	ord.BuyerID = buyerID.String()
@@ -561,9 +610,9 @@ func (s *Service) Get(ctx context.Context, callerID, orderID pgtype.UUID) (*Orde
 	ord.UpdatedAt = updatedAt
 	ord.Items, err = s.itemsFor(ctx, orderID)
 	if err != nil {
-		return nil, err
+		return nil, pgtype.UUID{}, pgtype.UUID{}, err
 	}
-	return &ord, nil
+	return &ord, buyerID, sellerUserID, nil
 }
 
 // maxListLimit caps list pages: order lists are a dashboard surface,

@@ -147,13 +147,24 @@ func NewBus(url string, log *slog.Logger) (EventBus, error) {
 	if !strings.HasPrefix(url, "nats://") && !strings.HasPrefix(url, "tls://") {
 		return nil, fmt.Errorf("events: invalid NATS_URL %q: must be nats:// or tls://", redactURL(url))
 	}
+	nc, js, err := connectJetStream(url, "sutra-api", log)
+	if err != nil {
+		return nil, err
+	}
+	return &jetstreamBus{nc: nc, js: js, log: log}, nil
+}
 
+// connectJetStream dials NATS with the boot-time retry budget and
+// ensures the sutra stream exists. Shared by the publisher (NewBus)
+// and the saga consumer (NewConsumer); name is the NATS client name
+// for observability.
+func connectJetStream(url, name string, log *slog.Logger) (*nats.Conn, nats.JetStreamContext, error) {
 	var nc *nats.Conn
 	var err error
 	deadline := time.Now().Add(connectBudget)
 	for {
 		nc, err = nats.Connect(url,
-			nats.Name("sutra-api"),
+			nats.Name(name),
 			nats.Timeout(2*time.Second),
 			nats.MaxReconnects(-1),
 		)
@@ -161,7 +172,7 @@ func NewBus(url string, log *slog.Logger) (EventBus, error) {
 			break
 		}
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("events: cannot reach NATS at %q: %w", redactURL(url), err)
+			return nil, nil, fmt.Errorf("events: cannot reach NATS at %q: %w", redactURL(url), err)
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
@@ -169,13 +180,13 @@ func NewBus(url string, log *slog.Logger) (EventBus, error) {
 	js, err := nc.JetStream(nats.PublishAsyncMaxPending(256))
 	if err != nil {
 		nc.Close()
-		return nil, fmt.Errorf("events: JetStream unavailable: %w", err)
+		return nil, nil, fmt.Errorf("events: JetStream unavailable: %w", err)
 	}
 	if err := ensureStream(js); err != nil {
 		nc.Close()
-		return nil, err
+		return nil, nil, err
 	}
-	return &jetstreamBus{nc: nc, js: js, log: log}, nil
+	return nc, js, nil
 }
 
 // ensureStream creates the sutra stream once; an existing stream is

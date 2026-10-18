@@ -1734,6 +1734,48 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
       `go test ./...` green (integration suites skip without a DB —
       local PG16 vanished when the runtime VM was replaced mid-run,
       so CI is the gate for them).
+    - [x] F6 part 2b DONE 2026-10-19 ~04:55 IST: saga orchestrator
+      ENGINE + durable JetStream consumer (the step machine, minus
+      the booking segment — see the honest v1 cut below). orders:
+      new roleSystem (COD auto-confirm + compensate-cancel edges only;
+      every other edge stays closed to it) + TransitionSystem and
+      GetSystem (role-free, internal-only — the saga is not the buyer
+      or the seller), implemented by refactoring Transition/Get
+      around shared transitionWith/loadOrder cores; user-facing role
+      checks unchanged. New internal/saga/engine.go: Engine
+      (HandleEvent implements events.EventHandler) drives
+      started→reserved→confirmed on order.created — reservation
+      re-verification (per-line reserved≥qty via catalog.GetInventory;
+      missing inventory row = broken, not transient), COD
+      auto-confirm via TransitionSystem (concurrent seller confirm
+      absorbed via ErrInvalidTransition + re-read), compensation
+      (broken reservation → system cancel, which releases the stock →
+      compensated_cancelled), out-of-order/dead-order early exit,
+      external-cancel handling on order.status_changed
+      (→compensated_cancelled; other statuses informational in v1).
+      Transient failures RecordFailure with 30s-doubling/30m-capped
+      backoff next_retry_at and return the error (consumer
+      redelivers); advance() swallows the benign races
+      (ErrStateMismatch/ErrTerminalState). New
+      internal/events/consumer.go: durable pull consumer
+      ("saga-orchestrator", DeliverAll replay, AckExplicit+ManualAck,
+      AckWait 30s, MaxDeliver 10) with poison-message ack+log and
+      handler-error Nak; fail-closed NewConsumer (same contract as
+      NewBus); events.go dial logic extracted to shared
+      connectJetStream (NewBus unchanged behavior). HONEST v1 CUT:
+      confirmed→awaiting_booking→shipped is NOT implemented — booking
+      needs a shipping address and the orders model carries none
+      (Wave 4); the engine will not fake a shipment. The booking
+      segment + cmd/saga-worker + compose wiring + reconciler sweep
+      remain (F6 part 2c/3).
+      VERIFIED: gofmt clean; go build+vet clean; go test ./... green
+      (exit 0, 22 packages) — 17 new saga engine unit tests (full
+      drive, duplicate-event skip, broken-reservation compensation,
+      missing-inventory compensation, dead-order early exit, seller-
+      confirm races ×2, transient-failure RecordFailure+redeliver,
+      external-cancel, no-saga skip, irrelevant-status skip, advance
+      race swallowing, backoff table, bad-envelope) + 6 new orders
+      system tests (DB-gated, skip locally, CI is the gate).
   - [ ] F6 part 3: rate limits on commerce endpoints, docs/commerce.md,
     production.md NATS_* env backfill, full smoke.sh green (incl. a
     NATS event round-trip section). Then Phase F complete.
@@ -1744,6 +1786,26 @@ All boxes ticked, CI green, `scripts/smoke.sh` passes, docs complete.
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-19 ~04:55 IST: F6 part 2b done — saga orchestrator engine +
+  durable JetStream consumer (see F6 task note): orders roleSystem +
+  TransitionSystem/GetSystem, internal/saga/engine.go (started→
+  reserved→confirmed, reservation re-verify, COD auto-confirm,
+  compensation, external-cancel handling, idempotent on
+  (order_id,event_id), RecordFailure+backoff on transient errors),
+  internal/events/consumer.go (durable "sutra-orchestrator" pull
+  consumer, poison ack+log, fail-closed). HONEST v1 CUT: booking
+  (awaiting_booking→shipped) NOT implemented — no shipping address
+  in the orders model (Wave 4); never fakes a shipment. VERIFIED:
+  gofmt/build/vet clean, go test ./... green (22 pkgs, exit 0; 17
+  new saga unit tests + 6 DB-gated orders tests). CI on 28f95bd3:
+  elixir-chat went GREEN (triage #2/#3 fixes confirmed); **smoke
+  STILL red** — the Hydra/Kratos DB-collision fix did NOT resolve
+  it, so the cause is new. NEXT RUN: pull the smoke job logs for
+  28f95bd3 (GitHub API check-runs → logs) and triage attempt #4.
+  Smoke has now been red across 6 pushes — if attempt #4 cannot
+  root-cause it, it becomes a founder-reported blocker per the
+  2-run rule.
 
 - 2026-10-19 ~04:10 IST: CI-RED TRIAGE ATTEMPT #3 — fda68b63 still red,
   but the failure SET CHANGED: elixir-chat went GREEN (triage #2's
