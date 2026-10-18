@@ -1776,9 +1776,41 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
       external-cancel, no-saga skip, irrelevant-status skip, advance
       race swallowing, backoff table, bad-envelope) + 6 new orders
       system tests (DB-gated, skip locally, CI is the gate).
-  - [ ] F6 part 3: rate limits on commerce endpoints, docs/commerce.md,
+  - [x] F6 part 3: rate limits on commerce endpoints, docs/commerce.md,
     production.md NATS_* env backfill, full smoke.sh green (incl. a
     NATS event round-trip section). Then Phase F complete.
+    F6 PART 3 DONE 2026-10-19 ~05:45 IST: (a) NEW
+    `internal/middleware/commerce_ratelimit.go` — `IsCommercePath`
+    (prefix-exact boundary: /v1/sellers, /v1/products, /v1/variants,
+    /v1/categories, /v1/search, /v1/cart, /v1/orders) + `CommerceRateLimit`
+    middleware stacking a tighter per-IP token budget AFTER the global
+    limiter (both must have room); 429 `commerce_rate_limited` envelope +
+    Retry-After + X-RateLimit-Limit. config COMMERCE_LIMIT_RPS (30) /
+    COMMERCE_LIMIT_BURST (60), <=0 disables; compose passthroughs;
+    OpenAPI RateLimited component documents the commerce budget.
+    (b) NEW docs/commerce.md — catalog/search/cart+orders/gated seams/
+    events+saga/rate budgets/env table. (c) production.md backfill:
+    NATS_URL row (fail-closed boot contract — nats must be up before
+    the api; monitoring 8222; durable saga-orchestrator group) +
+    COMMERCE_LIMIT_RPS/BURST rows. (d) smoke.sh: STARTS the nats
+    service now — compose sets NATS_URL=nats://nats:4222 so with nats
+    down the api would REFUSE TO BOOT (fail-closed; this would have
+    broken smoke right after the kratos 4434 fix) — new NATS event
+    round-trip (F3 checkout/status events land in the sutra stream,
+    polled via /jsz?streams=1, no CLI) + commerce-budget section
+    (tight 1/1 caps → 200 → 429 commerce_rate_limited + Retry-After;
+    /v1/me unaffected; caps restored).
+    VERIFIED: gofmt clean; go build+vet clean; 4 new middleware tests
+    green; full `go test ./...` green; bash -n + new heredoc compiles;
+    redocly lint valid, 0 warnings; compose/CI YAML parse; SPDX
+    checker green. Full compose smoke run is CI-gated (no docker on
+    this VM) via the smoke job. **F6 COMPLETE — PHASE F COMPLETE
+    (CI-green confirmation pending).**
+    OPEN (documented, not blocking): the booking segment
+    (awaiting_booking→shipped) still needs Wave 4's shipping address —
+    engine never fakes shipments; cmd/saga-worker + compose wiring +
+    reconciler sweep remain future work (engine + durable consumer
+    exist and are unit-tested).
 
 ## Done when
 
@@ -1786,6 +1818,9 @@ All boxes ticked, CI green, `scripts/smoke.sh` passes, docs complete.
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-19 ~05:45 IST: F6 part 3 done — commerce rate budget, docs/commerce.md, production.md NATS_* backfill, smoke.sh NATS + commerce-budget sections (see F6 task note). REAL SMOKE BLOCKER FIXED: compose sets NATS_URL=nats://nats:4222 but smoke.sh never started the nats service — with the api's fail-closed NewBus, the api would refuse to boot right after the kratos-4434 fix. nats now boots with the infra (8222 health gate) + a JetStream round-trip assertion. Verified: gofmt/build/vet clean, full go test green (4 new middleware suites), bash -n + heredoc compile, redocly 0 warnings, compose/CI YAML parse, SPDX green. CI-gated for the live run. **F6 COMPLETE — PHASE F (Wave 3: Commerce) COMPLETE — CI-green confirmation pending.**
+  OPEN (documented in plan + docs/commerce.md): booking segment needs Wave 4's shipping address; cmd/saga-worker + compose wiring + reconciler sweep remain future work.
 
 - 2026-10-19 ~05:15 IST: CI-RED TRIAGE ATTEMPT #4 — pulled the real smoke
   logs for 4f296972 (job 117818635706) via the Actions logs API: ROOT CAUSE

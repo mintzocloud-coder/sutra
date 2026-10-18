@@ -242,6 +242,14 @@ services:
       # scripts/smoke.sh tightens them to 1 for its D6 429 assertions.
       POST_VELOCITY_PER_HOUR: ${POST_VELOCITY_PER_HOUR:-}
       FOLLOW_VELOCITY_PER_HOUR: ${FOLLOW_VELOCITY_PER_HOUR:-}
+      # Commerce rate budget (F6 part 3): an additional tighter per-IP
+      # limiter for the commerce surface (sellers, products, variants,
+      # categories, search, cart, orders) on top of the global limiter.
+      # Empty means the Go defaults apply (30 rps / 60 burst); <=0
+      # disables. scripts/smoke.sh tightens it to 1/1 for its 429
+      # assertion. 429s on commerce paths carry code commerce_rate_limited.
+      COMMERCE_LIMIT_RPS: ${COMMERCE_LIMIT_RPS:-}
+      COMMERCE_LIMIT_BURST: ${COMMERCE_LIMIT_BURST:-}
       # Realtime social events (D5): the chat service's internal signed
       # endpoint. URL default is the compose service name; the token is
       # empty by default, which DISABLES eventing (dev default — the API

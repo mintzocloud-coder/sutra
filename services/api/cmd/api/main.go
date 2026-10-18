@@ -355,14 +355,17 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedS
 	mux.Handle("/", middleware.NotFoundHandler())
 
 	// Middleware order (outermost first): RequestID → Recover →
-	// SecurityHeaders → CORS → RateLimit → Logger.
+	// SecurityHeaders → CORS → RateLimit → CommerceRateLimit → Logger.
 	// RequestID is outermost so every response — including recovered
 	// panics and limiter 429s — carries the request ID. Recover sits next
 	// so it also catches panics in the remaining middleware; it must stay
 	// outside them. SecurityHeaders is outside everything that can produce
 	// a response so all replies carry the baseline headers; CORS runs
 	// before RateLimit so preflights aren't counted against the budget.
+	// The commerce limiter stacks AFTER the global one: a request needs
+	// room in both budgets to proceed.
 	limiter := middleware.NewRateLimiter(cfg.RateLimitRPS, cfg.RateLimitBurst)
+	commerceLimiter := middleware.NewRateLimiter(cfg.CommerceLimitRPS, cfg.CommerceLimitBurst)
 	cors := middleware.CORS(middleware.CORSConfig{
 		Origins: cfg.CORSOrigins,
 		MaxAge:  cfg.CORSMaxAge,
@@ -373,6 +376,7 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedS
 		middleware.SecurityHeaders(),
 		cors,
 		middleware.RateLimit(limiter, log),
+		middleware.CommerceRateLimit(commerceLimiter, log),
 		middleware.Logger(log),
 	)
 }

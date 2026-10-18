@@ -119,6 +119,9 @@ CORS_ORIGINS=https://app.sutra.example.com
 | `CHAT_INTERNAL_TOKEN` | *(unset)* | Service-to-service Bearer token for `POST /internal/events`; empty **disables** the realtime publisher with a loud WARN (D5) |
 | `SEARCH_URL` | `http://meilisearch:7700` | Meilisearch base URL for product search (F2) |
 | `SEARCH_MASTER_KEY` | *(unset = search disabled)* | Must equal `MEILI_MASTER_KEY`; empty ⇒ indexing no-ops with a loud WARN and `GET /v1/search` 503s. A key with a bad URL refuses boot (fail-closed). See `docs/search.md` |
+| `NATS_URL` | `nats://nats:4222` in compose, *(unset = bus disabled)* in the Go default | Order event bus (F6): JetStream stream `sutra`, subjects `sutra.orders.>`. Empty ⇒ publishing no-ops with a loud WARN (dev). A set-but-unreachable URL makes the API refuse to boot (fail-closed, 10s dial budget) — **so the `nats` service must be up before the api**. The durable saga consumer (`saga-orchestrator` group, AckExplicit, AckWait 30s, MaxDeliver 10) reads `sutra.orders.created` / `sutra.orders.status_changed`. Monitoring: `http://localhost:8222` (`/jsz?streams=1` for stream state). See `docs/commerce.md` |
+| `COMMERCE_LIMIT_RPS` | `30` | Additional per-IP sustained rate budget for the commerce surface (sellers, products, variants, categories, search, cart, orders) on top of the global limiter; `<=0` disables. 429s carry code `commerce_rate_limited` (F6 part 3) |
+| `COMMERCE_LIMIT_BURST` | `60` | Additional per-IP burst budget for the commerce surface |
 | `PAYMENTS_PROVIDER` | `stub` | Only `stub` boots until the post-investors Cashfree onboarding; any other value makes the API refuse to boot (fail-closed). See `docs/payments.md` |
 | `CASHFREE_APP_ID` | *(unset)* | Cashfree App ID (post-investors); loaded, never logged, ignored by the stub (loud WARN when set) |
 | `CASHFREE_SECRET_KEY` | *(unset)* | Cashfree Secret Key; same handling as the App ID |

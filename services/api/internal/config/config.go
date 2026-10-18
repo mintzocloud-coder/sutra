@@ -19,13 +19,19 @@ type Config struct {
 	JWTAudience     string
 	AuthBypass      bool
 	BypassSubject   string
-	DBMaxConns      int      // pgxpool MaxConns
-	ShutdownTimeout int      // seconds
-	RateLimitRPS    float64  // sustained requests/sec per client IP; <=0 disables
-	RateLimitBurst  int      // max burst per client IP
-	CORSOrigins     []string // CORS allowlist; empty = CORS disabled
-	CORSMaxAge      int      // preflight cache seconds
-	OTPProvider     string   // SMS gateway for phone OTP: "stub" until DLT
+	DBMaxConns      int     // pgxpool MaxConns
+	ShutdownTimeout int     // seconds
+	RateLimitRPS    float64 // sustained requests/sec per client IP; <=0 disables
+	RateLimitBurst  int     // max burst per client IP
+	// Commerce surface (F6 part 3): the Wave-3 marketplace endpoints
+	// (sellers, products, variants, categories, search, cart, orders)
+	// get an ADDITIONAL tighter per-IP budget on top of the global
+	// limiter (see internal/middleware.CommerceRateLimit). <=0 disables.
+	CommerceLimitRPS   float64
+	CommerceLimitBurst int
+	CORSOrigins        []string // CORS allowlist; empty = CORS disabled
+	CORSMaxAge         int      // preflight cache seconds
+	OTPProvider        string   // SMS gateway for phone OTP: "stub" until DLT
 	// registration post-incorporation (see internal/otp, docs/identity.md)
 	PostVelocityCap int // posts per rolling hour per author (D3); <=0 = default 30
 	// Social graph (D2, D6): abuse guards for the follow path.
@@ -137,9 +143,19 @@ func Load() Config {
 		ShutdownTimeout: timeout,
 		RateLimitRPS:    rps,
 		RateLimitBurst:  burst,
-		CORSOrigins:     parseCORSOrigins(getEnv("CORS_ORIGINS", "")),
-		CORSMaxAge:      maxAge,
-		OTPProvider:     getEnv("OTP_PROVIDER", "stub"),
+		// Commerce surface (F6 part 3): tighter than the global budget —
+		// these writes are money-adjacent. <=0 disables the extra budget.
+		CommerceLimitRPS: func() float64 {
+			f, _ := strconv.ParseFloat(getEnv("COMMERCE_LIMIT_RPS", "30"), 64)
+			return f
+		}(),
+		CommerceLimitBurst: func() int {
+			n, _ := strconv.Atoi(getEnv("COMMERCE_LIMIT_BURST", "60"))
+			return n
+		}(),
+		CORSOrigins: parseCORSOrigins(getEnv("CORS_ORIGINS", "")),
+		CORSMaxAge:  maxAge,
+		OTPProvider: getEnv("OTP_PROVIDER", "stub"),
 		PostVelocityCap: func() int {
 			n, _ := strconv.Atoi(getEnv("POST_VELOCITY_PER_HOUR", "30"))
 			return n

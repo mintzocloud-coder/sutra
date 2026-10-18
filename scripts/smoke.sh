@@ -160,8 +160,14 @@ echo "smoke: building service images"
 docker compose build --quiet api chat transcode-worker caption-worker ai 2>/dev/null \
   || docker compose build api chat transcode-worker caption-worker ai
 
-echo "smoke: starting postgres, valkey, seaweedfs"
-docker compose up -d postgres valkey seaweedfs
+echo "smoke: starting postgres, valkey, seaweedfs, nats"
+docker compose up -d postgres valkey seaweedfs nats
+# NATS (F6): the api's order event bus is fail-closed — with NATS_URL set
+# in compose (the default), the api REFUSES TO BOOT when NATS is
+# unreachable, so the bus must be up before the api. JetStream is enabled
+# (-js); the monitoring port 8222 proves readiness.
+wait_for 60 "nats /varz" curl -sf http://localhost:8222/varz
+pass "nats up (JetStream enabled, monitoring on 8222)"
 # Postgres readiness is the flakiest gate on CI runners (cold image pulls,
 # slow initdb). Wait longer here, and dump the container logs on timeout so
 # the next failure carries its own diagnosis instead of just a timeout line.
@@ -1385,6 +1391,69 @@ pass "status-patch error matrix: 422 invalid_status, 400 on unknown field"
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')" = "archived" ] \
   || fail "DELETE order product did not archive"
 pass "order fixture archived (cleanup)"
+
+# --- Order event bus round-trip (F6 part 3) -----------------------------------
+# The F3 checkout + status transitions above fired order.created and
+# order.status_changed onto the sutra JetStream stream (the api boots with
+# NATS_URL from compose). Publishing is detached and best-effort, so poll
+# the NATS monitoring API until the stream holds at least one message —
+# this proves the full path: Checkout/Transition → EventHook →
+# PublishOrderEvent → JetStream, with no CLI dependency.
+echo "smoke: order event bus round-trip (F6)"
+msgs="$(python3 - <<'PYEOF' || echo "0"
+import json, sys, time, urllib.request
+deadline = time.time() + 90
+while True:
+    try:
+        info = json.load(urllib.request.urlopen(
+            "http://localhost:8222/jsz?streams=1", timeout=10))
+        streams = info.get("streams") or []
+        sutra = [s for s in streams if s.get("name") == "sutra"]
+        if sutra:
+            n = sutra[0].get("state", {}).get("messages", 0)
+            if n >= 1:
+                print(n)
+                break
+    except Exception:
+        pass
+    if time.time() > deadline:
+        print("0")
+        break
+    time.sleep(3)
+PYEOF
+)"
+[ "${msgs:-0}" -ge 1 ] 2>/dev/null \
+  || fail "no order events reached the sutra JetStream stream (F3 fired none)"
+pass "order event bus: $msgs message(s) in the sutra stream (order.created/order.status_changed)"
+
+# --- Commerce rate budget (F6 part 3) ----------------------------------------
+# The api is recreated with a 1 rps / 1 burst commerce budget: the first
+# /v1/categories read returns 200, an immediate second returns 429 with
+# code commerce_rate_limited + Retry-After. A non-commerce path on the
+# same client is unaffected by the exhausted commerce budget.
+echo "smoke: commerce rate budget (F6)"
+echo "smoke: recreating api with tight commerce caps (1 rps / 1 burst)"
+COMMERCE_LIMIT_RPS=1 COMMERCE_LIMIT_BURST=1 docker compose up -d --no-deps api
+wait_for 90 "api /healthz (commerce caps)" curl -sf "$API_URL/healthz"
+
+curl -sf -H "Authorization: Bearer $token_c" "$API_URL/v1/categories" >/dev/null \
+  || fail "commerce budget: first /v1/categories did not return 200"
+cl_code="$(curl -s -o "$com_body" -w '%{http_code}' \
+  -H "Authorization: Bearer $token_c" "$API_URL/v1/categories")"
+[ "$cl_code" = "429" ] || fail "commerce budget: second /v1/categories did not 429 (got $cl_code)"
+[ "$(python3 -c 'import json; print(json.load(open("'"$com_body"'"))["error"]["code"])')" = "commerce_rate_limited" ] \
+  || fail "commerce budget: 429 envelope code is not commerce_rate_limited"
+[ -n "$(curl -sI -H "Authorization: Bearer $token_c" "$API_URL/v1/categories" | grep -i '^retry-after:')" ] \
+  || fail "commerce budget: 429 missing Retry-After header"
+pass "commerce budget: 200 → 429 commerce_rate_limited + Retry-After"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token_c" \
+  "$API_URL/v1/me")" = "200" ] \
+  || fail "commerce budget: non-commerce /v1/me was throttled by the commerce budget"
+pass "commerce budget: non-commerce path unaffected"
+
+echo "smoke: restoring api to default commerce caps"
+COMMERCE_LIMIT_RPS= COMMERCE_LIMIT_BURST= docker compose up -d --no-deps api
+wait_for 90 "api /healthz (commerce caps restored)" curl -sf "$API_URL/healthz"
 
 # --- Product search round-trip (F2 part 2b) --------------------------------
 # Meilisearch boots with the ephemeral per-run master key; the api is

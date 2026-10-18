@@ -4072,7 +4072,11 @@ components:
     RateLimited:
       description: |
         Per-IP rate budget exhausted. Slow down and retry after the
-        Retry-After delay.
+        Retry-After delay. Commerce endpoints (sellers, products, variants,
+        categories, search, cart, orders) have an additional tighter budget
+        on top of the global one (F6; COMMERCE_LIMIT_RPS/COMMERCE_LIMIT_BURST):
+        commerce-budget rejections carry code `commerce_rate_limited` instead
+        of `rate_limited`, still 429 with Retry-After.
       content:
         application/json:
           schema:
