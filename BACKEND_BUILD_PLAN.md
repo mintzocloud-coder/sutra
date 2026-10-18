@@ -1745,6 +1745,31 @@ Then report to founder: production-ready backend live on main.
 
 ## Log
 
+- 2026-10-19 ~04:10 IST: CI-RED TRIAGE ATTEMPT #3 — fda68b63 still red,
+  but the failure SET CHANGED: elixir-chat went GREEN (triage #2's
+  DateTime/hashers/Presence fixes worked). Two root causes found and
+  fixed this run: (1) go-api `go test ./...` — the saga fixture
+  inserted sellers with a 40+-char store_slug, violating the
+  `sellers_slug_shape` CHECK (`^[a-z0-9-]{3,30}$`); the 19-digit
+  UnixNano blew the 30-char cap (locally invisible — DB-gated tests
+  skip without TEST_DATABASE_URL). Fixture now follows the
+  orders_test.go convention (last 8 nano digits + counter, `sgt-`
+  prefix; worst case 28 chars, shape asserted in a script). (2) smoke —
+  `kratos-migrate` died with `ERROR: relation "networks" already
+  exists`: Hydra and Kratos shared the `sutra` database and BOTH Ory
+  products create a `networks` table, so whoever migrates second
+  fails — this has broken EVERY smoke run since D1 landed. Fix:
+  dedicated `hydra` + `kratos` databases created by new
+  `docker/postgres/initdb/init-identity-dbs.sh` (initdb.d, idempotent
+  \gexec, +x), mounted on the postgres service; the 4 identity DSNs
+  repointed to their own DBs; docs/identity.md's (wrong) "namespaces do
+  not collide" claim corrected. VERIFIED: gofmt/build/vet/test green
+  (unit; DB-gated suites skip locally, CI is the gate), compose YAML
+  parses, init script bash -n + executable, SPDX green. Pushed;
+  CI-green confirmation lands with the next run's CI check. F6 part 2b
+  (durable JetStream consumer) remains the next task — not started this
+  run (the triage took the window).
+
 - 2026-10-19 ~02:55 IST: CI-RED TRIAGE ATTEMPT #2 — downloaded the real
   CI job logs via the GitHub API (blob-storage log fetch works; the
   earlier 401 was transient) and root-caused all three failures with

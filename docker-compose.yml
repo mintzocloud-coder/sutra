@@ -13,7 +13,14 @@ services:
     # entrypoint mistakes the mount for a pre-18 data directory — this
     # broke the CI smoke job 2026-10-18). Mount the parent instead, per
     # the image's own guidance.
-    volumes: [pgdata:/var/lib/postgresql]
+    volumes:
+      - pgdata:/var/lib/postgresql
+      # initdb.d: runs once when the pgdata volume is first created —
+      # creates the hydra + kratos databases (see the script below). The
+      # identity services MUST NOT share the sutra database: both Ory
+      # products create a `networks` table and their migrations collide
+      # on a shared database ("relation networks already exists").
+      - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sutra"]
       interval: 5s
@@ -65,7 +72,7 @@ services:
   hydra-migrate:
     image: oryd/hydra:v26.2.0
     environment:
-      DSN: "postgres://sutra:sutra@postgres:5432/sutra?sslmode=disable"
+      DSN: "postgres://sutra:sutra@postgres:5432/hydra?sslmode=disable"
     command: migrate sql -e --yes
     depends_on:
       postgres:
@@ -78,7 +85,7 @@ services:
     command: serve all --dev
     ports: ["4444:4444", "4445:4445"]
     environment:
-      DSN: "postgres://sutra:sutra@postgres:5432/sutra?sslmode=disable"
+      DSN: "postgres://sutra:sutra@postgres:5432/hydra?sslmode=disable"
       # DEV-ONLY: must be identical across restarts (it encrypts the DB).
       # Generate a real one for production; never commit it.
       SECRETS_SYSTEM: "dev-only-secret-change-in-production-0123456789ab"
@@ -96,7 +103,7 @@ services:
   kratos-migrate:
     image: oryd/kratos:v26.2.0
     environment:
-      DSN: "postgres://sutra:sutra@postgres:5432/sutra?sslmode=disable"
+      DSN: "postgres://sutra:sutra@postgres:5432/kratos?sslmode=disable"
     command: migrate sql -e --yes --config /etc/config/kratos/kratos.yml
     volumes:
       - ./services/identity/kratos:/etc/config/kratos:ro
@@ -109,7 +116,7 @@ services:
     command: serve --config /etc/config/kratos/kratos.yml
     ports: ["4433:4433", "4434:4434"]
     environment:
-      DSN: "postgres://sutra:sutra@postgres:5432/sutra?sslmode=disable"
+      DSN: "postgres://sutra:sutra@postgres:5432/kratos?sslmode=disable"
     volumes:
       - ./services/identity/kratos:/etc/config/kratos:ro
     depends_on:

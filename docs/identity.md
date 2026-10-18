@@ -40,10 +40,13 @@ hypothetical; now `docker compose up` boots it.
 | `kratos-migrate`| `oryd/kratos:v26.2.0` | —           | one-shot: `migrate sql -e --yes --config …` |
 | `kratos`        | `oryd/kratos:v26.2.0` | 4433 / 4434 | `serve --config …`; public / admin          |
 
-Both share the `sutra` Postgres database with the API and chat services.
-Table namespaces do not collide (Hydra's tables are `hydra_*`-prefixed;
-Kratos manages its own; the API uses `schema_migrations`; chat uses
-`chat_schema_migrations`). Image tags are pinned — Dependabot/Renovate can
+Hydra and Kratos each get their OWN Postgres database (`hydra` and
+`kratos`, created by `docker/postgres/initdb/init-identity-dbs.sh` on
+first volume init) — they MUST NOT share the `sutra` database with
+each other or the API: both Ory products create a `networks` table
+(plus other same-named relations), so whoever migrates second dies
+with `ERROR: relation "networks" already exists` (this exact failure
+broke CI smoke). Image tags are pinned — Dependabot/Renovate can
 bump them; never use `latest` for identity infrastructure.
 
 Kratos config lives in `services/identity/kratos/kratos.yml` (mounted

@@ -51,10 +51,15 @@ var fixtureSeq int64
 // fixtureOrder inserts a minimal buyer -> seller -> order chain and
 // returns the order id. Uniqueness comes from a process-local
 // counter, so parallel test runs on the same database do not clash.
+// The sellers slug CHECK pins store_slug to ^[a-z0-9-]{3,30}$ — a raw
+// UnixNano() timestamp (19 digits) blows the 30-char cap and fails
+// the insert on real PG (the orders_test.go convention of keeping
+// only the last 8 nano digits).
 func fixtureOrder(t *testing.T, ctx context.Context, store *Store, tag string) pgtype.UUID {
 	t.Helper()
 	fixtureSeq++
-	suffix := fmt.Sprintf("%s-%d-%d", tag, time.Now().UnixNano(), fixtureSeq)
+	nano := fmt.Sprintf("%d", time.Now().UnixNano())
+	suffix := fmt.Sprintf("%s-%s-%d", tag, nano[len(nano)-8:], fixtureSeq)
 
 	var userID, sellerID pgtype.UUID
 	if err := store.pool.QueryRow(ctx,
@@ -62,10 +67,13 @@ func fixtureOrder(t *testing.T, ctx context.Context, store *Store, tag string) p
 		"saga-test-"+suffix).Scan(&userID); err != nil {
 		t.Fatalf("fixture user: %v", err)
 	}
+	// The slug must stay within the ^[a-z0-9-]{3,30}$ CHECK, so it
+	// gets a compact prefix instead of the descriptive "saga-test-".
+	slug := fmt.Sprintf("sgt-%s-%s-%d", tag, nano[len(nano)-8:], fixtureSeq)
 	if err := store.pool.QueryRow(ctx,
 		`INSERT INTO sellers (user_id, store_name, store_slug)
 		 VALUES ($1, $2, $3) RETURNING id`,
-		userID, "Saga Test Store "+suffix, "saga-test-"+suffix).Scan(&sellerID); err != nil {
+		userID, "Saga Test Store "+suffix, slug).Scan(&sellerID); err != nil {
 		t.Fatalf("fixture seller: %v", err)
 	}
 	var orderID pgtype.UUID
