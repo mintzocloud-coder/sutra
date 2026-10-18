@@ -233,6 +233,22 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedS
 	v1.Handle("/v1/categories", methodGuard([]string{http.MethodGet},
 		catalog.ListCategoriesHandler(catalogSvc, log)))
 
+	// Commerce catalog (F1b): product CRUD, variant ops and inventory.
+	// Reads (GET) are public storefront reads; every write resolves
+	// the caller's seller account and refuses non-owners (403).
+	v1.Handle("/v1/products", methodGuard([]string{http.MethodPost, http.MethodGet},
+		catalog.ProductsMux(pool, catalogSvc, log)))
+	v1.Handle("/v1/products/{id}", methodGuard([]string{http.MethodGet, http.MethodPatch, http.MethodDelete},
+		catalog.ProductMux(pool, catalogSvc, log)))
+	v1.Handle("/v1/products/{id}/variants", methodGuard([]string{http.MethodPost},
+		catalog.AddVariantHandler(pool, catalogSvc, log)))
+	v1.Handle("/v1/variants/{id}", methodGuard([]string{http.MethodPatch, http.MethodDelete},
+		catalog.VariantMux(pool, catalogSvc, log)))
+	v1.Handle("/v1/variants/{id}/inventory", methodGuard([]string{http.MethodGet},
+		catalog.GetInventoryHandler(catalogSvc, log)))
+	v1.Handle("/v1/variants/{id}/inventory/adjust", methodGuard([]string{http.MethodPost},
+		catalog.AdjustInventoryHandler(pool, catalogSvc, log)))
+
 	// AI core (E1): /v1/ai/* proxies to the Python AI service. Runs
 	// behind the same RequireAuth as everything else under /v1/, so the
 	// proxy always knows the verified subject (forwarded as

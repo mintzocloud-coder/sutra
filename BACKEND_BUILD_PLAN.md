@@ -1312,6 +1312,24 @@ documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
 - [ ] F1b: Catalog part 2 — product CRUD, variant/inventory ops
   (internal/catalog), routes wired, OpenAPI updated (redocly clean),
   tests green on real PG16, smoke.sh commerce section.
+  - [x] F1b part 1 DONE 2026-10-18 ~19:05 IST: products/variants/
+    inventory service (products.go) + HTTP handlers + routes wired in
+    main.go (products_handler.go) + tests (products_test.go).
+    Ownership: every write resolves the caller's seller id and refuses
+    non-owners (403 not_owner); reads are public storefront reads.
+    Product CRUD (create default draft, get, keyset list
+    (created_at,id) DESC, patch incl. category clear, archive via
+    DELETE); variants (add creates inventory row in the same tx, SKU
+    unique per product → 409, update incl. MRP clear, archive);
+    inventory AdjustInventory is one atomic UPDATE that refuses
+    negative stock (409 insufficient_stock); reserved untouched (F6
+    saga owns it). Money: integer paise, price on variant, mrp>=price.
+    VERIFIED: gofmt/build/vet clean; 11/11 tests green on real PG16.2
+    (embedded pgserver — apt PG16 vanished when the VM was replaced
+    mid-run; migration 0001's pgcrypto CREATE was relaxed ONLY for the
+    local run and restored byte-identical afterwards).
+  - [ ] F1b part 2: OpenAPI updated (redocly clean) + smoke.sh commerce
+    section (live-binary route smoke of the new endpoints).
 - [ ] F2: Search — Meilisearch CE (MIT, pinned version) in compose + Go
   indexer (product → index on create/update) + GET /v1/search proxy
   (filters, typo tolerance, keyset paging), docs/search.md, smoke section.
@@ -1379,3 +1397,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-18 ~16:00 IST: E5 part 2 done — ranking wired into GET /v1/feed/home (see E5 task note): new feed.RankPage (2 queries/page, before translate, best-effort WARN fallback), HomeFeedHandler gains engSvc + RankWeights from REC_W_* config, smoke.sh E5 deterministic like-flips-order section, OpenAPI "ranked per page". Verified: go build+vet+gofmt clean, full go test ./... green on real PG16 + Redis (2 new RankPage suites), bash -n + SPDX + redocly clean. **E5 COMPLETE.** Next: E6 Wave-2 hardening pass.
 - 2026-10-18 ~16:30 IST: E6 part 1 done — (a) /ag-ui/run abuse guards (X-Sutra-Subject required + eager per-user rate limit AI_AGUI_RPM=60 via budget.check_rate_limit; 5 new pytest); (b) OpenAPI /v1/ai/ag-ui/run + /v1/ai/chat paths + 4 new schemas (redocly 0 warnings); (c) eval harness skeleton (golden/v1_chat.yaml 4 cases, run_eval.py stdlib runner + gitignored results/, new CI python-ai job: pytest + eval dry-run); (d) production.md AI_AGUI_RPM row + benchmarks.md AI-guards note. Verified: py_compile + eval --dry-run + redocly + YAML + SPDX all green. New pytest couldn't execute locally (no fastapi/langgraph on this VM) — CI is the gate. E6 stays open: smoke ag-ui 429 assertion + close-out. Pushed.
 - 2026-10-18 ~17:30 IST: E6 part 2 done — smoke.sh E6 ag-ui 429 section verified (bash -n clean, logic reviewed) + CI-RED TRIAGE: the E6p1 push (4e559a94) was red on 4 jobs (elixir-chat, python-ai, SPDX, smoke); all four root causes fixed and pushed — (1) elixir-chat 19× `no :pubsub_server configured` → added pubsub_server: SutraChat.PubSub to services/chat/config/config.exs (also repairs the production D5 /internal/events broadcast path, which would have raised on every request); (2) elixir-chat 5× PresenceTest `already started` → setup probe now targets the real registered name SutraChat.Presence instead of the nonexistent SutraChat.PresenceSupervisor; (3) python-ai exit 2 at collection → CI pytest step sets dummy AI_SERVICE_TOKEN + DATABASE_URL (fail-closed import raises; unit tests use fake pools); (4) smoke postgres never ready → compose pgvector/pgvector:pg18 mount fixed to pgdata:/var/lib/postgresql (the pre-18 /data mount makes the pg18 entrypoint refuse to start); (5) SPDX → .pytest_cache skipped by the checker, excluded from pushes, gitignored, local caches deleted (push drops them from the repo). Verified: elixir syntax OK ×2, YAML parse ×2, bash -n ×2, SPDX simulation clean; full mix test / pytest / smoke are CI-gated. PENDING: CI-green confirmation on this push — next run checks the four jobs and reports. **E6 COMPLETE — Phase E complete (CI confirmation pending).**
+- 2026-10-18 ~19:10 IST: F1b part 1 done — product CRUD, variant/inventory ops (see F1b task note): internal/catalog/products.go (CreateProduct default-draft, GetProduct, keyset ListProducts, UpdateProduct patch incl. category clear, ArchiveProduct; AddVariant creates inventory row in-tx, SKU unique/product → 409, UpdateVariant incl. MRP clear, ArchiveVariant; GetInventory public, AdjustInventory atomic guarded UPDATE, 409 on would-go-negative; reserved untouched — F6 saga owns it), products_handler.go (10 handlers, strict-body contract, owner-only writes via SellerIDForUser, public reads; ProductsMux/ProductMux/VariantMux method dispatch), main.go routes (/v1/products POST+GET, /v1/products/{id} GET+PATCH+DELETE, /v1/products/{id}/variants POST, /v1/variants/{id} PATCH+DELETE, /v1/variants/{id}/inventory GET, .../adjust POST), products_test.go (validation unit + 3 integration suites: lifecycle incl. ErrNotOwner cross-seller checks, keyset paging, variant+inventory incl. negative-stock refusal). Verified: gofmt/build/vet clean, 11/11 tests green on real PG16.2 (embedded pgserver; apt PG16 vanished when the VM was replaced mid-run; 0001 pgcrypto relaxed only for the local run, restored byte-identical — diff-verified). F1b stays open: part 2 = OpenAPI (redocly clean) + smoke.sh commerce section. Pushed.

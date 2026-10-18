@@ -42,6 +42,12 @@ func clientErr(err error) bool {
 // for caller faults, 500 for everything else. Driver text never
 // reaches the client — it goes to the log with the request id.
 func catalogError(w http.ResponseWriter, r *http.Request, log *slog.Logger, op string, err error) {
+	// F1b error set: mapped by catalogErrorCode in products_handler.go.
+	if catalogClientErr(err) {
+		status, code := catalogErrorCode(err)
+		middleware.WriteJSONError(w, r, status, code, err.Error())
+		return
+	}
 	var code string
 	status := http.StatusInternalServerError
 	switch {
