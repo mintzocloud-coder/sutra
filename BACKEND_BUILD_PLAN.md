@@ -1641,6 +1641,17 @@ Then report to founder: production-ready backend live on main.
 
 ## Log
 
+- 2026-10-18 ~23:55 IST: F5 part 1 done — logistics gateway seam
+  (internal/logistics: Provider interface CreateShipment/Track/Cancel,
+  COD-first params + CODCollectedPaise on TrackingUpdate, 8-status
+  lifecycle with wire-stability test, fail-closed stub + NewProvider,
+  config.LOGISTICS_* + main.go boot wiring + compose passthroughs).
+  Verified: gofmt/build/vet clean, 7 tests green, full suite green,
+  live fail-closed on bogus provider + bad LOGISTICS_ENV, SPDX +
+  compose YAML clean. Pushed as 033a17ac. F5 stays open: part 2 =
+  docs/logistics.md + COD remittance fields + shipment realtime
+  events + production.md rows + smoke section.
+
 - 2026-10-18 ~21:25 IST: F3 part 1 done — cart API (migration 0010,
   internal/cart service + handlers + routes, 8 test suites green on
   real PG16, full go test ./... green, live binary smoke of all 5
