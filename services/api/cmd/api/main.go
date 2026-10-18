@@ -16,6 +16,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/mintzocloud-coder/sutra/services/api/internal/aiproxy"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/catalog"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/config"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/db"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/engagement"
@@ -220,6 +221,17 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedS
 		engagement.LikeHandler(pool, engagementSvc, log)))
 	v1.Handle("/v1/users/{id}/posts", methodGuard([]string{http.MethodGet},
 		posts.UserPostsHandler(postsSvc, pool, log)))
+
+	// Commerce catalog (F1): seller onboarding + the curated category
+	// tree. Storefront reads are public (any caller); registration is
+	// one seller account per authenticated user (Wave-1 rule).
+	catalogSvc := catalog.NewService(pool)
+	v1.Handle("/v1/sellers", methodGuard([]string{http.MethodPost},
+		catalog.RegisterSellerHandler(pool, catalogSvc, log)))
+	v1.Handle("/v1/sellers/{id}", methodGuard([]string{http.MethodGet},
+		catalog.GetSellerHandler(catalogSvc, log)))
+	v1.Handle("/v1/categories", methodGuard([]string{http.MethodGet},
+		catalog.ListCategoriesHandler(catalogSvc, log)))
 
 	// AI core (E1): /v1/ai/* proxies to the Python AI service. Runs
 	// behind the same RequireAuth as everything else under /v1/, so the

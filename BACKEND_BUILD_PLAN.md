@@ -1280,10 +1280,38 @@ onboarding + KYC start AFTER investors (founder order 2026-10-17) — the
 Cashfree adapter stays a fail-closed stub with the integration contract
 documented, exactly like the D1 OTP adapter. Real keys NEVER in repo.
 
-- [ ] F1: Seller + catalog data model — migrations (sellers, categories,
-  products, product_variants, inventory), internal/catalog Go package
-  (seller record, product CRUD, variant/inventory ops, 0%-commission price
-  model), routes wired, OpenAPI (redocly clean), tests green on real PG16.
+- [x] F1a: Catalog schema + seller onboarding + categories (F1 part 1) —
+  migration 0008 (sellers, categories + 26-row seed tree, products,
+  product_variants, inventory; 0%-commission model documented:
+  commission_rate_bps DEFAULT 0, integer-paise prices, mrp>=price,
+  inventory quantity/reserved with reserved<=quantity CHECK), new
+  internal/catalog package: Register (one seller per user, first-come
+  slugs, slugify+fallback, GSTIN shape check, race-safe UNIQUE mapping
+  via pgconn constraint names), Get, ListCategories (nested tree),
+  routes POST /v1/sellers, GET /v1/sellers/{id}, GET /v1/categories
+  wired in main.go.
+  Accept: go build+vet+test green, live binary smoke of all routes.
+  DONE 2026-10-18 ~18:20 IST: gofmt/build/vet clean; 7 tests green on
+  real PG16 (4 unit: slugify/grammar incl. emoji rune counting, GSTIN,
+  store-name; 3 integration: register/duplicate→409 seller_exists/
+  slug-taken→409 race via 2 users/validation matrix/Get 404,
+  derived+fallback slugs, seeded tree shape incl. mobiles→electronics
+  parentage + no duplicate slugs). Live binary smoke (AUTH_BYPASS +
+  local redis as Valkey): register → 201 derived slug "smoke-store",
+  commission_rate_bps 0, gstin stored; duplicate → 409
+  seller_already_registered envelope; GET seller → 200; bad id → 400
+  invalid_seller_id; categories → 10 roots, electronics has
+  audio/laptops/mobiles children; DELETE → 405. Three real bugs caught
+  pre-push: (1) SQL seed used double quotes for "Men's Fashion"
+  (identifier, not string); (2) handler passed nil pool to
+  social.CallerUUID (would nil-panic); (3) test used fixed slugs →
+  failed on rerun against reused DB (uniqueSlug helper added). GOTCHA:
+  `pg_ctlcluster 16 main start` hung this run (systemd bus); direct
+  `sudo -u postgres pg_ctl -D /etc/postgresql/16/main start` worked.
+  NEXT: F1b (products/variants/inventory Go ops + OpenAPI + smoke).
+- [ ] F1b: Catalog part 2 — product CRUD, variant/inventory ops
+  (internal/catalog), routes wired, OpenAPI updated (redocly clean),
+  tests green on real PG16, smoke.sh commerce section.
 - [ ] F2: Search — Meilisearch CE (MIT, pinned version) in compose + Go
   indexer (product → index on create/update) + GET /v1/search proxy
   (filters, typo tolerance, keyset paging), docs/search.md, smoke section.
