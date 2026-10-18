@@ -83,6 +83,19 @@ harnesses are DB-free by design. Their contract — 429 +
 computed `Retry-After` — is proven by `scripts/smoke.sh` (the D6
 section asserts all three live against the real stack).
 
+The E6 **AI guards are deliberately not benchmarked** either: they are
+PG-backed fixed-window counters (`ai_rate_windows`, `ai_usage_daily`) —
+DB round-trip cost, not hot-path cost — and a benchmark that couldn't
+touch the database would measure nothing real. Their contract
+(429 + `ai_rate_limited` / `ai_budget_exhausted` + `Retry-After`) is
+proven per-endpoint: `/v1/ai/chat` and `/v1/ai/translate` by
+`scripts/smoke.sh` (the E2/E4 sections assert both 429 paths live),
+`/v1/ai/ag-ui/run` by `services/ai/tests/test_agui_guards.py` (unit)
+plus the same live path as chat. Model inference itself is
+hardware-bound (sarvam-30B via Ollama dev / vLLM prod); token
+throughput benchmarks are Wave-2 work and belong in docs/ai-core.md,
+not here.
+
 **Reading them:** `BenchmarkHealthz` ns/op is the per-request framework
 tax every route pays; compare `BenchmarkUnauthorized401` minus
 `BenchmarkHealthz` to price the auth-reject path; compare

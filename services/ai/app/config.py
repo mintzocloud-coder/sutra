@@ -61,6 +61,13 @@ class Settings:
     max_history_messages: int = _get_int("AI_MAX_HISTORY", 30)
     max_input_chars: int = _get_int("AI_MAX_INPUT_CHARS", 8000)
 
+    # AG-UI skeleton endpoint (E1) per-user guard (E6). The echo graph
+    # costs no model tokens, but an unbounded SSE stream endpoint with
+    # no per-caller limit is an abuse vector — so it gets the same
+    # PG-backed fixed-window rate limiter as /chat (token budget does
+    # not apply: the echo turn spends zero tokens).
+    agui_requests_per_minute: int = _get_int("AI_AGUI_RPM", 60)
+
     # Versioned system prompt: prompts/system/{version}.yaml. The persona
     # is never hardcoded — a rollout is a new YAML file + this knob.
     prompt_version: str = _get_env("AI_PROMPT_VERSION", "v1")

@@ -155,6 +155,7 @@ API calls `/translate` directly with the same service credential).
 | `AI_MODEL_STUB` | *(unset)* | `1` = deterministic stub chat model for smoke/CI instead of sarvam-30B (E2) |
 | `AI_DAILY_TOKEN_BUDGET` | `50000` | Per-user daily token budget; over the cap → 429 `ai_budget_exhausted` (E2) |
 | `AI_CHAT_RPM` | `20` | Per-user chat rate limit; over the cap → 429 `ai_rate_limited` (E2) |
+| `AI_AGUI_RPM` | `60` | Per-user rate limit on the AG-UI echo endpoint (`/v1/ai/ag-ui/run`); over the cap → 429 `ai_rate_limited` (E6) |
 
 ## 4. Build the images
 

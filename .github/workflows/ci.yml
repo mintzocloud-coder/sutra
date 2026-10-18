@@ -105,6 +105,29 @@ jobs:
         # keeps CI fast; full runs are manual (see the doc).
         run: go test -run='^$' -bench=. -benchtime=2s -count=1 ./cmd/api/... ./internal/middleware/... ./internal/social/...
 
+  python-ai:
+    name: Python AI service tests
+    runs-on: ubuntu-latest
+    # Gates E1-E6: the AI service's unit tests (guard logic, graph wiring,
+    # formatters, budget/translate math) run on every push. DB-backed
+    # behavior is covered by the smoke job and live-service tests.
+    defaults:
+      run:
+        working-directory: services/ai
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest
+      - name: Run unit tests
+        run: python -m pytest tests/ -q
+      - name: Validate eval golden set
+        # The eval harness skeleton's golden files must at least parse
+        # (real eval runs stay manual until Wave 2).
+        run: python eval/run_eval.py --dry-run
+
   elixir-chat:
     name: Elixir chat builds and tests
     runs-on: ubuntu-latest

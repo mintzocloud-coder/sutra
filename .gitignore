@@ -24,3 +24,6 @@ secrets/
 # Data volumes are docker-managed, not in git
 pgdata/
 weeddata/
+
+# Eval harness results (skeleton in services/ai/eval/) — local runs only
+services/ai/eval/results/

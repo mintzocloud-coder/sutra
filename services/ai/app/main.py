@@ -36,6 +36,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from . import budget as budget_mod
 from . import chat as chat_mod
 from . import db as db_mod
 from . import graph as agent_graph
@@ -148,7 +149,9 @@ def healthz() -> dict:
 
 @app.post("/ag-ui/run")
 def ag_ui_run(
-    body: RunAgentInput, _: None = Depends(require_service_token)
+    body: RunAgentInput,
+    request: Request,
+    _: None = Depends(require_service_token),
 ) -> StreamingResponse:
     """Run one agent turn, streaming AG-UI events as SSE.
 
@@ -160,7 +163,25 @@ def ag_ui_run(
       RUN_FINISHED
     Any graph failure mid-stream becomes RUN_ERROR (the terminal event)
     instead of a truncated stream.
+
+    E6 abuse guards: the Go proxy authenticates the user (JWT) and
+    forwards the verified subject as X-Sutra-Subject; without it the
+    request is refused (the AI service must never attribute usage to an
+    unknown caller). The per-user fixed-window rate limiter
+    (AI_AGUI_RPM/min, default 60) runs eagerly before streaming:
+    rejections are JSON 429s with Retry-After, never truncated streams.
+    The token budget does not apply here — an echo turn spends zero
+    model tokens.
     """
+    subject = request.headers.get("x-sutra-subject", "").strip()
+    if not subject:
+        return _envelope(401, "unauthorized",
+                         "missing X-Sutra-Subject — call through the Go API proxy")
+    try:
+        budget_mod.check_rate_limit(
+            request.app.state.pool, subject, settings.agui_requests_per_minute)
+    except budget_mod.GuardRejection as err:
+        return _envelope(429, err.code, err.message, err.retry_after)
     user_text = ""
     for msg in reversed(body.messages):
         if msg.role == "user" and msg.content.strip():

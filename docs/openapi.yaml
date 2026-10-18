@@ -75,8 +75,9 @@ paths:
         token and forwards the verified subject as X-Sutra-Subject.
         With AI_SERVICE_TOKEN empty the proxy answers 503
         (service_unavailable); with the AI service down it answers 503 +
-        Retry-After. Full /v1/ai/* coverage (chat, translate, ...) lands
-        in E6 — see docs/ai-core.md for the roadmap.
+        Retry-After. All /v1/ai/* routes (healthz, ag-ui/run, chat,
+        translate) are documented in this spec; the contract is in
+        docs/ai-core.md.
       operationId: aiHealthz
       security:
         - bearerAuth: []
@@ -194,6 +195,133 @@ paths:
           $ref: '#/components/responses/RateLimited'
         '503':
           description: AI service not configured/unreachable, or the IndicTrans2 runtime is not installed (translate_unavailable)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/ai/ag-ui/run:
+    post:
+      tags: [ai]
+      summary: AG-UI agent run (echo skeleton, proxied, SSE)
+      description: |
+        Proxied to the Python AI service's /ag-ui/run (the /v1/ai prefix is
+        stripped by the Go proxy). Requires the caller's JWT; the proxy adds
+        the internal service Bearer <redacted> and forwards the verified subject
+        as X-Sutra-Subject. Accepts a RunAgentInput, streams AG-UI 1.0
+        BaseEvents as SSE over the echo graph:
+        RUN_STARTED -> STEP_STARTED(echo) -> STEP_FINISHED(echo) ->
+        TEXT_MESSAGE_START -> TEXT_MESSAGE_CONTENT -> TEXT_MESSAGE_END ->
+        RUN_FINISHED (graph failure mid-stream becomes RUN_ERROR).
+        Abuse guards (E6): X-Sutra-Subject is required (401 without it);
+        per-user fixed-window rate limit (AI_AGUI_RPM, default 60/min) ->
+        429 `ai_rate_limited` with Retry-After. No token budget applies —
+        the echo turn spends zero model tokens.
+        Contract: docs/ai-core.md.
+      operationId: aiAgUiRun
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunAgentInput'
+      responses:
+        '200':
+          description: SSE stream of AG-UI BaseEvents
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/AguiEvent'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          description: Per-user AG-UI rate limit exceeded (ai_rate_limited) or the Go API per-IP limiter fired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Retry-After:
+              type: integer
+              description: Seconds until the next fixed window
+        '503':
+          description: AI service not configured or unreachable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/ai/chat:
+    post:
+      tags: [ai]
+      summary: Personal AI chat (proxied, SSE)
+      description: |
+        Proxied to the Python AI service's /chat (the /v1/ai prefix is
+        stripped by the Go proxy). Requires the caller's JWT; the proxy adds
+        the internal service Bearer <redacted> and forwards the verified subject
+        as X-Sutra-Subject. One LangGraph turn (recall -> generate ->
+        persist) with PG-backed per-user conversation memory keyed by
+        thread_id, the versioned system prompt (AI_PROMPT_VERSION, never
+        hardcoded), and per-delta streaming via LangGraph custom stream
+        mode. Event sequence: RUN_STARTED (carries the minted threadId when
+        omitted) -> STEP_STARTED(recall) -> STEP_FINISHED -> STEP_STARTED
+        (generate) -> TEXT_MESSAGE_START -> TEXT_MESSAGE_CONTENT* ->
+        TEXT_MESSAGE_END -> STEP_FINISHED -> STEP_STARTED(persist) ->
+        STEP_FINISHED -> RUN_FINISHED (failures become RUN_ERROR).
+        Guards run EAGERLY before streaming, so rejections are JSON 429s
+        (never truncated streams): per-user fixed-window rate limit
+        (AI_CHAT_RPM, default 20/min) -> `ai_rate_limited`, and daily
+        token budget (AI_DAILY_TOKEN_BUDGET, default 50000/day) ->
+        `ai_budget_exhausted`, both with Retry-After.
+        With AI_SERVICE_TOKEN empty or the AI service down the proxy
+        answers 503 (service_unavailable).
+        Contract: docs/ai-core.md.
+      operationId: aiChat
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatInput'
+      responses:
+        '200':
+          description: SSE stream of AG-UI BaseEvents for the chat turn
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/AguiEvent'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: Invalid input (empty_messages, message_too_long)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Per-user chat rate limit (ai_rate_limited) or daily token budget exhausted (ai_budget_exhausted); the Go API per-IP limiter shares this envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Retry-After:
+              type: integer
+              description: Seconds until the next window / UTC midnight
+        '503':
+          description: AI service not configured or unreachable
           content:
             application/json:
               schema:
@@ -1782,6 +1910,68 @@ components:
               type: string
               description: Echoes X-Request-ID for log correlation.
               example: 01J9X0ABCD...
+    AguiMessage:
+      type: object
+      description: One message in an AG-UI run input (E1 subset).
+      properties:
+        role:
+          type: string
+          example: user
+        content:
+          type: string
+          example: hello
+    RunAgentInput:
+      type: object
+      description: |
+        AG-UI RunAgentInput (E1 subset): thread/run identity, the message
+        list, and an opaque state bag the client owns. thread_id/run_id
+        default to server-minted values when omitted.
+      properties:
+        thread_id:
+          type: string
+          example: thread-a1b2c3d4e5f6
+        run_id:
+          type: string
+          example: run-0f9e8d7c6b5a
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/AguiMessage'
+        state:
+          type: object
+          description: Opaque client-owned state bag, echoed back untouched.
+    ChatInput:
+      type: object
+      description: |
+        E2 personal-AI chat input. thread_id is the client's conversation
+        key (scoped to the user); omit it to start a new thread — the
+        minted id comes back in RUN_STARTED's threadId. Only the last
+        user message is answered; memory comes from the thread.
+      properties:
+        thread_id:
+          type: string
+          maxLength: 128
+          example: thread-a1b2c3d4e5f6
+        messages:
+          type: array
+          description: Message history tail for this turn (max 8000 chars per message).
+          items:
+            $ref: '#/components/schemas/AguiMessage'
+    AguiEvent:
+      type: object
+      description: |
+        One AG-UI 1.0 BaseEvent carried in an SSE `data:` frame
+        (`data: {"type":"RUN_STARTED",...}\n\n`). The `type` field selects
+        the rest: RUN_STARTED (threadId, runId), STEP_STARTED/STEP_FINISHED
+        (stepName), TEXT_MESSAGE_START (messageId, role),
+        TEXT_MESSAGE_CONTENT (messageId, delta), TEXT_MESSAGE_END
+        (messageId), RUN_FINISHED (threadId, runId),
+        RUN_ERROR (message).
+      properties:
+        type:
+          type: string
+          example: TEXT_MESSAGE_CONTENT
+      additionalProperties: true
 
   headers:
     XRequestID:

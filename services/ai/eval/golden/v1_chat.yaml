@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later (comment-only; header checker skips YAML)
+# Golden prompt set v1 for the Sutra personal-AI chat (E2), consumed by
+# run_eval.py. E6 skeleton: keyword-presence assertions, not a quality
+# eval — the real quality harness (human-graded rubrics, per-prompt
+# version regression diffs) is Wave-2 work.
+#
+# Case fields:
+#   name        — stable id, used in results.
+#   backends    — which EVAL_BACKEND runs include this case ("stub" for
+#                 AI_MODEL_STUB=1, "real" for a live model; unset = all).
+#   turns       — ordered conversation; each turn: {user: "..."}.
+#                 Turns after the first reuse the minted threadId, so
+#                 multi-turn cases exercise thread memory.
+#   expect_all  — keywords that must appear (case-insensitive) in the
+#                 CONCATENATED assistant text of the whole case.
+#   expect_absent — keywords that must NOT appear (persona leaks, etc).
+version: v1
+prompt_version: v1   # the case set pins the persona version it was written against
+cases:
+  - name: stub_self_identifies
+    backends: [stub]
+    turns:
+      - user: "namaste, who are you?"
+    expect_all: ["AI_MODEL_STUB=1"]
+    expect_absent: []
+
+  - name: echo_round_trip
+    backends: [stub]
+    turns:
+      - user: "the quick brown fox jumps"
+    # The stub echoes the user's text back; this proves the full
+    # proxy -> graph -> SSE path delivered the input intact.
+    expect_all: ["the quick brown fox jumps"]
+    expect_absent: []
+
+  - name: multilingual_greeting
+    backends: [stub]
+    turns:
+      - user: "kem cho? hu Surat thi chu"
+    expect_all: ["kem cho"]
+    expect_absent: []
+
+  - name: empty_thread_rejected
+    # Negative-path case: an empty messages list must be refused with a
+    # JSON 422 (never a truncated stream). Handled specially by the
+    # runner (send_empty: true).
+    backends: [stub, real]
+    send_empty: true
+    expect_status: 422

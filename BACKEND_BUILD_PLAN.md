@@ -1200,6 +1200,35 @@ non-ML signals only; vector embeddings plug in later via #19.
       (golden prompt set, run script, results gitignored), OpenAPI for
       /v1/ai/*, production.md + benchmarks.md updated, full smoke green.
       Accept: CI green, smoke green, docs complete. **Phase E complete.**
+      E6 PART 1 DONE 2026-10-18 ~16:30 IST: (a) abuse-guard gap closed —
+      `/ag-ui/run` was the one AI endpoint with no per-user limit and no
+      subject requirement: now requires X-Sutra-Subject (401 without,
+      like /chat) + eager PG fixed-window rate limit (AI_AGUI_RPM,
+      default 60 → 429 `ai_rate_limited` + Retry-After, reusing
+      budget.check_rate_limit; no token budget — echo spends zero model
+      tokens); config knob + tests/test_agui_guards.py (5 tests incl.
+      boundary + disable hatch + subject-keyed-window spy). (b) OpenAPI:
+      new `/v1/ai/ag-ui/run` + `/v1/ai/chat` paths with the AG-UI SSE
+      event contract, new RunAgentInput/ChatInput/AguiEvent/AguiMessage
+      schemas, stale "coverage lands in E6" note in healthz fixed —
+      redocly lint valid, 0 warnings. (c) Eval harness skeleton:
+      services/ai/eval/ (golden/v1_chat.yaml — 4 cases incl. a
+      negative 422 case; run_eval.py — stdlib SSE runner, keyword
+      assertions, results JSON to eval/results/, --dry-run; results/
+      gitignored); CI python-ai job added (pip install + pytest +
+      eval --dry-run). (d) production.md AI_AGUI_RPM row; benchmarks.md
+      documents AI guards as deliberately-not-benchmarked (DB-backed;
+      proven by smoke 429s + unit tests), Wave-2 token-throughput note.
+      VERIFIED: py_compile clean on all 4 touched Python files, eval
+      --dry-run green (4 cases parse), redocly 0 warnings, ci.yml YAML
+      valid, SPDX checker green; budget imports standalone (no fastapi
+      needed) so the new tests collect even in minimal CI images.
+      NOTE: this VM has no fastapi/langgraph installed, so the new
+      pytest file couldn't execute locally — it mirrors the established
+      test pattern and the guard math is verified by the fake-pool
+      tests; CI python-ai job is the execution gate. E6 STAYS OPEN:
+      smoke.sh ag-ui 429 assertion, final CI-green confirmation.
+      NEXT: E6 part 2 (smoke assertion + close-out).
 
 ## Done when
 
@@ -1246,3 +1275,4 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-18 ~14:05 IST: E3 part 2b done — smoke.sh full auto-caption round-trip (caption-worker built+booted, heartbeat-gated; sample clip mints with a sine audio track for faster-whisper; post with auto_caption=true → RequestCaptions → poll caption_status→ready → caption_url VTT asserted → cleanup delete), production.md "Caption worker" env section (13 vars), issue #20 closed. bash -n + SPDX green; end-to-end CI-gated. **E3 COMPLETE.** Next: E4 language bridge (IndicTrans2).
 - 2026-10-18 ~14:45 IST: E4 part 2 done — feed ?translate=xx (see E4 task note): internal/feed/translate.go (Translator, 14-code allowlist, FeedItem, 6s-budget best-effort decoration), HomeFeedHandler + main.go wiring (fail-closed on bad URL, loud WARN when disabled), 9 new Go tests green, OpenAPI TranslateTarget + FeedItem/FeedPage schemas (redocly clean), smoke.sh E4 section (stub round-trip: /v1/ai/translate → "[hi] namaste duniya"; feed ?translate=gu decorates item; ?translate=xx → 400), production.md "AI service" env section, language-bridge.md feed section marked implemented. Full compose + CI smoke CI-gated. **E4 COMPLETE.** Next: E5 recommendations v1 (non-ML).- 2026-10-18 ~15:30 IST: E5 part 1 done — likes primitive + ranking engine (see E5 task note): migration 0007, internal/engagement (Like/Unlike/Signals/AuthorFollowerCounts), POST+DELETE /v1/posts/{id}/like wired in main.go, internal/feed/rank.go pure deterministic scorer + RankItems, docs/recsys.md (v1 formula + #19 integration plan), OpenAPI like endpoints (redocly clean), production.md REC_W_* rows. Verified: go build+vet+gofmt clean, go test ./... green on real PG16 (14 new tests pass), live binary smoke of all like routes. E5 stays open: part 2 = feed/home wiring + smoke assertion. Pushed.
 - 2026-10-18 ~16:00 IST: E5 part 2 done — ranking wired into GET /v1/feed/home (see E5 task note): new feed.RankPage (2 queries/page, before translate, best-effort WARN fallback), HomeFeedHandler gains engSvc + RankWeights from REC_W_* config, smoke.sh E5 deterministic like-flips-order section, OpenAPI "ranked per page". Verified: go build+vet+gofmt clean, full go test ./... green on real PG16 + Redis (2 new RankPage suites), bash -n + SPDX + redocly clean. **E5 COMPLETE.** Next: E6 Wave-2 hardening pass.
+- 2026-10-18 ~16:30 IST: E6 part 1 done — (a) /ag-ui/run abuse guards (X-Sutra-Subject required + eager per-user rate limit AI_AGUI_RPM=60 via budget.check_rate_limit; 5 new pytest); (b) OpenAPI /v1/ai/ag-ui/run + /v1/ai/chat paths + 4 new schemas (redocly 0 warnings); (c) eval harness skeleton (golden/v1_chat.yaml 4 cases, run_eval.py stdlib runner + gitignored results/, new CI python-ai job: pytest + eval dry-run); (d) production.md AI_AGUI_RPM row + benchmarks.md AI-guards note. Verified: py_compile + eval --dry-run + redocly + YAML + SPDX all green. New pytest couldn't execute locally (no fastapi/langgraph on this VM) — CI is the gate. E6 stays open: smoke ag-ui 429 assertion + close-out. Pushed.
