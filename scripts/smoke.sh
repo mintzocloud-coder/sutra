@@ -205,6 +205,17 @@ subject="$(printf '%s' "$me" | python3 -c 'import json,sys; print(json.load(sys.
   || fail "/v1/me subject '$subject' != expected '$EXPECTED_SUBJECT'"
 pass "api /v1/me 200 (bypass identity '$subject', auto-provisioned)"
 
+# --- Fail-closed payments seam (F4) -------------------------------------------
+# Compose pins PAYMENTS_PROVIDER=stub with empty CASHFREE_*, so the api must
+# boot with the loud "fail-closed stub" WARN — and must NOT log the
+# set-but-ignored WARN (the creds are unset here). Assert on the boot log.
+docker compose logs api 2>/dev/null | grep -q "payments: running with the fail-closed stub" \
+  || fail "api boot log missing the fail-closed payments WARN"
+pass "api boot log carries the fail-closed payments WARN"
+docker compose logs api 2>/dev/null | grep -q "payments: CASHFREE_" \
+  && fail "api boot log claims CASHFREE_* set-but-ignored (creds are unset in smoke)"
+pass "api boot log has no set-but-ignored CASHFREE_* WARN"
+
 # --- Real-issuer identity loop (D1) -----------------------------------------
 # The checks above ran with AUTH_BYPASS=1, which skips JWT verification
 # entirely. Now prove the real path: a Hydra-issued RS256 JWT verified

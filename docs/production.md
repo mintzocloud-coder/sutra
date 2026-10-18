@@ -59,6 +59,14 @@ PHX_HOST=api.sutra.example.com
 HYDRA_ISSUER=https://hydra.sutra.example.com   # placeholder until issue #4
 JWT_AUDIENCE=sutra-api
 CORS_ORIGINS=https://app.sutra.example.com
+# PAYMENTS_PROVIDER stays "stub" until the post-investors Cashfree onboarding
+# (see docs/payments.md). The three CASHFREE_* below are intentionally EMPTY
+# until then — the stub ignores them (loud WARN if set) and the API refuses
+# to boot with any other PAYMENTS_PROVIDER value. Never commit real keys.
+#PAYMENTS_PROVIDER=stub
+#CASHFREE_APP_ID=
+#CASHFREE_SECRET_KEY=
+#CASHFREE_ENV=
 ```
 
 > Never set `AUTH_BYPASS=1` in production. Both services log a loud
@@ -102,6 +110,10 @@ CORS_ORIGINS=https://app.sutra.example.com
 | `CHAT_INTERNAL_TOKEN` | *(unset)* | Service-to-service Bearer token for `POST /internal/events`; empty **disables** the realtime publisher with a loud WARN (D5) |
 | `SEARCH_URL` | `http://meilisearch:7700` | Meilisearch base URL for product search (F2) |
 | `SEARCH_MASTER_KEY` | *(unset = search disabled)* | Must equal `MEILI_MASTER_KEY`; empty ⇒ indexing no-ops with a loud WARN and `GET /v1/search` 503s. A key with a bad URL refuses boot (fail-closed). See `docs/search.md` |
+| `PAYMENTS_PROVIDER` | `stub` | Only `stub` boots until the post-investors Cashfree onboarding; any other value makes the API refuse to boot (fail-closed). See `docs/payments.md` |
+| `CASHFREE_APP_ID` | *(unset)* | Cashfree App ID (post-investors); loaded, never logged, ignored by the stub (loud WARN when set) |
+| `CASHFREE_SECRET_KEY` | *(unset)* | Cashfree Secret Key; same handling as the App ID |
+| `CASHFREE_ENV` | *(unset)* | `sandbox` or `prod`; malformed values refuse boot |
 | `SHUTDOWN_TIMEOUT` | `10` | Graceful-shutdown seconds |
 | `AUTH_BYPASS` | *(unset)* | Dev-only identity hatch — **never in prod** |
 
@@ -355,6 +367,11 @@ Every API error response carries the envelope
       files committed to git
 - [ ] `CLUSTER_SECRET`/`RELEASE_COOKIE` changed from dev defaults
       before enabling clustering
+- [ ] `PAYMENTS_PROVIDER=stub` is **expected** until the post-investors
+      Cashfree onboarding — the "fail-closed stub — real payment
+      processing is DISABLED" WARN in the api boot log is the healthy
+      pre-investor state (its *absence* with `PAYMENTS_PROVIDER=cashfree`
+      is the observable "payments are live" signal)
 
 ## 12. Rollback
 
