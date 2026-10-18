@@ -129,6 +129,18 @@ defmodule SutraChat.Chat do
     # clients via ack_payload) expect.
     {:ok, id} = Ecto.UUID.load(id)
 
+    # The raw query bypasses Ecto's type casting, so normalize inserted_at
+    # to the schema's canonical type (:utc_datetime_usec = DateTime) here,
+    # at the single raw-SQL boundary. Downstream consumers (render_message,
+    # ack_payload, encode_cursor) all assume DateTime per the schema;
+    # without this, a NaiveDateTime from the driver crashes
+    # DateTime.to_unix/2 on every send (CI red 2026-10-19).
+    inserted_at =
+      case inserted_at do
+        %DateTime{} = dt -> dt
+        %NaiveDateTime{} = ndt -> DateTime.from_naive!(ndt, "Etc/UTC")
+      end
+
     message = %Message{
       id: id,
       room_id: room_id,

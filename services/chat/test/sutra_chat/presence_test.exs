@@ -58,8 +58,15 @@ defmodule SutraChat.PresenceTest do
       end
     end
 
-    p1 = spawn(fn -> holder.("phone", self()) end)
-    p2 = spawn(fn -> holder.("laptop", self()) end)
+    # NOTE: capture the test pid BEFORE spawning — `self()` inside the
+    # spawned function is the child's pid, so passing `self()` there sends
+    # the :tracked confirmation to the child itself (which is blocked in
+    # `receive :stop`) and the test times out waiting for it (CI red
+    # 2026-10-19). The tracked pid (Presence.track's first arg) stays the
+    # child's — two children = two metas under one key, which is the point.
+    test_pid = self()
+    p1 = spawn(fn -> holder.("phone", test_pid) end)
+    p2 = spawn(fn -> holder.("laptop", test_pid) end)
     assert_receive {:tracked, "phone"}, 5_000
     assert_receive {:tracked, "laptop"}, 5_000
 

@@ -1724,6 +1724,44 @@ Then report to founder: production-ready backend live on main.
 
 ## Log
 
+- 2026-10-19 ~02:55 IST: CI-RED TRIAGE ATTEMPT #2 — downloaded the real
+  CI job logs via the GitHub API (blob-storage log fetch works; the
+  earlier 401 was transient) and root-caused all three failures with
+  exact stack traces — attempt #1's fixes were correct but incomplete:
+  (1) elixir-chat 5 ChatChannelTest failures (send/history-paginates/
+  join-params/history-survives/dedupe): `ChatChannel.render_message/1`
+  calls `DateTime.to_unix(inserted_at, :millisecond)` but the raw-SQL
+  upsert in `Chat.upsert_message/1` (which bypasses Ecto's type
+  casting) hands back a NaiveDateTime → FunctionClauseError on every
+  send. Fix: normalize inserted_at to the schema-canonical DateTime
+  (:utc_datetime_usec) at the single raw-SQL boundary in
+  upsert_message/1 (handles both DateTime and NaiveDateTime inputs).
+  (2) elixir-chat 1 ChatChannelTest failure (join empty history): the
+  join reply echoes the STRIPPED room id ("fresh-123"), but the B6 test
+  asserted the full topic ("room:fresh-..."). The stripped form is the
+  documented contract (docs/delivery-semantics.md example, broadcast
+  room_id, scripts/smoke_ws.py assertion all use it) — fixed the TEST
+  to expect the stripped id. (3) elixir-chat 1 PresenceTest failure
+  (two-device metas): the test passed `self()` inside the spawned
+  function, so the :tracked confirmation went to the child process
+  (blocked in receive) instead of the test process → 5s timeout. Fix:
+  capture the test pid before spawning. (4) smoke job: kratos-migrate
+  exited 1 with no visible output — the kratos.yml used `hash:` but
+  Kratos names the section `hashers:` (plural); unknown keys make
+  newer Kratos refuse to boot. Fixed to `hashers:`. Also hardened
+  smoke.sh: a failed `docker compose up -d hydra kratos` now dumps
+  the kratos-migrate/hydra-migrate container logs before exiting, so
+  the next failure is diagnosable from the CI log alone.
+  VERIFIED: Code.string_to_quoted! on all 3 edited Elixir files,
+  kratos.yml YAML parse, bash -n smoke.sh, go build+vet green, SPDX
+  checker green. Full mix test + smoke run are CI-gated (Elixir 1.18,
+  no docker on this VM). Pushed; CI-green confirmation lands with the
+  next run's CI check. NOTE: migration 0013_order_sagas.sql (order_sagas
+  + saga_processed_events + shipments(order_id) unique index) was
+  written this run ahead of the F6 part 2 saga code — it rides this
+  push as inert schema; the saga orchestrator itself is still the next
+  task and stays unmarked.
+
 - 2026-10-19 ~01:25 IST: CI-RED TRIAGE — both red jobs root-caused and
   fixed in this run: (1) elixir-chat 7 failures: `Chat.upsert_message/1`
   passed the string form of `Ecto.UUID.generate()` as the `$1::uuid`

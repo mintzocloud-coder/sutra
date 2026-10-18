@@ -181,7 +181,15 @@ fi
 pass "postgres ready"
 
 echo "smoke: starting hydra + kratos (migrate one-shots run first via depends_on)"
-docker compose up -d hydra kratos
+# A failed migrate one-shot (kratos-migrate/hydra-migrate) makes `up`
+# exit non-zero with no useful output — dump the one-shots' logs first
+# so the failure is diagnosable from the CI log alone (smoke red
+# 2026-10-19: kratos-migrate exited 1 with zero visible output).
+if ! docker compose up -d hydra kratos; then
+  echo "smoke: identity plane failed to start — one-shot logs:"
+  docker compose logs kratos-migrate hydra-migrate 2>/dev/null || true
+  exit 1
+fi
 wait_for 120 "hydra openid-configuration" \
   curl -sf http://localhost:4444/.well-known/openid-configuration
 wait_for 120 "kratos /health/alive" \

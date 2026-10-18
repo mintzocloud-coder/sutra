@@ -67,7 +67,10 @@ secrets:
   cipher:
     - dev-only-kratos-cipher-secret-32c-min-abcdef
 
-hash:
+# Kratos names this section `hashers` (plural) — `hash` is an unknown key
+# and newer Kratos releases refuse to boot on unknown config keys, which
+# killed the kratos-migrate one-shot in CI (smoke red 2026-10-19).
+hashers:
   argon2:
     # Dev-tuned: fast enough for laptop iteration, still Argon2id.
     memory: 65536

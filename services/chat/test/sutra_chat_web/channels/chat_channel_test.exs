@@ -42,8 +42,13 @@ defmodule SutraChatWeb.ChatChannelTest do
   end
 
   test "join succeeds and returns an empty history for a fresh room", %{socket: socket} do
-    assert {:ok, %{room_id: "room:fresh-" <> _, history: %{messages: [], next_cursor: nil}}, _} =
-             subscribe_and_join(socket, SutraChatWeb.ChatChannel, "room:fresh-#{uniq()}")
+    # The join reply echoes the persistence key (the room id WITHOUT the
+    # "room:" topic prefix) — the same value broadcasts, history cursors,
+    # and the smoke script's join assertion all use (see scripts/smoke_ws.py).
+    room = "fresh-#{uniq()}"
+
+    assert {:ok, %{room_id: ^room, history: %{messages: [], next_cursor: nil}}, _} =
+             subscribe_and_join(socket, SutraChatWeb.ChatChannel, "room:#{room}")
   end
 
   test "join tracks presence and pushes the roster", %{socket: socket} do
