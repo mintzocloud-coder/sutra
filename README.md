@@ -6,6 +6,8 @@
 
 **Status:** 🟡 Rebuilding from scratch (tech v2) · 🟢 Contributors welcome · License: **AGPLv3** · 🟡 Company incorporation in progress
 
+[![Hacktoberfest 2026](https://img.shields.io/badge/🎃_Hacktoberfest-2026-orange?style=for-the-badge)](https://github.com/mintzocloud-coder/sutra/labels/hacktoberfest) — we participate! Grab a [`hacktoberfest`](https://github.com/mintzocloud-coder/sutra/labels/hacktoberfest) issue, newcomers start with [`good first issue`](https://github.com/mintzocloud-coder/sutra/labels/good%20first%20issue).
+
 ---
 
 ## The equity map — public from day one
@@ -60,6 +62,10 @@ Bring big creators. Your 30 slots are precious — use them well.
 **Rule:** no readymade engines for the **core product** — the commerce engine, social, messaging, mini-app runtime are all built custom. Readymade open-source is allowed only for plumbing (auth, video SFU, search) and only if a contributor can run it on a laptop.
 
 ## Contribute — code, bounties, equity
+
+### 🎃 Hacktoberfest 2026 — we participate!
+
+October is the best month to join Sutra. Issues labeled [`hacktoberfest`](https://github.com/mintzocloud-coder/sutra/labels/hacktoberfest) are Hacktoberfest-eligible; if you're new, start with [`good first issue`](https://github.com/mintzocloud-coder/sutra/labels/good%20first%20issue). Comment to claim → get assigned within 24h → open your PR. Merged PRs count for Hacktoberfest **and** earn contributor credits toward the 10% equity pool.
 
 Read **[CONTRIBUTING.md](./CONTRIBUTING.md)**. The short version:
 
