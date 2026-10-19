@@ -58,21 +58,29 @@ identity:
     - id: default
       url: file:///etc/config/kratos/identity.schema.json
 
-# DEV-ONLY secrets. 32+ characters each, as Kratos requires. Production
-# MUST replace this file (or at least these two values) with generated
-# secrets that never enter version control.
+# DEV-ONLY secrets. Production MUST replace this file (or at least these
+# values) with generated secrets that never enter version control.
+# Shapes are pinned by the v26.2.0 config schema (validated 2026-10-19):
+# cipher secrets must be EXACTLY 32 chars, cookie/pagination >= 16.
 secrets:
   cookie:
     - dev-only-kratos-cookie-secret-32c-min-abcdef
   cipher:
-    - dev-only-kratos-cipher-secret-32c-min-abcdef
+    - dev-only-kratos-cipher-32bytes!!
+  # CVE-2026-33503: pagination tokens are encrypted with this secret; the
+  # vendor default is publicly known, so a custom value is required.
+  pagination:
+    - dev-only-kratos-pagination!
 
 # Kratos names this section `hashers` (plural) — `hash` is an unknown key
 # and newer Kratos releases refuse to boot on unknown config keys, which
 # killed the kratos-migrate one-shot in CI (smoke red 2026-10-19).
+# NOTE: hashers.argon2.memory must be a byte STRING ("64MB"), not an
+# integer — v26's schema rejects `memory: 65536`, which kept `kratos serve`
+# from booting in CI (smoke red 2026-10-19, triage #5).
 hashers:
   argon2:
     # Dev-tuned: fast enough for laptop iteration, still Argon2id.
-    memory: 65536
+    memory: "64MB"
     iterations: 2
     parallelism: 2

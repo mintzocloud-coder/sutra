@@ -169,6 +169,15 @@ wait_for() { # wait_for <secs> <description> <command...>
     fi
     sleep 2
   done
+  # On identity-plane timeouts, dump the kratos/hydra container logs first:
+  # a kratos that exits on config validation (smoke red 2026-10-19, triage
+  # #5: hashers.argon2.memory must be "64MB", cipher exactly 32 chars)
+  # leaves no trace in the probe loop otherwise.
+  if [[ "$desc" == kratos* ]] || [[ "$desc" == hydra* ]]; then
+    echo "smoke: identity-plane probe '$desc' timed out — container logs:" >&2
+    docker compose logs --tail=60 kratos hydra 2>/dev/null || true
+    docker compose ps kratos hydra 2>/dev/null || true
+  fi
   fail "timed out waiting for $desc"
 }
 

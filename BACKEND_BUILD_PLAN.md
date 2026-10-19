@@ -2174,6 +2174,24 @@ Then report to founder: production-ready backend live on main.
 
 ## Log
 
+- 2026-10-19 ~11:55 IST: CI-RED TRIAGE ATTEMPT #5 — smoke red AGAIN on
+  d7961218 (H1 part 2a): kratos-1 Started but /health/alive on :4434 never
+  answered in 120s (no Exited event visible because it happens after
+  `docker compose up -d` returns). ROOT CAUSE: `services/identity/kratos/
+  kratos.yml` failed the official v26.2.0 config schema in TWO places, so
+  `kratos serve` refused to boot — (1) `hashers.argon2.memory: 65536`
+  (integer) — v26 requires a byte STRING (`"64MB"`); (2)
+  `secrets.cipher[0]` was 42 chars — v26 requires EXACTLY 32. Validated the
+  fixed file against ory/kratos@v26.2.0 embedx/config.schema.json with
+  jsonschema: VALID. Also added `secrets.pagination` (CVE-2026-33503: the
+  vendor default pagination secret is publicly known). smoke.sh `wait_for`
+  now dumps `docker compose logs kratos hydra` + `ps` on identity-plane
+  probe timeouts (triage-#2 pattern) so the next failure is diagnosable
+  from the CI log alone. VERIFIED: bash -n, compose/kratos.yml YAML
+  parse, SPDX checker green. Full compose smoke run is CI-gated (no
+  docker on this VM) — CI-green confirmation lands with the next run's
+  CI check. H1 part 2b STAYS OPEN.
+
 - 2026-10-19 ~11:15 IST: H1 part 1 done — business copilot core (Python):
   POST /business (LangGraph recall→retrieve→generate→persist; read-only
   BEGIN READ ONLY commerce access; seller-scoped; 403 not_a_seller eager);
