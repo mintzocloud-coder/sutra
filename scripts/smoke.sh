@@ -1823,10 +1823,13 @@ ord_st() {
   # request (triage #26: PATCH /v1/orders/{id}/status 405'd in CI while
   # the same source routes correctly locally — Allow: PATCH means the
   # status route's own guard saw a non-PATCH method; anything else means
-  # a different route shadowed it).
+  # a different route shadowed it. TRIAGE #27 RESOLVED it: Allow: GET
+  # meant the request had actually hit /v1/orders/{id} (GET-only detail
+  # route) — the curl URL was missing the trailing /status, a typo in
+  # the 2t ord_st rewrite (the Go router was innocent all along).
   st_http="$(curl -s -D "$st_hdrs" -o "$st_body" -w '%{http_code}' -X PATCH \
     -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
-    -d "{\"status\":\"$to\"}" "$API_URL/v1/orders/$oid")" || true
+    -d "{\"status\":\"$to\"}" "$API_URL/v1/orders/$oid/status")" || true
   if [ "$st_http" != "200" ]; then
     echo "smoke DIAG: PATCH /v1/orders/$oid/status -> $to: HTTP $st_http" >&2
     grep -i '^allow:' "$st_hdrs" >&2 || echo "smoke DIAG: no Allow header" >&2
@@ -1845,7 +1848,7 @@ ord_st() {
 [ "$(ord_st "$ord_id" confirmed)" = "confirmed" ] || fail "created → confirmed failed"
 com_code="$(curl -s -o "$com_body" -w '%{http_code}' -X PATCH \
   -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
-  -d '{"status":"delivered"}' "$API_URL/v1/orders/$ord_id")"
+  -d '{"status":"delivered"}' "$API_URL/v1/orders/$ord_id/status")"
 [ "$com_code" = "422" ] || fail "confirmed → delivered did not return 422 (got $com_code)"
 [ "$(python3 -c 'import json; print(json.load(open("'"$com_body"'"))["error"]["code"])')" = "invalid_transition" ] \
   || fail "invalid_transition envelope code missing"
@@ -1871,13 +1874,13 @@ pass "buyer cancel → reservation released (quantity 7, reserved 0)"
 # Status-patch error matrix: unknown name → 422 invalid_status, missing → 400.
 com_code="$(curl -s -o "$com_body" -w '%{http_code}' -X PATCH \
   -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
-  -d '{"status":"teleported"}' "$API_URL/v1/orders/$ord_id")"
+  -d '{"status":"teleported"}' "$API_URL/v1/orders/$ord_id/status")"
 [ "$com_code" = "422" ] || fail "unknown status did not return 422 (got $com_code)"
 [ "$(python3 -c 'import json; print(json.load(open("'"$com_body"'"))["error"]["code"])')" = "invalid_status" ] \
   || fail "invalid_status envelope code missing"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH \
   -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
-  -d '{"nope":1}' "$API_URL/v1/orders/$ord_id")" = "400" ] \
+  -d '{"nope":1}' "$API_URL/v1/orders/$ord_id/status")" = "400" ] \
   || fail "unknown field on status patch did not return 400"
 pass "status-patch error matrix: 422 invalid_status, 400 on unknown field"
 

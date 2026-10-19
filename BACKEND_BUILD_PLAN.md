@@ -2475,6 +2475,30 @@ with documented contracts until then.
       green, SPDX checker green. H1 part 2 STAYS OPEN: next run reads
       the Allow header from the CI smoke log and continues triage
       from that evidence. Pushed.
+    - [x] H1 part 2w DONE 2026-10-20 ~00:30 IST: CI-red triage #27 —
+      ROOT CAUSE FOUND (smoke.sh typo — Go was innocent all along).
+      Run 39301650049 (the 2u push) finished 6/7 green; the 2u
+      Allow-header DIAG printed `Allow: GET` on the
+      `PATCH /v1/orders/<uuid>/status → confirmed` 405. Per 2u's own
+      invariant ("Allow: PATCH = status route's guard; anything else =
+      a different route shadowed it"), `Allow: GET` proved the request
+      had matched `/v1/orders/{id}` — the GET-only ORDER DETAIL route.
+      Inspection of the checkout's smoke.sh showed why: ord_st's curl
+      URL was `"$API_URL/v1/orders/$oid"` — the trailing `/status`
+      was dropped in the 2t ord_st rewrite (the DIAG echo line still
+      printed the intended /status path, which is why the mismatch
+      went unnoticed through 2t→2v). The Go 1.22 mux, methodGuard,
+      actorRole, and OrderStatusHandler were all correct; the 2u
+      route-lock test (PATCH reaches handler, Allow: PATCH on wrong
+      methods) stands as the regression lock. The same typo existed
+      in three more status PATCHes (confirmed→delivered 422,
+      unknown-status 422, missing-body 400) — all four URLs now end
+      in `/status`; the two GET detail URLs are untouched.
+      VERIFIED: bash -n green; no Go/Python/Elixir touched. H1 part 2
+      STAYS OPEN: CI-green confirmation of the smoke job on this
+      push — next run checks the F3 state machine goes green for the
+      first time (created→confirmed→shipped→delivered, the 422/400
+      matrix, cancel→reservation release) and H1 closes. Pushed.
 - [ ] H2: Business integrations — WhatsApp Cloud API direct adapter
   (fail-closed stub; no BSP), Tally on-premise bridge design + stub,
   Zoho Books default adapter (fail-closed stub), docs/integrations.md
@@ -3135,3 +3159,5 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-19 ~23:15 IST: H1 part 2t done — CI-RED TRIAGE #25 (see H1 part-2 note): run 39292527736 (2s push) finished 6/7 green; smoke RED at F3 "created → confirmed" AGAIN despite the 2s actorRole fix being in the built image (checkout SHA ea22de3d verified). Reassessment: the 2s fix repaired a REAL bug (regression tests fail on old code; go-api CI green) but the smoke's actual HTTP error was never observed — the old `curl -sf | json.load` blind pipeline maps every 4xx/5xx to the same JSONDecodeError, so the 2r "422" was an assumption. Exhaustive code-path review (actorRole, transitionWith, transitions table, handler, CallerUUID, Dockerfile, checkout SHA) found the fixed path correct, so the smoke's error is something else. Fix: ord_st is now self-diagnosing (captures HTTP status + body, dumps on non-200; set -e/pipefail-safe; bash -n green, simulated 200/422/transport-fail). Next CI smoke run prints the real error; triage #26 works from that evidence. Pushed.
 
 - 2026-10-19 ~22:45 IST: H1 part 2s done (see H1 task note): run 39288363493 (2r push) finished 6/7 green, smoke RED at F3 — "created → confirmed failed" (PATCH /v1/orders/{id}/status 422'd: actorRole checked buyer before seller, so a self-purchasing merchant's single identity resolved to roleBuyer and the seller-only confirm edge died). REAL API BUG: actorRole now prefers roleSeller for both-roles callers (every buyer edge is also a seller edge, so no buyer move is stranded); new TestActorRoleBothRolesPrefersSeller + TestOrderSelfPurchaseLifecycle; OpenAPI status-route description updated. Verified: gofmt/build/vet green, pure tests green, YAML 51 paths OK. H1 part 2 STAYS OPEN pending CI-green confirmation.
+
+- 2026-10-20 ~00:30 IST: H1 part 2w done — CI-RED TRIAGE #27 (see H1 part-2 note): run 39301650049 (2u push) finished 6/7 green; smoke RED at F3 "created → confirmed" with the new 2u DIAG printing the real evidence for the first time: HTTP 405 + `Allow: GET`. Per 2u's invariant that meant the request hit the GET-only /v1/orders/{id} detail route — and inspection of the checkout's smoke.sh showed why: ord_st's curl URL was "$API_URL/v1/orders/$oid", the trailing /status dropped in the 2t ord_st rewrite (the DIAG echo still printed the intended /status path, hiding the mismatch). The Go 1.22 mux, methodGuard, actorRole (2s) and OrderStatusHandler were all correct; the 2u route-lock test stands. Same typo fixed in 3 more status PATCHes (confirmed→delivered 422, unknown-status 422, missing-body 400). VERIFIED: bash -n green; no Go/Python/Elixir touched. H1 part 2 STAYS OPEN: CI-green confirmation on this push; next run checks the F3 state machine goes green for the first time and H1 closes. Pushed.
