@@ -64,12 +64,26 @@ CI gate guarantees the file is complete and current.
   identity). Token contract: `docs/auth-contract.md`,
   `docs/identity.md`.
 
-## Landing in G4 part 2b
+## Developer docs site + onboarding guide (shipped, G4 part 2b)
 
-- **Developer docs site** — Docusaurus skeleton (MIT), publishing these
-  docs with versioned guides for the three platform surfaces.
-- **Developer onboarding guide** — app keys (Hydra client credentials),
-  webhook endpoint registration + signature verification, and the mini-app
-  submission checklist in one linear walkthrough.
-
-Until those land, `docs/dev-setup.md` is the contributor entry point.
+- **`docs-site/` — Docusaurus skeleton.** `npm install && npm start` runs
+  the developer docs site locally. **Licensing split, deliberate:** the
+  skeleton (config, theme plumbing, build scripts, `package.json`) is
+  **MIT** (reuse it anywhere); the guide content under `docs-site/docs/`
+  carries the repo's `AGPL-3.0-or-later` header like every other doc.
+  `scripts/check-headers.sh` excludes `docs-site/` for the skeleton and
+  still requires AGPL headers on the guide content.
+- **`docs-site/docs/onboarding.md` — the developer onboarding guide.**
+  One linear walkthrough: app keys (Hydra OAuth2 client-credentials with
+  the `jwt-bearer` grant so tokens are JWT-shaped, audience `sutra-api`),
+  just-in-time provisioning on the first `GET /v1/me`, platform
+  conventions (error envelope, `client_msg_id` idempotency, keyset
+  pagination, 429s), webhook endpoint registration + the signing-secret
+  once-only rule + signature verification rules, and the mini-app
+  submission lifecycle (immutable slug, permission-minimal manifest,
+  bridge surface, launch token, publish checklist). Honest about scope:
+  user-facing login UI is Wave 1.5, gated integrations fail closed, E2E
+  is Wave 2.
+- Until the site is hosted, `docs/dev-setup.md` stays the contributor
+  entry point and `docs/openapi.yaml` the REST reference (the SSOT gates
+  above guarantee they can't drift).

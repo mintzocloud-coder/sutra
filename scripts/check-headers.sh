@@ -3,6 +3,9 @@
 # Fail if any source file lacks the AGPLv3 SPDX header.
 # Skips: LICENSE, NOTICE, .md docs, configs, vendored dirs, .git,
 # generated checksum/lock files (go.sum, *.lock).
+# DELIBERATE SPLIT: docs-site/ is excluded — the Docusaurus skeleton files
+# there are MIT-licensed (package.json says so; G4 part 2b), while the guide
+# content under docs-site/docs/ carries the AGPL header like other repo docs.
 set -euo pipefail
 
 HEADER="SPDX-License-Identifier: AGPL-3.0-or-later"
@@ -15,7 +18,8 @@ while IFS= read -r f; do
   fi
 done < <(git ls-files \
   | grep -vE '^LICENSE$|^NOTICE$|\.md$|\.json$|\.ya?ml$|\.toml$|\.lock$|\.sum$|^\.github/' \
-  | grep -vE '^\.git/|\.pytest_cache/')
+  | grep -vE '^\.git/|\.pytest_cache/' \
+  | grep -vE '^docs-site/')
 
 if [ "$FAIL" -eq 1 ]; then
   echo ""

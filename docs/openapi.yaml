@@ -4170,7 +4170,7 @@ components:
           description: |
             Per-endpoint HMAC signing secret. Present ONLY in the 201
             create response — never on list, never again.
-          example: whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw
+          example: whsec_EXAMPLE_DO_NOT_USE
     MiniApp:
       type: object
       required: [id, developer_id, name, slug, entry_url, manifest, version, status, created_at, updated_at]

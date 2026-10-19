@@ -2028,6 +2028,40 @@ orchestration joins chat/presence).
     Part 2b next: Docusaurus docs site skeleton (MIT), developer
     onboarding guide (app keys, webhooks, mini-app submission), then
     mark G4 [x].
+  - [x] G4 part 2b DONE 2026-10-19 ~10:35 IST: Docusaurus docs site
+    skeleton (MIT) + developer onboarding guide. New `docs-site/`: MIT
+    skeleton — `package.json` (MIT, docusaurus 3.8), `docusaurus.config.js`
+    (navbar: Guides + OpenAPI spec + GitHub; footer documents the split),
+    `sidebars.js`, `src/pages/index.js` landing (3 surface cards),
+    `src/css/custom.css`, `.gitignore` (node_modules/build), README (run
+    + structure). **Licensing split, deliberate:** skeleton files MIT
+    (SPDX headers), guide content under `docs-site/docs/` AGPL like all
+    repo docs — `scripts/check-headers.sh` now excludes `docs-site/`
+    with a comment (its `.js` files would otherwise fail the AGPL
+    gate; exclusion verified: script passes). Content: `intro.md`,
+    `onboarding.md` — one linear walkthrough: app keys (Hydra
+    client-credentials via admin :4445, `jwt-bearer` grant so tokens are
+    JWT-shaped — cross-checked against the exact smoke.sh D1 flow,
+    audience `sutra-api`, token via :4444/oauth2/token, JWT-shape guard),
+    just-in-time `GET /v1/me`, conventions (error envelope,
+    client_msg_id idempotency, keyset pagination, 429s), webhook endpoint
+    registration + once-only signing secret + verification rules
+    (raw body, 5-min replay window, constant-time compare), mini-app
+    submission lifecycle (immutable slug, permission-minimal manifest,
+    closed 14-method bridge, launch token, publish checklist); honest
+    scope notes (login UI Wave 1.5, gated integrations fail closed, E2E
+    Wave 2). `webhooks.md`/`mini-apps.md` = surface summaries linking to
+    the repo-root deep contracts (no drift risk from duplicated copies).
+    `docs/dev-platform.md`: "Landing in G4 part 2b" section replaced
+    with shipped status + licensing split + run instructions.
+    VERIFIED: `node --check` on all 3 JS files green; package.json
+    parses (license MIT); bash -n + full run of check-headers.sh green;
+    sidebar ids match existing doc files; internal anchor `#step-1-…`
+    fixed (colon heading instead of em-dash). Full `npm install` +
+    Docusaurus build is CI-gated (no npm registry run needed here;
+    versions pinned to real docusaurus 3.8.x). No Go/Python/Elixir code
+    touched, so build/vet/test untouched. Pushed.
+    **G4 COMPLETE — Phase G COMPLETE. Next: H1 (Business AI).**
 
 ## Phase H — Wave 5: Business AI + Ads + Subscriptions
 
@@ -2064,6 +2098,18 @@ All boxes ticked, CI green, `scripts/smoke.sh` passes, docs complete.
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-19 ~10:35 IST: G4 part 2b done — Docusaurus docs site skeleton
+  (MIT) + developer onboarding guide (`docs-site/`; skeleton MIT /
+  guide content AGPL, check-headers.sh excludes docs-site/ with a
+  documented split). Onboarding guide: Hydra app keys (jwt-bearer grant,
+  audience sutra-api, cross-checked vs smoke.sh D1), /v1/me JIT
+  provisioning, conventions, webhook registration + signature rules,
+  mini-app submission lifecycle + checklist; honest scope notes.
+  docs/dev-platform.md updated. Verified: node --check x3, JSON parse,
+  check-headers.sh green, anchors/sidebar ids match. **G4 COMPLETE —
+  PHASE G (Wave 4: LiveKit live + Svix webhooks + mini-app runtime + dev
+  platform) COMPLETE. Next: H1 (Business AI, Wave 5).**
 
 - 2026-10-19 ~09:45 IST: G4 part 2a done — SDK stub generation check in
   CI: new scripts/check_sdk_generation.sh (openapi-typescript@7 stub +
@@ -2372,3 +2418,5 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-19 ~09:00 IST: G3 part 2 done (see G3 task note) — sandboxed runtime contract: internal/miniapp/bridge.go (closed JS bridge API surface, MethodAllowed gating, HMAC-SHA256 5-min launch token, Service.Launch gate), POST /v1/mini-apps/{id}/launch (403 launch_not_allowed, 503 launch_unavailable fail-closed; MINIAPP_LAUNCH_SECRET env + loud boot WARN), docs/mini-apps.md (trust model, launch flow, init data, JS API table, security rules, dev checklist), OpenAPI mini-apps tag + 7 paths + 7 schemas (redocly valid), smoke.sh G3 part-2 round-trip incl. offline HMAC verification + fail-closed 503 proof. Verified: gofmt/build/vet green, miniapp tests green (bridge matrix, token tamper/expiry/malformed, launch-gate integration), bash -n smoke.sh, SPDX headers green. CI gates the live stack run. **G3 COMPLETE; Phase G continues with G4 (dev platform).**
 
 - 2026-10-19 ~09:20 IST: G4 part 1 done (see G4 task note) — OpenAPI single-source-of-truth coverage gate: new scripts/check_openapi_coverage.py (stdlib-only) + CI openapi job runs it with the redocly lint. Gate proven non-vacuous via a negative drift test (exit 1, names the missing path + registration site). Spec needed no fixes — 50 paths already faithful. Part 2 (SDK stub gen check in CI, Docusaurus skeleton, onboarding guide, docs/dev-platform.md) next run. Pushed.
+
+- 2026-10-19 ~09:55 IST: SECURITY (Dhanasvi, research stage): replaced secret-shaped webhook example `whsec_<realistic>` in docs/openapi.yaml:4173 with obvious dummy `whsec_EXAMPLE_DO_NOT_USE`. GitHub secret-scanning alert #1 (stripe_webhook_signing_secret, opened 02:33 UTC on commit 53e8870a) verified via API: still open, never a real credential (value was a generated doc example; real webhook/payment credentials stay post-investors per plan). Doc fix rides this run's normal push; alert still needs dismissal as false_positive via API (main agent).

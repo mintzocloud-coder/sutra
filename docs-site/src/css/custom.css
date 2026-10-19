@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: MIT */
+:root {
+  --ifm-color-primary: #2e5aac;
+  --ifm-color-primary-dark: #294f99;
+  --ifm-color-primary-darker: #274a8f;
+  --ifm-color-primary-darkest: #203d76;
+  --ifm-color-primary-light: #3a67bb;
+  --ifm-color-primary-lighter: #456fc2;
+  --ifm-color-primary-lightest: #6a8dd0;
+}
