@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/mintzocloud-coder/sutra/services/api/internal/ads"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/aiproxy"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/cart"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/catalog"
@@ -276,6 +277,28 @@ func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *
 		miniapp.AppMux(pool, miniappSvc, log, launchSecret)))
 	v1.Handle("/v1/me/mini-apps", methodGuard([]string{http.MethodGet},
 		miniapp.MyInstallsHandler(pool, miniappSvc, log)))
+
+	// Ads platform (H3 part 2): the advertiser API — campaigns, budgets,
+	// targeting over the GSP auction kernel. Seller-scoped: the
+	// advertiser is the caller's seller row, so non-sellers get 403
+	// not_a_seller and advertisers can never see each other's
+	// campaigns. Explicit action routes (activate/pause/resume) rather
+	// than an {action} dispatch, so the OpenAPI coverage gate sees real
+	// paths.
+	adsSvc := ads.NewCampaignService(pool)
+	adsHandler := ads.NewCampaignHandler(pool, adsSvc, log)
+	v1.Handle("/v1/ads/campaigns", methodGuard([]string{http.MethodPost, http.MethodGet},
+		adsHandler.CampaignsMux()))
+	v1.Handle("/v1/ads/campaigns/{id}", methodGuard([]string{http.MethodGet, http.MethodPatch, http.MethodDelete},
+		adsHandler.CampaignMux()))
+	v1.Handle("/v1/ads/campaigns/{id}/activate", methodGuard([]string{http.MethodPost},
+		adsHandler.TransitionTo(ads.CampaignActive)))
+	v1.Handle("/v1/ads/campaigns/{id}/pause", methodGuard([]string{http.MethodPost},
+		adsHandler.TransitionTo(ads.CampaignPaused)))
+	v1.Handle("/v1/ads/campaigns/{id}/resume", methodGuard([]string{http.MethodPost},
+		adsHandler.TransitionTo(ads.CampaignActive)))
+	log.Info("ads routes registered",
+		"routes", "/v1/ads/campaigns (+item, activate/pause/resume)")
 
 	// Recommendations v1 (E5): the like store feeds the home-feed
 	// ranker. Created ahead of the feed block so the /v1/feed/home

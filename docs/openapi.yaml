@@ -53,6 +53,14 @@ tags:
       directory, status transitions, per-user installs, and the launch
       gate that mints the short-lived HMAC token for the sandboxed
       frame (docs/mini-apps.md).
+  - name: ads
+    description: |
+      Wave-5 ads platform (H3): the advertiser API — campaigns, budgets
+      and targeting over the deterministic GSP auction kernel
+      (internal/ads). Seller-scoped: the advertiser is the caller's
+      seller row, so non-sellers get `not_a_seller` and advertisers can
+      never see each other's campaigns. Money is integer paise. Spend is
+      never settable through this API (the billing path owns it).
 paths:
   /healthz:
     get:
@@ -4307,6 +4315,381 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalError'
+  /v1/ads/campaigns:
+    post:
+      tags: [ads]
+      summary: Create an ad campaign
+      description: |
+        Registers a new campaign as a **draft** owned by the caller's
+        seller account. Nothing enters auctions until the advertiser
+        explicitly activates it. `budget_paise` is integer paise
+        (1..1,000,000,000 = ₹1..₹10cr); `daily_budget_paise` is optional
+        and must not exceed the budget. Targeting keys are a closed set
+        (`countries`, `languages`, `categories`, `devices`) — unknown
+        keys fail loudly. Category slugs must exist in the catalog tree.
+      operationId: createAdCampaign
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdCampaignCreate'
+      responses:
+        '201':
+          description: Draft campaign created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdCampaign'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Invalid fields (`invalid_field`, `invalid_targeting`, `unknown_category`, `invalid_json`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not a seller (`not_a_seller`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    get:
+      tags: [ads]
+      summary: List my ad campaigns
+      description: |
+        The caller's campaigns, newest first, keyset-paginated. Archived
+        campaigns are excluded. Never returns another advertiser's data.
+      operationId: listAdCampaigns
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/cursor'
+      responses:
+        '200':
+          description: Campaign page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdCampaignPage'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Bad pagination (`invalid_pagination`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not a seller (`not_a_seller`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/ads/campaigns/{id}:
+    get:
+      tags: [ads]
+      summary: Get an ad campaign
+      description: |
+        One campaign, owner-only. Archived campaigns read as 404.
+      operationId: getAdCampaign
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CampaignId'
+      responses:
+        '200':
+          description: The campaign.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdCampaign'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Bad campaign id (`invalid_campaign_id`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not a seller, or the campaign belongs to another advertiser (`not_a_seller`, `not_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Campaign not found (`campaign_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags: [ads]
+      summary: Update an ad campaign
+      description: |
+        Owner-only partial update (presence-flag; explicit null clears
+        `daily_budget_paise` / `start_at` / `end_at`). Status is NOT
+        patchable — it moves via the activate/pause/resume/archive
+        routes. Spend is never settable through this API. A budget
+        cannot be lowered below current spend.
+      operationId: updateAdCampaign
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CampaignId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdCampaignPatch'
+      responses:
+        '200':
+          description: Updated campaign.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdCampaign'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Invalid fields (`invalid_field`, `invalid_targeting`, `unknown_category`, `invalid_json`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not a seller, or not the owner (`not_a_seller`, `not_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Campaign not found (`campaign_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [ads]
+      summary: Archive an ad campaign
+      description: |
+        Archives the campaign (terminal — there is no un-archive); the
+        200 carries the archived record. Archived campaigns read as 404
+        everywhere afterwards.
+      operationId: archiveAdCampaign
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CampaignId'
+      responses:
+        '200':
+          description: The archived campaign.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdCampaign'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Bad campaign id (`invalid_campaign_id`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not a seller, or not the owner (`not_a_seller`, `not_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Campaign not found (`campaign_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/ads/campaigns/{id}/activate:
+    post:
+      tags: [ads]
+      summary: Activate an ad campaign
+      description: |
+        Moves draft/paused → active. Fails when the budget is exhausted
+        or `end_at` is in the past — a campaign that cannot legally
+        serve must not claim "active".
+      operationId: activateAdCampaign
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CampaignId'
+      responses:
+        '200':
+          description: The activated campaign.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdCampaign'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Bad campaign id (`invalid_campaign_id`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not a seller, or not the owner (`not_a_seller`, `not_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Campaign not found (`campaign_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Transition not allowed or activation preconditions unmet (`invalid_status_transition`, `invalid_field`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/ads/campaigns/{id}/pause:
+    post:
+      tags: [ads]
+      summary: Pause an ad campaign
+      description: |
+        Moves active → paused. Paused campaigns are ineligible for
+        auctions until resumed.
+      operationId: pauseAdCampaign
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CampaignId'
+      responses:
+        '200':
+          description: The paused campaign.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdCampaign'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Bad campaign id (`invalid_campaign_id`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not a seller, or not the owner (`not_a_seller`, `not_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Campaign not found (`campaign_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Transition not allowed (`invalid_status_transition`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/ads/campaigns/{id}/resume:
+    post:
+      tags: [ads]
+      summary: Resume a paused ad campaign
+      description: |
+        Moves paused → active (the same edge as activate; the route name
+        is a convenience). Same budget/window preconditions as activate.
+      operationId: resumeAdCampaign
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CampaignId'
+      responses:
+        '200':
+          description: The resumed campaign.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdCampaign'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Bad campaign id (`invalid_campaign_id`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not a seller, or not the owner (`not_a_seller`, `not_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Campaign not found (`campaign_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Transition not allowed or activation preconditions unmet (`invalid_status_transition`, `invalid_field`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
 
 components:
   parameters:
@@ -4380,6 +4763,14 @@ components:
       in: path
       required: true
       description: Product UUID.
+      schema:
+        type: string
+        format: uuid
+    CampaignId:
+      name: id
+      in: path
+      required: true
+      description: Campaign UUID.
       schema:
         type: string
         format: uuid
@@ -4686,6 +5077,166 @@ components:
         expires_at:
           type: string
           format: date-time
+    AdTargeting:
+      type: object
+      description: |
+        Audience filter. All arrays are inclusion lists (match ANY
+        element); absent = no constraint on that axis. Unknown keys are
+        rejected at write time (`invalid_targeting`) — a typo'd key
+        would otherwise silently match everything.
+      properties:
+        countries:
+          type: array
+          items:
+            type: string
+            pattern: '^[a-z]{2}$'
+          example: [in]
+          description: ISO 3166-1 alpha-2 country codes (lowercase).
+        languages:
+          type: array
+          items:
+            type: string
+            pattern: '^[a-z]{2}$'
+          example: [hi, en]
+          description: ISO 639-1 language codes (lowercase).
+        categories:
+          type: array
+          items:
+            type: string
+          example: [mens-fashion]
+          description: Category slugs from the catalog tree (must exist).
+        devices:
+          type: array
+          items:
+            type: string
+            enum: [mobile, tablet, desktop]
+      additionalProperties: false
+    AdCampaign:
+      type: object
+      required: [id, advertiser_id, name, status, budget_paise, spend_paise, targeting, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        advertiser_id:
+          type: string
+          format: uuid
+          description: The caller's seller row — never another advertiser's.
+        name:
+          type: string
+          maxLength: 128
+        status:
+          type: string
+          enum: [draft, active, paused, archived]
+          description: |
+            draft → active → paused → active → archived (terminal).
+            Only active campaigns with an open window and remaining
+            budget enter auctions.
+        budget_paise:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 100000000000
+          description: Total budget in integer paise (₹1..₹10cr). Spend
+            can never exceed it.
+        spend_paise:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |
+            Accumulated billed spend. Read-only — never settable through
+            this API (the billing path owns it).
+        daily_budget_paise:
+          type: integer
+          format: int64
+          minimum: 1
+          nullable: true
+          description: Optional daily cap; must not exceed budget_paise.
+        targeting:
+          $ref: '#/components/schemas/AdTargeting'
+        start_at:
+          type: string
+          format: date-time
+          nullable: true
+        end_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Must be after start_at when both are set.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    AdCampaignCreate:
+      type: object
+      required: [name, budget_paise]
+      properties:
+        name:
+          type: string
+          maxLength: 128
+        budget_paise:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 100000000000
+        daily_budget_paise:
+          type: integer
+          format: int64
+          minimum: 1
+        targeting:
+          $ref: '#/components/schemas/AdTargeting'
+        start_at:
+          type: string
+          format: date-time
+        end_at:
+          type: string
+          format: date-time
+      additionalProperties: false
+    AdCampaignPatch:
+      type: object
+      description: |
+        Presence-flag partial update. `daily_budget_paise`, `start_at`
+        and `end_at` accept explicit null to clear. `status` and
+        `spend_paise` are not patchable (unknown-field rejection).
+      properties:
+        name:
+          type: string
+          maxLength: 128
+        budget_paise:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 100000000000
+          description: Cannot be lowered below current spend_paise.
+        daily_budget_paise:
+          type: integer
+          format: int64
+          minimum: 1
+          nullable: true
+        targeting:
+          $ref: '#/components/schemas/AdTargeting'
+        start_at:
+          type: string
+          format: date-time
+          nullable: true
+        end_at:
+          type: string
+          format: date-time
+          nullable: true
+      additionalProperties: false
+    AdCampaignPage:
+      type: object
+      required: [campaigns]
+      properties:
+        campaigns:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdCampaign'
+        next_cursor:
+          type: string
+          description: Opaque keyset cursor; absent on the last page.
     WebhookEndpointCreate:
       type: object
       required: [url]

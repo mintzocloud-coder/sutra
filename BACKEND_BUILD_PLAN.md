@@ -2743,6 +2743,59 @@ with documented contracts until then.
   H3 STAYS OPEN: part 2 = advertiser API (campaigns/budgets/targeting,
   HTTP routes + OpenAPI); part 3 = creative serving, reporting,
   docs/ads.md, smoke coverage.
+  - H3 part 2 DONE 2026-10-20 ~04:55 IST: advertiser API. Migration
+    0017_ad_campaigns.sql (advertiser_id → sellers cascade, name 1..128,
+    status draft/active/paused/archived + CHECKs, integer-paise
+    budget_paise > 0 / spend_paise >= 0 <= budget / optional
+    daily_budget_paise <= budget, targeting jsonb, start_at/end_at with
+    end > start, set_updated_at trigger, per-advertiser + active-window
+    indexes). New `internal/ads/campaigns.go` — CampaignService:
+    Create (draft by default; name/money/window/targeting validated
+    before any write; category slugs verified against the real catalog
+    tree in-tx), Get (cross-owner → ErrCampaignNotOwner, never leaks
+    existence), Update (presence-flag partials, explicit-null clears,
+    budget validated as one post-update state, budget never below
+    current spend, status/spend not patchable), Transition
+    (draft→active/paused→active/active→paused/*→archived terminal;
+    activation refuses exhausted budgets + past end_at; concurrent
+    transitions fail on the status predicate), List (keyset on
+    (created_at,id)). Targeting = closed key set (unknown keys are loud
+    422s — a typo'd key silently matching everything would spend real
+    money): ISO-3166-1 countries, ISO-639-1 languages, real category
+    slugs, mobile/tablet/desktop devices. Pure `Eligible(c, t)` for
+    part 3's serving path (active + window open + spend < budget) +
+    `RemainingBudget` (never negative). New `campaign_handler.go` —
+    seller-scoped routes (403 not_a_seller without a seller row, stub-
+    able seam): POST+GET /v1/ads/campaigns, GET+PATCH+DELETE
+    /v1/ads/campaigns/{id} (DELETE = archive → 200 with archived
+    record, products pattern), POST .../activate|pause|resume
+    (explicit paths — the coverage gate only expands {action} for
+    miniapp's AppMux); strict unknown-field bodies, full envelope
+    mapping (not_owner 403, invalid_status_transition 422,
+    unknown_category 400, invalid_targeting 400). OpenAPI: new `ads`
+    tag + 5 paths + CampaignId param + AdTargeting/AdCampaign/
+    AdCampaignCreate/AdCampaignPatch/AdCampaignPage schemas —
+    redocly valid, 0 warnings; coverage gate green (60 spec paths,
+    faithful SSOT). main.go wiring needs no newHandler params
+    (pool+log already there).
+    VERIFIED: gofmt clean, `go build ./...`+`go vet ./...` green,
+    FULL `go test ./...` green (27 packages, 0 failures) incl. 6 new
+    pure suites (targeting matrix, transition matrix, eligibility
+    matrix, remaining-budget, money matrix, cursor round-trip) + 3 DB
+    integration suites on real PG16 via the real migration runner
+    (migration 0017 applies cleanly: lifecycle incl. archive-terminal,
+    owner isolation, 2-page pagination); LIVE binary smoke
+    (AUTH_BYPASS + real PG + redis): seller register → campaign 201
+    draft → unknown-key 400 invalid_targeting → unknown-cat 400 →
+    zero-budget 400 → activate 200 → double-activate 422 →
+    pause/resume 200 → patch daily 200 → list 1 → archive 200 →
+    get 404 → bad method 405 → bad id 400. Two test-fixture bugs fixed
+    pre-push (db.Open signature; fixed-subject rerun collision — now
+    nanos+counter slugs, the F1a lesson). One import edit broke main.go
+    mid-run (caught by go build, fixed, build green — always build
+    after an import edit).
+  H3 STAYS OPEN: part 3 = creative serving (Promovolve), reporting,
+  docs/ads.md, smoke.sh coverage.
 - [ ] H4: Subscriptions — Cashfree + UPI AutoPay subscription adapter
   (fail-closed stub), plans/entitlements model, creator-membership
   billing wiring (70/30 split), docs/subscriptions.md, OpenAPI + tests +
@@ -2775,6 +2828,15 @@ Then report to founder: production-ready backend live on main.
 
 ## Log
 
+- 2026-10-20 ~04:55 IST: H3 part 2 done — advertiser API (see H3 task
+  note): migration 0017 (ad_campaigns), internal/ads campaigns service
+  (CRUD, closed-key targeting, transition matrix, pure Eligible), seller-
+  scoped HTTP routes (5 paths), OpenAPI ads tag + schemas (redocly
+  clean, coverage gate green). gofmt/build/vet clean, full go test
+  ./... green (27 pkgs, 0 failures; migration 0017 applies clean via
+  the real runner), live binary smoke of all routes (201/400/422/200/
+  404/405 matrix all correct). H3 stays open: part 3 = Promovolve
+  creative serving + reporting + docs/ads.md + smoke.sh.
 - 2026-10-20 ~03:40 IST: H2 part 2b done — per-seller Tally wiring
   (`POST /v1/integrations/tally/vouchers`, seller-scoped, balance-enforced
   voucher grammar, fail-closed 503 ladder: not_a_seller → 403,
