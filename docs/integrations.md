@@ -94,11 +94,9 @@ Post-investors onboarding checklist:
 
 ## What's not in this part
 
-- No send routes on the API yet — the H2 part-2 wiring consumes these
-  seams for order notifications (WhatsApp), accounting export (Tally /
-  Zoho), plus `/internal/whatsapp/webhook` inbound and the per-seller Tally
-  bridge registration. The stubs being wired at boot is deliberate:
-  provider-name typos already fail fast today.
+- The send routes are all shipped (WhatsApp in part 2a, Tally in part
+  2b, Zoho contacts/invoices as the final piece) — the seams are wired
+  at boot deliberately: provider-name typos already fail fast today.
 - E2E encryption stays Wave 2; gated items stay gated (identity
   fail-closed, real payments post-incorporation).
 
@@ -144,3 +142,28 @@ coverage gate tracks it as an internal route, same as
   bridge → 503 `tally_not_registered`; registered but only the stub
   wired → 503 `tally_unavailable`; Retry-After on both. Post-investors
   the real per-seller bridge returns 202 with the bridge job id.
+
+## Routes (H2 final piece — shipped)
+
+Unlike Tally (per-seller on-premise bridge), Zoho Books credentials are
+deployment-wide — one self-client per company — so there is no
+per-seller registry: the fail-closed ladder is 403 (no seller account)
+→ 503 `zoho_unavailable` (stub wired, until the post-investors OAuth
+onboarding) → 502 `zoho_upstream` (a real provider's wire failure).
+Every 503 carries Retry-After.
+
+- `POST /v1/integrations/zoho/contacts` (behind RequireAuth,
+  seller-scoped): creates a Zoho Books contact — `display_name`
+  required (≤128 chars), `email` optional (sanity-checked, Zoho does the
+  real validation), `phone` optional E.164 (bad phone → 422
+  `invalid_phone`). Stub/nil provider → 503 `zoho_unavailable`;
+  post-investors the real provider returns 202 with the Zoho contact id.
+- `POST /v1/integrations/zoho/invoices` (behind RequireAuth,
+  seller-scoped): creates a charge-only invoice against a Zoho contact —
+  `contact_id` and `reference_no` (our order id, the dedupe key)
+  required, `currency` pinned to `INR` (anything else → 400), `due_date`
+  calendar-valid YYYYMMDD, 1–100 lines with required name, quantity
+  1–1,000,000, and positive `amount_paise` capped at ₹10 crore per line.
+  Credit notes are a Wave 2 surface — they cannot be smuggled in as
+  negative lines. Stub/nil provider → 503 `zoho_unavailable`;
+  post-investors the real provider returns 202 with the Zoho invoice id.

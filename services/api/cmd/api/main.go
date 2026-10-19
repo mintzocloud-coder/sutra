@@ -69,8 +69,8 @@ func methodGuard(allowed []string, h http.Handler) http.HandlerFunc {
 // may be nil: the send route answers 503; the /internal/whatsapp/webhook
 // is always registered (the HMAC check needs no provider). tallyBridge
 // may be nil: the voucher route answers 503 (the registry lookup runs
-// regardless).
-func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, mediaSvc *media.Service, rt realtime.Publisher, aiProxy *aiproxy.Proxy, log *slog.Logger, translator *feed.Translator, searchClient *search.Client, orderBus events.EventBus, whClient *webhooks.Client, waProvider integrations.WhatsAppProvider, tallyBridge integrations.TallyBridge) http.Handler {
+// regardless). zohoProvider may be nil: the Zoho routes answer 503.
+func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, mediaSvc *media.Service, rt realtime.Publisher, aiProxy *aiproxy.Proxy, log *slog.Logger, translator *feed.Translator, searchClient *search.Client, orderBus events.EventBus, whClient *webhooks.Client, waProvider integrations.WhatsAppProvider, tallyBridge integrations.TallyBridge, zohoProvider integrations.ZohoBooksProvider) http.Handler {
 	auth := middleware.RequireAuth(verifier, log, middleware.AuthOptions{
 		Bypass:        cfg.AuthBypass,
 		BypassSubject: cfg.BypassSubject,
@@ -134,6 +134,18 @@ func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *
 		tallyHandler.PostVoucher()))
 	log.Info("tally route registered",
 		"route", "/v1/integrations/tally/vouchers")
+
+	// Zoho Books routes (H2 final piece): seller-scoped contact and
+	// invoice creation against the deployment-wide provider. The stub
+	// fails closed with 503 (it never books anything) until the
+	// post-investors Zoho OAuth onboarding.
+	zohoHandler := integrations.NewZohoHandler(pool, zohoProvider, log)
+	v1.Handle("/v1/integrations/zoho/contacts", methodGuard([]string{http.MethodPost},
+		zohoHandler.CreateContact()))
+	v1.Handle("/v1/integrations/zoho/invoices", methodGuard([]string{http.MethodPost},
+		zohoHandler.CreateInvoice()))
+	log.Info("zoho routes registered",
+		"routes", "/v1/integrations/zoho/contacts,/v1/integrations/zoho/invoices")
 	v1.Handle("/v1/me", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			middleware.MethodNotAllowedHandler(http.MethodGet)(w, r)
@@ -582,13 +594,16 @@ func main() {
 	// The WhatsApp provider is kept and passed to newHandler: the send
 	// route and the inbound webhook need it. The Tally bridge is kept and
 	// passed too: the voucher route resolves it per seller against the
-	// seller_tally_bridges registry. Zoho stays discarded for now; its
-	// wiring lands later in H2.
+	// seller_tally_bridges registry. The Zoho provider is kept and
+	// passed as well: the /v1/integrations/zoho/* routes fail closed
+	// against the deployment-wide provider seam (no per-seller
+	// registry — one self-client per organization).
 	// Real keys MUST come from the WHATSAPP_*/TALLY_*/ZOHO_*
 	// environment; they are never committed and never logged.
 	// The WhatsApp provider is kept (the H2 part 2a send route and the
 	// inbound webhook handler need it); the Tally bridge is kept for the
-	// H2 part 2b voucher route (per-seller registry wiring).
+	// H2 part 2b voucher route (per-seller registry wiring); the Zoho
+	// provider is kept for the H2 final-piece Zoho routes.
 	waProvider, err := integrations.NewWhatsApp(cfg.WhatsAppProvider, integrations.WhatsAppConfig{
 		PhoneNumberID:       cfg.WhatsAppPhoneNumberID,
 		AccessToken:         cfg.WhatsAppAccessToken,
@@ -621,12 +636,17 @@ func main() {
 	if cfg.TallyBridgeURL != "" {
 		log.Warn("integrations: TALLY_BRIDGE_URL is set but no real bridge is wired — it is IGNORED; no vouchers can be posted")
 	}
-	if _, err := integrations.NewZoho(cfg.ZohoProvider, integrations.ZohoConfig{
+	// Zoho Books is kept and passed to newHandler: the
+	// /v1/integrations/zoho/* routes (seller-scoped, deployment-wide
+	// provider) need it. The stub is the only wired provider until the
+	// post-investors Zoho OAuth onboarding.
+	zohoProvider, err := integrations.NewZoho(cfg.ZohoProvider, integrations.ZohoConfig{
 		ClientID:     cfg.ZohoClientID,
 		ClientSecret: cfg.ZohoClientSecret,
 		RefreshToken: cfg.ZohoRefreshToken,
 		OrgID:        cfg.ZohoOrgID,
-	}); err != nil {
+	})
+	if err != nil {
 		log.Error("invalid Zoho config — refusing to start", "err", err)
 		os.Exit(1)
 	}
@@ -778,7 +798,7 @@ func main() {
 
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	defer bgCancel() // stops the live reconciler (G1) on shutdown
-	handler := newHandler(bgCtx, cfg, pool, verifier, feedSvc, mediaSvc, rtPub, aiProxy, log, translator, searchClient, orderBus, whClient, waProvider, tallyBridge)
+	handler := newHandler(bgCtx, cfg, pool, verifier, feedSvc, mediaSvc, rtPub, aiProxy, log, translator, searchClient, orderBus, whClient, waProvider, tallyBridge, zohoProvider)
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: handler}
 
 	go func() {

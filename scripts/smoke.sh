@@ -1037,6 +1037,68 @@ tally_bad_code="$(curl -s -o "$tally_bad_body" -w '%{http_code}' -X POST \
 rm -f "$tally_bad_body"
 pass "H2: Tally voucher — 401 without token, 403 not_a_seller, 400 invalid_request on unbalanced lines"
 
+# Zoho contacts + invoices: the deployment wires only the fail-closed
+# stub until the post-investors OAuth onboarding, so both routes must
+# fail CLOSED with an honest 503 + Retry-After (never imply a contact
+# was created or an invoice was booked). Seller-scoping: no token →
+# 401; non-seller ($token_h2) → 403 not_a_seller; bad phone →
+# 422 invalid_phone; non-INR currency → 400 invalid_request.
+zoho_body="$(mktemp)"; zoho_hdr="$(mktemp)"
+zoho_code="$(curl -s -o "$zoho_body" -D "$zoho_hdr" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_h" -H 'Content-Type: application/json' \
+  -d '{"display_name":"Smoke Buyer","email":"smoke@example.com","phone":"+919876543210"}' \
+  "$API_URL/v1/integrations/zoho/contacts")"
+[ "$zoho_code" = "503" ] || { rm -f "$zoho_body" "$zoho_hdr"; fail "H2: Zoho contact did not fail closed 503 (got $zoho_code)"; }
+[ "$(python3 -c 'import json; print(json.load(open("'"$zoho_body"'"))["error"]["code"])')" = "zoho_unavailable" ] \
+  || { rm -f "$zoho_body" "$zoho_hdr"; fail "H2: Zoho contact envelope code is not zoho_unavailable"; }
+grep -qi '^Retry-After: [1-9]' "$zoho_hdr" \
+  || { rm -f "$zoho_body" "$zoho_hdr"; fail "H2: Zoho contact 503 missing Retry-After header"; }
+rm -f "$zoho_body" "$zoho_hdr"
+pass "H2: Zoho contact fails closed — 503 zoho_unavailable + Retry-After"
+
+zoho_inv_body="$(mktemp)"; zoho_inv_hdr="$(mktemp)"
+zoho_inv_code="$(curl -s -o "$zoho_inv_body" -D "$zoho_inv_hdr" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_h" -H 'Content-Type: application/json' \
+  -d '{"contact_id":"460000000026049","reference_no":"SMOKE-ZOHO-1","currency":"INR","due_date":"20261027","lines":[{"name":"Handloom Kurta","quantity":2,"amount_paise":129900}]}' \
+  "$API_URL/v1/integrations/zoho/invoices")"
+[ "$zoho_inv_code" = "503" ] || { rm -f "$zoho_inv_body" "$zoho_inv_hdr"; fail "H2: Zoho invoice did not fail closed 503 (got $zoho_inv_code)"; }
+[ "$(python3 -c 'import json; print(json.load(open("'"$zoho_inv_body"'"))["error"]["code"])')" = "zoho_unavailable" ] \
+  || { rm -f "$zoho_inv_body" "$zoho_inv_hdr"; fail "H2: Zoho invoice envelope code is not zoho_unavailable"; }
+grep -qi '^Retry-After: [1-9]' "$zoho_inv_hdr" \
+  || { rm -f "$zoho_inv_body" "$zoho_inv_hdr"; fail "H2: Zoho invoice 503 missing Retry-After header"; }
+rm -f "$zoho_inv_body" "$zoho_inv_hdr"
+pass "H2: Zoho invoice fails closed — 503 zoho_unavailable + Retry-After"
+
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+  -d '{"display_name":"X"}' "$API_URL/v1/integrations/zoho/contacts")" = "401" ] \
+  || fail "H2: unauthenticated Zoho contact did not return 401"
+zoho_ns_body="$(mktemp)"
+zoho_ns_code="$(curl -s -o "$zoho_ns_body" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_h2" -H 'Content-Type: application/json' \
+  -d '{"display_name":"X"}' "$API_URL/v1/integrations/zoho/contacts")"
+[ "$zoho_ns_code" = "403" ] || { rm -f "$zoho_ns_body"; fail "H2: non-seller Zoho contact did not return 403 (got $zoho_ns_code)"; }
+[ "$(python3 -c 'import json; print(json.load(open("'"$zoho_ns_body"'"))["error"]["code"])')" = "not_a_seller" ] \
+  || { rm -f "$zoho_ns_body"; fail "H2: non-seller Zoho envelope code is not not_a_seller"; }
+rm -f "$zoho_ns_body"
+zoho_phone_body="$(mktemp)"
+[ "$(curl -s -o "$zoho_phone_body" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_h" -H 'Content-Type: application/json' \
+  -d '{"display_name":"X","phone":"9876543210"}' "$API_URL/v1/integrations/zoho/contacts")" = "422" ] \
+  || { rm -f "$zoho_phone_body"; fail "H2: bad-phone Zoho contact did not return 422"; }
+[ "$(python3 -c 'import json; print(json.load(open("'"$zoho_phone_body"'"))["error"]["code"])')" = "invalid_phone" ] \
+  || { rm -f "$zoho_phone_body"; fail "H2: bad-phone Zoho envelope code is not invalid_phone"; }
+rm -f "$zoho_phone_body"
+zoho_cur_body="$(mktemp)"
+[ "$(curl -s -o "$zoho_cur_body" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_h" -H 'Content-Type: application/json' \
+  -d '{"contact_id":"c1","reference_no":"R","currency":"USD","due_date":"20261027","lines":[{"name":"W","quantity":1,"amount_paise":100}]}' \
+  "$API_URL/v1/integrations/zoho/invoices")" = "400" ] \
+  || { rm -f "$zoho_cur_body"; fail "H2: non-INR Zoho invoice did not return 400"; }
+[ "$(python3 -c 'import json; print(json.load(open("'"$zoho_cur_body"'"))["error"]["code"])')" = "invalid_request" ] \
+  || { rm -f "$zoho_cur_body"; fail "H2: non-INR Zoho envelope code is not invalid_request"; }
+rm -f "$zoho_cur_body"
+pass "H2: Zoho — 401 without token, 403 not_a_seller, 422 invalid_phone, 400 on non-INR invoice"
+
 # --- AG-UI rate-limit guard (E6) -------------------------------------------
 # The /ag-ui/run echo endpoint costs no model tokens, but before E6 it was
 # the one AI endpoint with no per-user limit — an unbounded SSE stream is

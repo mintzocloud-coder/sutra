@@ -2593,7 +2593,7 @@ with documented contracts until then.
       H1 part 2 STAYS OPEN: CI-green confirmation of the smoke job
       on this push — next run checks the G3 mini-app section goes
       green and H1 closes. Pushed.
-- [ ] H2: Business integrations — WhatsApp Cloud API direct adapter
+- [x] H2: Business integrations — WhatsApp Cloud API direct adapter
   (fail-closed stub; no BSP), Tally on-premise bridge design + stub,
   Zoho Books default adapter (fail-closed stub), docs/integrations.md
   with post-investors onboarding checklists.
@@ -2691,8 +2691,37 @@ with documented contracts until then.
     migration 0016 applied clean on a scratch PG16 (table+PK+FK+CHECKs+
     trigger proven); bash -n smoke.sh green; compose YAML parses;
     SPDX checker green.
-    H2 STAYS OPEN: Zoho route (CreateContact/CreateInvoice, seller-scoped,
-    fail-closed 503) is the final H2 piece — next run.
+  - [x] H2 final piece DONE 2026-10-20 ~04:10 IST: Zoho routes
+    (Go). New `internal/integrations/zoho_handler.go` —
+    `POST /v1/integrations/zoho/contacts` (display_name required ≤128,
+    optional email sanity-checked, optional E.164 phone) and
+    `POST /v1/integrations/zoho/invoices` (contact_id + reference_no
+    required, currency pinned INR, calendar-valid YYYYMMDD due_date,
+    1–100 charge-only lines, quantity 1–1e6, positive amount_paise ≤
+    ₹10cr/line; credit notes are Wave 2). Both behind RequireAuth,
+    seller-scoped (403 not_a_seller), strict unknown-field rejection,
+    400/422 grammar codes. Fail-closed ladder (no per-seller registry —
+    one self-client per company): stub/nil provider → 503
+    zoho_unavailable + Retry-After (never implies booking), provider
+    error → 502 zoho_upstream. main.go keeps the Zoho provider and
+    passes it through newHandler (zohoProvider is the new 16th param;
+    5 test call sites updated); loud boot WARNs updated (Zoho no longer
+    "discarded"). OpenAPI: 2 paths + 4 schemas (redocly-style, coverage
+    gate 55 spec paths OK). docs/integrations.md: Zoho route-contract
+    section + the stale "no send routes yet" note corrected.
+    smoke.sh H2 section: Zoho contact + invoice 503 zoho_unavailable +
+    Retry-After, 401/403 matrix, 422 invalid_phone on bad phone, 400
+    invalid_request on non-INR currency.
+    VERIFIED: gofmt clean, go build+vet clean, full `go test ./...`
+    green (26 packages; 8 new Zoho test functions: no-subject 401 x2,
+    non-seller 403, stub/nil 503 + Retry-After (4 cases), 8-case contact
+    validation matrix, 13-case invoice validation matrix, fake-provider
+    202 x2, fake-upstream 502 x2); bash -n smoke.sh green; SPDX
+    checker green.
+    **H2 COMPLETE 2026-10-20 ~04:10 IST — the Wave-5 business tier
+    integrations seam is fully wired (WhatsApp send + inbound webhook,
+    Tally per-seller vouchers, Zoho contacts + invoices), all
+    fail-closed with honest 503s. Next run starts H3 (ads platform).**
 - [ ] H3: Ads platform — custom Go GSP auction core (bid → rank → price),
   Promovolve (Apache-2.0) for creative serving, advertiser API
   (campaigns, budgets, targeting), reporting, docs/ads.md, OpenAPI +

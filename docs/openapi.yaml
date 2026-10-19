@@ -3652,6 +3652,149 @@ paths:
           headers:
             Retry-After:
               $ref: '#/components/headers/RetryAfter'
+  /v1/integrations/zoho/contacts:
+    post:
+      tags: [integrations]
+      summary: Create a Zoho Books contact (seller-scoped)
+      description: |
+        Creates a customer contact in Zoho Books (the default accounting
+        ledger for Indian merchants). Seller-scoped: the caller must own
+        a seller account (`not_a_seller` otherwise).
+
+        Until the post-investors Zoho OAuth onboarding completes, the
+        seam is a fail-closed stub and every call answers 503
+        `zoho_unavailable` with Retry-After — the API never implies a
+        contact was created.
+      operationId: createZohoContact
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ZohoContactRequest'
+      responses:
+        '202':
+          description: Contact accepted by Zoho Books (Zoho contact id).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ZohoContactResult'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Bad contact grammar — blank display_name, implausible email, unknown fields (`invalid_request`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Caller owns no seller account (`not_a_seller`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '422':
+          description: Bad phone (`invalid_phone`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: Zoho Books failed to accept the request (`zoho_upstream`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Zoho Books is not wired on this deployment (`zoho_unavailable`); Retry-After present.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+  /v1/integrations/zoho/invoices:
+    post:
+      tags: [integrations]
+      summary: Create a Zoho Books invoice (seller-scoped)
+      description: |
+        Creates a customer invoice in Zoho Books against a contact.
+        Seller-scoped: the caller must own a seller account
+        (`not_a_seller` otherwise). Currency is pinned to INR; amounts
+        are integer paise (charge-only lines); `due_date` is a
+        calendar-valid YYYYMMDD; `reference_no` is our order id — the
+        dedupe key.
+
+        Until the post-investors Zoho OAuth onboarding completes, the
+        seam is a fail-closed stub and every call answers 503
+        `zoho_unavailable` with Retry-After — the API never implies an
+        invoice was booked.
+      operationId: createZohoInvoice
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ZohoInvoiceRequest'
+      responses:
+        '202':
+          description: Invoice accepted by Zoho Books (Zoho invoice id).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ZohoInvoiceResult'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Bad invoice grammar — missing contact_id/reference_no, non-INR currency, bad date, empty/invalid lines, unknown fields (`invalid_request`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Caller owns no seller account (`not_a_seller`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: Zoho Books failed to accept the request (`zoho_upstream`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Zoho Books is not wired on this deployment (`zoho_unavailable`); Retry-After present.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
   /v1/mini-apps:
     post:
       tags: [mini-apps]
@@ -4684,6 +4827,90 @@ components:
                 example: 129900
       description: |
         Ledger lines must balance: debits and credits net to zero.
+    ZohoContactResult:
+      type: object
+      required: [contact_id]
+      properties:
+        contact_id:
+          type: string
+          description: Zoho Books contact id.
+          example: 460000000026049
+    ZohoContactRequest:
+      type: object
+      required: [display_name]
+      additionalProperties: false
+      properties:
+        display_name:
+          type: string
+          maxLength: 128
+          description: Customer display name.
+          example: A Sharma
+        email:
+          type: string
+          maxLength: 256
+          description: Optional contact email (sanity-checked; Zoho does the real validation).
+          example: buyer@example.com
+        phone:
+          type: string
+          description: Optional E.164 phone (+<8-15 digits>).
+          example: +919876543210
+    ZohoInvoiceResult:
+      type: object
+      required: [invoice_id]
+      properties:
+        invoice_id:
+          type: string
+          description: Zoho Books invoice id.
+          example: 460000000026055
+    ZohoInvoiceRequest:
+      type: object
+      required: [contact_id, reference_no, currency, due_date, lines]
+      additionalProperties: false
+      properties:
+        contact_id:
+          type: string
+          maxLength: 64
+          description: Zoho Books contact id the invoice is raised against.
+          example: 460000000026049
+        reference_no:
+          type: string
+          maxLength: 128
+          description: Our order id — the dedupe key.
+          example: ORD-2026-1042
+        currency:
+          type: string
+          enum: [INR]
+          description: Pinned to INR until the international launch.
+          example: INR
+        due_date:
+          type: string
+          pattern: ^[0-9]{8}$
+          description: Invoice due date, calendar-valid YYYYMMDD.
+          example: '20261027'
+        lines:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: object
+            required: [name, quantity, amount_paise]
+            additionalProperties: false
+            properties:
+              name:
+                type: string
+                maxLength: 128
+                example: Handloom Kurta
+              quantity:
+                type: integer
+                minimum: 1
+                maximum: 1000000
+                example: 2
+              amount_paise:
+                type: integer
+                description: Unit price in integer paise; positive only (an invoice line is a charge), capped at ₹10 crore per line.
+                example: 129900
+      description: |
+        Charge-only lines: credit notes are a Wave 2 surface.
     WebhookMessage:
       type: object
       required: [id, event_type]
