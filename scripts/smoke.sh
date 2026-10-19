@@ -1905,18 +1905,30 @@ pass "order fixture archived (cleanup)"
 echo "smoke: order event bus round-trip (F6)"
 msgs="$(python3 - <<'PYEOF' || echo "0"
 import json, sys, time, urllib.request
+# Triage #28 (2026-10-20): /jsz?streams=1 does NOT return a top-level
+# "streams" list — "streams" is an INTEGER count (verified against the
+# nats-server v2.11.8 source: JSInfo.Streams is `json:"streams"` on an
+# int; streams=1 without acc flips opts.Accounts on). The per-stream
+# detail lives at account_details[].stream_detail[] (StreamDetail.Name
+# + StreamDetail.State.messages). The old poller iterated the int,
+# raised TypeError inside the try, and the bare except swallowed it —
+# 90s of silent polling, then a bogus "no events" FAIL even though the
+# api had published order.created/order.status_changed just fine.
 deadline = time.time() + 90
+def sutra_msgs(info):
+    for acc in info.get("account_details") or []:
+        for s in acc.get("stream_detail") or []:
+            if s.get("name") == "sutra":
+                return s.get("state", {}).get("messages", 0) or 0
+    return 0
 while True:
     try:
         info = json.load(urllib.request.urlopen(
             "http://localhost:8222/jsz?streams=1", timeout=10))
-        streams = info.get("streams") or []
-        sutra = [s for s in streams if s.get("name") == "sutra"]
-        if sutra:
-            n = sutra[0].get("state", {}).get("messages", 0)
-            if n >= 1:
-                print(n)
-                break
+        n = sutra_msgs(info)
+        if n >= 1:
+            print(n)
+            break
     except Exception:
         pass
     if time.time() > deadline:

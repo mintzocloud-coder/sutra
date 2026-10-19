@@ -2499,6 +2499,36 @@ with documented contracts until then.
       push — next run checks the F3 state machine goes green for the
       first time (created→confirmed→shipped→delivered, the 422/400
       matrix, cancel→reservation release) and H1 closes. Pushed.
+    - [x] H1 part 2x DONE 2026-10-20 ~01:00 IST: CI-red triage #28 —
+      ROOT CAUSE FOUND (smoke.sh jsz poller read the wrong JSON path;
+      Go/NATS were innocent all along). Run 39301650049's successor
+      (the 2w push, de46f914) finished 6/7 green; smoke RED at the F6
+      NATS round-trip — "no order events reached the sutra JetStream
+      stream" — the FIRST run ever to reach that section (the 2w
+      /status fix made the F3 state machine PASS: confirmed → shipped
+      → delivered, 422 invalid_transition matrix, buyer-cancel
+      reservation release). ROOT CAUSE: the poller did
+      `info["streams"]` as a LIST, but `/jsz?streams=1` returns
+      `"streams"` as an INTEGER count — verified against the
+      nats-server v2.11.8 source (JSInfo.Streams `json:"streams"` on
+      an int; streams=1 without acc flips opts.Accounts on, so the
+      per-stream detail lives at
+      account_details[].stream_detail[] with StreamDetail.Name +
+      State.messages). Iterating the int raised TypeError inside the
+      try, the bare except swallowed it, and 90s of silent polling
+      ended in a bogus "no events" FAIL — the api HAD published
+      order.created/order.status_changed (the F3 201s prove the hook
+      path; the F6 part-1 live proof had already validated
+      PublishOrderEvent against real nats-server 2.11). FIX: the
+      poller now walks account_details → stream_detail, matches
+      name == "sutra", reads state.messages. VERIFIED: bash -n
+      green; simulation against the real jsz shape — old logic
+      raises TypeError('int' object is not iterable), new logic
+      returns 5, returns 0 on an empty server; SPDX checker green.
+      No Go/Python/Elixir touched. H1 part 2 STAYS OPEN:
+      CI-green confirmation of the smoke job on this push — next
+      run checks the F6 round-trip (and everything after it) goes
+      green and H1 closes. Pushed.
 - [ ] H2: Business integrations — WhatsApp Cloud API direct adapter
   (fail-closed stub; no BSP), Tally on-premise bridge design + stub,
   Zoho Books default adapter (fail-closed stub), docs/integrations.md
@@ -2518,6 +2548,31 @@ All boxes ticked, CI green, `scripts/smoke.sh` passes, docs complete.
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-20 ~01:00 IST: H1 part 2x done — CI-RED TRIAGE #28 (ROOT CAUSE
+  FOUND, smoke.sh assertion bug — service code untouched). The 2w push
+  (de46f914) finished 6/7 green; smoke RED at the F6 NATS round-trip —
+  "no order events reached the sutra JetStream stream" — the FIRST run
+  ever to reach that section (the 2w /status fix made the whole F3 state
+  machine PASS: confirmed→shipped→delivered, 422 invalid_transition
+  matrix, buyer-cancel reservation release). ROOT CAUSE: the poller
+  treated /jsz?streams=1's "streams" as a LIST, but nats-server returns
+  it as an INTEGER count — verified against the nats-server v2.11.8
+  source (JSInfo.Streams is `json:"streams"` on an int; streams=1 without
+  acc flips opts.Accounts, so per-stream detail lives at
+  account_details[].stream_detail[] with StreamDetail.Name +
+  State.messages). Iterating the int raised TypeError inside the try, the
+  bare except swallowed it, and 90s of silent polling produced a bogus
+  "no events" FAIL — the api had published order.created /
+  order.status_changed correctly (the F3 201s prove the hook path; F6
+  part-1's live proof had already validated PublishOrderEvent against
+  real nats-server 2.11). FIX: poller walks account_details →
+  stream_detail, matches name == "sutra", reads state.messages.
+  VERIFIED: bash -n green; simulation on the real jsz shape — old logic
+  raises TypeError('int' object is not iterable), new logic returns the
+  message count; SPDX checker green. H1 part 2 STAYS OPEN: CI-green
+  confirmation of the smoke job on this push — next run checks the F6
+  round-trip (and the sections after it) go green and H1 closes.
 
 - 2026-10-19 ~18:35 IST: H1 part 2l done — CI-RED TRIAGE #17 (ROOT CAUSE
   FOUND, real fix). Run 39251067087 (the 2k push) finished 6/7 green;
