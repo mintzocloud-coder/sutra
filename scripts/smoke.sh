@@ -571,6 +571,12 @@ pass "svix-server up (management API answering, 8071)"
 # 401ing). The webhooks round-trip uses the hydra JWT ($access_token),
 # so bypass-off exercises the real auth path — strictly stronger than
 # the bypass for route-wiring purposes.
+# Triage #19 (2026-10-19): the python round-trip below previously sent a
+# hard-coded bogus Bearer value — it only ever passed because the bypass
+# (triage #18's leak) stamped dev-user and the bad token was never
+# checked. With bypass-off the api 401s it (run 39258431914). It now
+# takes the real hydra JWT ($access_token) as argv[2], matching the
+# comment above and the F2-search python heredoc pattern.
 AUTH_BYPASS= SVIX_API_TOKEN="$SVIX_TOKEN" docker compose up -d --no-deps api
 wait_for 90 "api /healthz (webhooks enabled)" curl -sf "$API_URL/healthz"
 # Triage #16 (2026-10-19): the 2j run proved the host-side probe is NOT
@@ -613,10 +619,11 @@ dump_webhooks_diag() {
     echo "container-path probe: FAIL" >&2
   fi
 }
-python3 - "$API_URL" <<'PYEOF' || { dump_webhooks_diag; fail "webhooks round-trip"; }
+python3 - "$API_URL" "$access_token" <<'PYEOF' || { dump_webhooks_diag; fail "webhooks round-trip"; }
 import json, sys, time, urllib.request, urllib.error
 api = sys.argv[1]
-HDRS = {"Authorization": "Bearer smoke-bypass", "Content-Type": "application/json"}
+hydra_jwt = sys.argv[2]  # the hydra JWT from the D1 token request
+HDRS = {"Authorization": "Bearer " + hydra_jwt, "Content-Type": "application/json"}
 def call(method, path, body=None):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(api + path, data=data, headers=HDRS, method=method)

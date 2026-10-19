@@ -2274,6 +2274,23 @@ with documented contracts until then.
       ("/v1/me 401 without token (bypass confirmed off)" passed).
       H1 part 2 STAYS OPEN: CI-green confirmation of the smoke job on
       this push — next run checks it. Pushed.
+    - [x] H1 part 2n DONE 2026-10-19 ~19:15 IST: CI-red triage #19.
+      Run 39258431914 (the 2m push) finished 6/7 green; smoke RED at
+      "smoke FAIL: webhooks round-trip" — the G2 python heredoc 401'd on
+      POST /v1/webhooks/endpoints (api request log shows the 401). ROOT
+      CAUSE (smoke.sh, not Go): the python round-trip sent a HARDCODED
+      bogus Bearer value — it only ever passed because the AUTH_BYPASS=1
+      leak (triage #18's find) stamped dev-user and the bad token was
+      never checked. #18's fix turned the bypass correctly off, exposing
+      the bad header. FIX: the heredoc now takes the real hydra JWT
+      ($access_token, minted in D1) as argv[2] — `python3 - "$API_URL"
+      "$access_token" <<'PYEOF'` + `hydra_jwt = sys.argv[2]` (F2-search
+      heredoc pattern) — so bypass-off exercises the real auth path as
+      the comment always claimed. Triage comment block updated. VERIFIED:
+      bash -n green; python HDRS construction simulated (Bearer <JWT>);
+      no Go/Python/Elixir touched. H1 part 2 STAYS OPEN: CI-green
+      confirmation of the smoke job on this push — next run checks the
+      G2 section passes and H1 closes.
 - [ ] H2: Business integrations — WhatsApp Cloud API direct adapter
   (fail-closed stub; no BSP), Tally on-premise bridge design + stub,
   Zoho Books default adapter (fail-closed stub), docs/integrations.md
