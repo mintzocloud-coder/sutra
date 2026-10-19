@@ -1204,9 +1204,18 @@ pos1="$(rank_pos "$feed_rank1" "$rxid" "$ryid")"
 pass "ranking: liked older post X outranks newer post Y"
 
 # Cleanup: B unlikes X; A deletes both posts.
-[ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
-  -H "Authorization: Bearer $token_b" "$API_URL/v1/posts/$rxid/like")" = "204" ] \
-  || fail "DELETE /v1/posts/{id}/like (rank cleanup) did not return 204"
+# Unlike is 200 with the count (not 204): the OpenAPI contract documents
+# idempotent "ensure absent" returning LikeResult so clients can update UI
+# state without a refetch (internal/engagement/handler.go pins it too).
+unlike_out="$(curl -sf -X DELETE \
+  -H "Authorization: Bearer $token_b" "$API_URL/v1/posts/$rxid/like")" \
+  || fail "DELETE /v1/posts/{id}/like (rank cleanup) failed"
+printf '%s' "$unlike_out" | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+assert d['liked'] is False, d
+assert d['like_count'] == 0, d
+" || fail "unlike did not return the 200 liked:false/count:0 contract"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
   -H "Authorization: Bearer $access_token" "$API_URL/v1/posts/$rxid")" = "204" ] \
   || fail "DELETE rank post X did not return 204"

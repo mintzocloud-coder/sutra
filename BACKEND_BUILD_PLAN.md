@@ -2339,6 +2339,23 @@ with documented contracts until then.
       bash -n clean. No Go/Elixir/smoke.sh touched. H1 part 2 STAYS
       OPEN: CI-green confirmation of the smoke job on this push —
       next run checks the H1 business section goes green.
+    - [x] H1 part 2q DONE 2026-10-19 ~21:45 IST: CI-red triage #22
+      (smoke.sh assertion bug, service code untouched). Run 39278035111
+      (the 2p push) finished 6/7 green; smoke RED at the E5 section's
+      cleanup — "smoke FAIL: DELETE /v1/posts/{id}/like (rank cleanup)
+      did not return 204". This was the first run ever to reach the E5
+      cleanup (the rank-setup 201 + the like-flip assertion both
+      PASSED). ROOT CAUSE: stale smoke.sh assertion, not the API —
+      the Go handler deliberately returns 200 with LikeResult
+      (idempotent "ensure absent", so clients update UI state without
+      a refetch — pinned in internal/engagement/handler.go's comment
+      AND the OpenAPI /v1/posts/{id}/like delete contract, 200 not
+      204). FIX: the cleanup now curls the real 200 contract —
+      asserts liked:false and like_count:0 via a python body check
+      (proven: passes on the real 200 shape, fails on a wrong shape);
+      bash -n green. No Go/Python/Elixir touched. H1 part 2 STAYS
+      OPEN: CI-green confirmation of the smoke job on this push —
+      next run checks the E5 cleanup + H1 business section go green.
 - [ ] H2: Business integrations — WhatsApp Cloud API direct adapter
   (fail-closed stub; no BSP), Tally on-premise bridge design + stub,
   Zoho Books default adapter (fail-closed stub), docs/integrations.md
@@ -2980,3 +2997,15 @@ Then report to founder: production-ready backend live on main.
   JSON lines, joins, asserts). bash -n green; positive sim passes,
   negative sim correctly fails. H1 part 2 STAYS OPEN: CI-green
   confirmation on this push. Pushed.
+
+- 2026-10-19 ~21:45 IST: H1 part 2q done — CI-RED TRIAGE #22 (see H1 part-2
+  note): run 39278035111 (2p push) finished 6/7 green; smoke RED at the E5
+  section's rank cleanup ("DELETE /v1/posts/{id}/like did not return 204") —
+  the first run ever to reach that line (rank-setup 201 + like-flip both
+  PASSED). Root cause: stale smoke.sh assertion — the Go handler deliberately
+  returns 200 with LikeResult (idempotent "ensure absent"; pinned in
+  internal/engagement/handler.go's comment + the OpenAPI contract). Fix:
+  cleanup now curls the real 200 contract and asserts liked:false +
+  like_count:0 (bash -n + positive/negative simulations green). No
+  Go/Python/Elixir touched. H1 part 2 STAYS OPEN: CI-green confirmation on
+  this push — next run checks the E5 cleanup + H1 business section go green.
