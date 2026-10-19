@@ -2255,6 +2255,29 @@ Then report to founder: production-ready backend live on main.
 
 ## Log
 
+- 2026-10-19 ~17:15 IST: H1 part 2j done — CI-RED TRIAGE #15. Run
+  39243256144 (the 2i push) finished 6/7 green; smoke RED again at
+  "smoke FAIL: webhooks round-trip" — new symptom: 502
+  `webhooks_upstream` "webhook gateway is unreachable" from the Go
+  api. ROOT CAUSE: a smoke boot race, not Svix/auth. Timeline in the
+  CI log: svix-server container started 11:16:37.975Z, api recreated
+  11:16:38.539Z, python round-trip ran 11:16:40.7Z — ~2.7s after
+  container start. The only readiness probe was `svix-server jwt
+  generate`, which is an OFFLINE CLI (mints from SVIX_JWT_SECRET
+  without touching the HTTP listener); svix-server runs DB
+  migrations at boot before binding 8071, so the Go api's first
+  Svix call failed at TCP connect. (The 2g run passed this point
+  only because the server had warmed up by luck — intermittent.)
+  FIX (scripts/smoke.sh G2 section only): after token extraction,
+  `wait_for 90` on the real management API —
+  `curl -sf -H "Authorization: Bearer $SVIX_TOKEN"
+  http://localhost:8071/api/v1/app` (8071 is host-published in
+  compose; the GET needs the DB, so 200 = truly ready; same
+  Bearer the Go api uses). VERIFIED: bash -n green; the probe
+  path mirrors the Go client's own app-lookup route
+  (internal/webhooks webhooks.go uses GET /api/v1/app/<uid>).
+  H1 part 2 STAYS OPEN: CI-green confirmation on this push.
+
 - 2026-10-19 ~17:05 IST: H1 part 2i done — CI-RED TRIAGE #14. Run
   39241830005 (the 2h push) finished 6/7 green; smoke RED again at
   "smoke FAIL: webhooks round-trip" — new symptom this time: the

@@ -552,6 +552,16 @@ wait_for 90 "svix-server (jwt generate)" \
 SVIX_TOKEN="$(docker compose exec -T svix-server svix-server jwt generate \
   | tr -d '\r' | grep -oE '[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' | head -1)"
 [ -n "$SVIX_TOKEN" ] || fail "svix-server jwt generate produced no JWT"
+# Triage #15 (2026-10-19): `svix-server jwt generate` is an OFFLINE CLI — it
+# succeeds long before the server's HTTP listener is up (migrations run at
+# boot against postgres). Without this wait the round-trip below races
+# container boot and the Go api's first Svix call fails at TCP connect
+# (502 webhooks_upstream "webhook gateway is unreachable"). Probe the real
+# management API (needs the DB, so a 200 means the server is truly ready).
+wait_for 90 "svix-server management API (localhost:8071)" \
+  curl -sf -o /dev/null -H "Authorization: Bearer $SVIX_TOKEN" \
+  http://localhost:8071/api/v1/app
+pass "svix-server up (management API answering, 8071)"
 # Recreate the api with the dispatcher enabled. AUTH_BYPASS is still on
 # (dev-user), so the bypass exercises the route wiring; the Svix
 # management-token auth is the real contract under test.
