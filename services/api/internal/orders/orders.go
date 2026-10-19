@@ -355,14 +355,23 @@ func (s *Service) Checkout(ctx context.Context, buyerID pgtype.UUID) ([]*Order, 
 	return out, nil
 }
 
-// actorRole resolves the caller's role for an order: buyer, the
-// seller's user, or none (→ ErrForbidden at the call sites).
+// actorRole resolves the caller's role for an order: the seller's
+// user, the buyer, or none (→ ErrForbidden at the call sites).
+// A caller who is BOTH (self-purchase: checkout does not forbid the
+// seller's user from buying their own listings) resolves to the
+// most-privileged applicable role — roleSeller. This costs the buyer
+// nothing: every buyer edge in the transition table (cancel from
+// created, return from delivered) is also a seller edge, while the
+// seller fulfillment edges (confirm/ship/deliver) are exactly what a
+// self-purchasing merchant needs to drive their own order. Without
+// this, a merchant who buys from their own store could never
+// confirm/ship/deliver the order through the user-facing routes.
 func actorRole(callerID, buyerID, sellerUserID pgtype.UUID) role {
-	if callerID == buyerID {
-		return roleBuyer
-	}
 	if sellerUserID.Valid && callerID == sellerUserID {
 		return roleSeller
+	}
+	if callerID == buyerID {
+		return roleBuyer
 	}
 	return roleNone
 }

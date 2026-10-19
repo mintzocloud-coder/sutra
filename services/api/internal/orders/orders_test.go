@@ -300,6 +300,73 @@ func machineRoundTrip(t *testing.T, ctx context.Context, pool *db.Pool, svc *Ser
 	return o
 }
 
+func TestActorRoleBothRolesPrefersSeller(t *testing.T) {
+	// Pure: no database needed. Self-purchase (checkout does not forbid
+	// the seller's user from buying their own listings) must resolve to
+	// the most-privileged applicable role, or the merchant could never
+	// confirm/ship/deliver their own order.
+	var buyer, seller, stranger pgtype.UUID
+	for i := range 16 {
+		buyer.Bytes[i] = byte(i + 1)
+		seller.Bytes[i] = byte(i + 65)
+		stranger.Bytes[i] = byte(i + 129)
+	}
+	buyer.Valid, seller.Valid, stranger.Valid = true, true, true
+	if got := actorRole(buyer, buyer, seller); got != roleBuyer {
+		t.Errorf("buyer-only: got %v, want roleBuyer", got)
+	}
+	if got := actorRole(seller, buyer, seller); got != roleSeller {
+		t.Errorf("seller-only: got %v, want roleSeller", got)
+	}
+	if got := actorRole(stranger, buyer, seller); got != roleNone {
+		t.Errorf("stranger: got %v, want roleNone", got)
+	}
+	// The self-purchase case: caller is both buyer and the seller's
+	// user → seller wins.
+	if got := actorRole(seller, seller, seller); got != roleSeller {
+		t.Errorf("both roles: got %v, want roleSeller", got)
+	}
+	// Every buyer edge must also be a seller edge, so preferring the
+	// seller never strands the buyer's legitimate moves.
+	for _, tr := range transitions {
+		for _, r := range tr.by {
+			if r == roleBuyer {
+				if !edgeFor(tr.from, tr.to, roleSeller) {
+					t.Errorf("buyer edge %s→%s has no seller counterpart; buyer-seller resolution would lose it", tr.from, tr.to)
+				}
+			}
+		}
+	}
+}
+
+func TestOrderSelfPurchaseLifecycle(t *testing.T) {
+	// Regression: a merchant buys from their own store (one identity,
+	// the exact shape of the F3 smoke harness). Before the
+	// actorRole fix, the caller resolved to roleBuyer and the very
+	// first seller fulfillment edge (created→confirmed) failed with
+	// ErrInvalidTransition.
+	pool := testPool(t)
+	ctx := context.Background()
+	cartSvc, svc, _, sellerUser, variantID := checkoutPair(t, ctx, pool, 10000, 10)
+
+	o := machineRoundTrip(t, ctx, pool, svc, cartSvc, sellerUser, sellerUser, variantID, 3)
+	if o.Status != StatusDelivered {
+		t.Fatalf("final status = %s, want delivered", o.Status)
+	}
+	// The merchant can still cancel their own fresh order: the seller
+	// edge covers the buyer one.
+	if _, err := cartSvc.AddItem(ctx, sellerUser, variantID, 1); err != nil {
+		t.Fatalf("AddItem: %v", err)
+	}
+	ords, err := svc.Checkout(ctx, sellerUser)
+	if err != nil {
+		t.Fatalf("Checkout: %v", err)
+	}
+	if _, err := svc.Transition(ctx, sellerUser, mustUUID(t, ords[0].ID), StatusCancelled); err != nil {
+		t.Errorf("self-purchase cancel: %v", err)
+	}
+}
+
 func TestOrderLifecycleAndStock(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()

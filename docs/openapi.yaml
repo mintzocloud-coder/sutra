@@ -3185,7 +3185,9 @@ paths:
         `confirmed → cancelled` by the seller; `delivered → returned`
         by buyer or seller. Cancel/return RELEASES the stock
         reservation back to available; delivery CONVERTS it into a
-        sale. Unknown status names → 422 `invalid_status`; legal names
+        sale. A caller who is both buyer and the seller's user
+        (self-purchase) acts with the seller's edges. Unknown status
+        names → 422 `invalid_status`; legal names
         on illegal edges → 422 `invalid_transition`.
       operationId: transitionOrder
       security:

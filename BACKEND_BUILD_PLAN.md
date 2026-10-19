@@ -2383,6 +2383,42 @@ with documented contracts until then.
       STAYS OPEN: CI-green confirmation of the smoke job on this
       push — next run checks the F3 cart section + H1 business section
       go green.
+    - [x] H1 part 2s DONE 2026-10-19 ~22:45 IST: CI-red triage #24
+      (real API bug — service code at fault again).
+      Run 39288363493 (the 2r push) finished 6/7 green; smoke RED at
+      the F3 cart section — "smoke FAIL: created → confirmed failed"
+      (a python JSONDecodeError on the empty body of the `curl -sf`
+      PATCH /v1/orders/{id}/status — the route 422'd, not 500'd).
+      Cart over-stock 409 (triage #23's fix) HELD; the H1 business
+      section PASSED in full (grounded ₹1,299 SSE, fabricated-₹999
+      fallback, non-seller 403, 429 + Retry-After).
+      ROOT CAUSE: internal/orders actorRole() checked buyer BEFORE
+      seller. The F3 smoke harness uses ONE Hydra identity as both
+      seller and buyer (checkout allows self-purchase — no
+      buyer==seller guard), so the caller resolved to roleBuyer and
+      the seller-only created→confirmed edge returned
+      ErrInvalidTransition (422). A self-purchasing merchant could
+      NEVER confirm/ship/deliver their own order through the
+      user-facing routes — a real production authorization bug, not
+      a smoke artifact.
+      FIX: actorRole now resolves a both-roles caller to the
+      most-privileged applicable role — roleSeller. This strands no
+      buyer move: every buyer edge (created→cancelled,
+      delivered→returned) is also a seller edge. Regression tests:
+      pure TestActorRoleBothRolesPrefersSeller (buyer-only/seller-
+      only/stranger/both-roles + a sweep asserting every buyer edge
+      has a seller counterpart) and integration
+      TestOrderSelfPurchaseLifecycle (full created→delivered walk
+      with buyer==seller, then self-purchase cancel — fails on the
+      old code by construction). OpenAPI /v1/orders/{id}/status
+      description gains the both-roles sentence. No smoke.sh change
+      needed — the smoke was exercising the correct contract.
+      VERIFIED: gofmt/go build/go vet clean (whole module), pure
+      tests green (TestActorRoleBothRolesPrefersSeller + error-code
+      table); integration suite skips cleanly on this VM (no PG —
+      runs in CI); YAML parses, 51 paths intact. H1 part 2 STAYS
+      OPEN: CI-green confirmation of the smoke job on this push —
+      next run checks the F3 state-machine section + H1 close.
 - [ ] H2: Business integrations — WhatsApp Cloud API direct adapter
   (fail-closed stub; no BSP), Tally on-premise bridge design + stub,
   Zoho Books default adapter (fail-closed stub), docs/integrations.md
@@ -3038,3 +3074,5 @@ Then report to founder: production-ready backend live on main.
   this push — next run checks the E5 cleanup + H1 business section go green.
 
 - 2026-10-19 ~22:35 IST: H1 part 2r done (see H1 task note): run 39281576810 (2q push) finished 6/7 green, smoke RED at F3 — "cart over-stock add did not return 409 (got 500)". REAL API BUG: cart AddItem validated only the request qty vs maxLineQty (999); smoke's add-2-then-999 made the upsert try quantity=1001, tripping the cart_items_qty_sane DB CHECK (0010_carts.sql) → raw pgx error → unmapped 500 before the stock guard could fire 409 insufficient_stock. Fix: AddItem pre-checks the accumulated line total in-tx (ErrInvalidQuantity → 422), DB CHECK now a last resort; smoke over-stock step now adds 9 onto the 2-unit line (11 > 10 available) so the intended 409 path is asserted; new TestCartAddAccumulatedCap covers the cap path. Verified: gofmt/build/vet (whole module) green, SPDX green, bash -n green, cart integration suite green on local PG16 incl. new test. Pushed 6599e951; CI-green confirmation lands with the next run's CI check.
+
+- 2026-10-19 ~22:45 IST: H1 part 2s done (see H1 task note): run 39288363493 (2r push) finished 6/7 green, smoke RED at F3 — "created → confirmed failed" (PATCH /v1/orders/{id}/status 422'd: actorRole checked buyer before seller, so a self-purchasing merchant's single identity resolved to roleBuyer and the seller-only confirm edge died). REAL API BUG: actorRole now prefers roleSeller for both-roles callers (every buyer edge is also a seller edge, so no buyer move is stranded); new TestActorRoleBothRolesPrefersSeller + TestOrderSelfPurchaseLifecycle; OpenAPI status-route description updated. Verified: gofmt/build/vet green, pure tests green, YAML 51 paths OK. H1 part 2 STAYS OPEN pending CI-green confirmation.
