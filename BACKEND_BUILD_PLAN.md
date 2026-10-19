@@ -2255,6 +2255,25 @@ Then report to founder: production-ready backend live on main.
 
 ## Log
 
+- 2026-10-19 ~15:05 IST: H1 part 2f done — CI-RED TRIAGE ATTEMPT #11.
+  Run 39227822952 (the 2e push) finished 6/7 green; smoke RED at the G2
+  section's first step — "smoke FAIL: webhooks round-trip": POST
+  /v1/webhooks/endpoints → 422 `webhooks_invalid`, "the webhook request
+  failed server-side validation". ROOT CAUSE: the API's Svix app UID
+  scheme `user:<uuid>` is INVALID against the real server — Svix's Uid
+  type enforces `^[a-zA-Z0-9\-_.]+$` (verified in the svix-webhooks
+  source: server/svix-server/src/core/types/mod.rs), which rejects the
+  colon. The G2 unit tests never caught it because the stub servers
+  never enforced Svix's UID grammar. FIX: `AppUIDForUser` now returns
+  `user_<id>` (underscore; comment cites the Svix grammar); stub-server
+  paths in handler_test.go/webhooks_test.go updated; `user:<id>` Svix-app
+  references in docs/webhooks.md, docs/dev-platform.md,
+  docs-site/docs/{intro,onboarding,webhooks}.md updated (Phoenix
+  `user:<id>` channel topics deliberately untouched — different system).
+  VERIFIED: gofmt clean, go build+vet clean, full `go test ./...` green
+  (25 packages, exit 0). H1 part 2 STAYS OPEN: CI-green confirmation of
+  the smoke job on this push — next run checks it. Pushed.
+
 - 2026-10-19 ~14:45 IST: H1 part 2e done — CI-RED TRIAGE ATTEMPT #10.
   Run 39226339387 (the 2d push) finished 6/7 jobs green; smoke died at
   "smoke FAIL: host token is not a 3-part JWT" — the first time the G1

@@ -3,7 +3,7 @@ package webhooks
 
 // Developer-facing webhook routes (G2 part 2). All routes sit behind
 // RequireAuth; each developer manages exactly one Svix application —
-// their own `user:<id>` app — and can never touch another user's.
+// their own `user_<id>` app — and can never touch another user's.
 //
 // Routes:
 //   POST   /v1/webhooks/endpoints            register a delivery target

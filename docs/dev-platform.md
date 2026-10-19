@@ -50,7 +50,7 @@ CI gate guarantees the file is complete and current.
   under `/v1/`, standard JSON error envelope
   (`{"error":{"code","message","request_id"}}`), per-IP rate budgets
   (`docs/production.md`).
-- **Webhooks** — per-user Svix apps (`user:<id>`); platform events
+- **Webhooks** — per-user Svix apps (`user_<id>`); platform events
   (`order.created`, `order.status_changed`, `live:started`, `live:ended`,
   `shipment:update`) publish to subscribed endpoints with Svix signing,
   retries, and a delivery log. Full contract: `docs/webhooks.md`.

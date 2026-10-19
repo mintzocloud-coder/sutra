@@ -16,7 +16,7 @@ against that dev setup. Production hardening lives in
 
 - **You are a developer identity.** Every API call carries a bearer token
   for *your* Sutra user. The platform derives everything from that
-  token's subject — your webhook app (`user:<id>`), your mini-apps,
+  token's subject — your webhook app (`user_<id>`), your mini-apps,
   your installs. There is no separate "developer portal account" to
   create: register your OAuth client and you're in.
 - **The spec is the contract.** If the code accepts it but the spec
@@ -98,7 +98,7 @@ support conversations ten times faster.
 
 Platform events (`order.created`, `order.status_changed`, `live:started`,
 `live:ended`, `shipment:update`) go to HTTPS endpoints you register on
-your own `user:<id>` Svix app:
+your own `user_<id>` Svix app:
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" \

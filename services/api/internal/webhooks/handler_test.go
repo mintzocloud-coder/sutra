@@ -16,7 +16,7 @@ import (
 
 // handlerFor builds a Handler whose user resolution is stubbed (no DB):
 // every subject maps to "test-user-id", so the owned app is
-// "user:test-user-id".
+// "user_test-user-id".
 func handlerFor(t *testing.T, c *Client) *Handler {
 	t.Helper()
 	h := NewHandler(nil, c, testLog())
@@ -75,7 +75,7 @@ func envelopeCode(t *testing.T, rec *httptest.ResponseRecorder) string {
 // armApp scripts the GET-first EnsureApp flow: app missing, then
 // created.
 func armApp(s *stubSvix) {
-	s.respond["GET /api/v1/app/user:test-user-id"] = func(w http.ResponseWriter, r *http.Request) {
+	s.respond["GET /api/v1/app/user_test-user-id"] = func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}
 	s.respond["POST /api/v1/app"] = func(w http.ResponseWriter, r *http.Request) {
@@ -112,7 +112,7 @@ func TestCreateEndpoint(t *testing.T) {
 	s := newStub(t)
 	armApp(s)
 	var gotBody []byte
-	s.respond["POST /api/v1/app/user:test-user-id/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
+	s.respond["POST /api/v1/app/user_test-user-id/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
 		gotBody, _ = io.ReadAll(r.Body)
 		writeJSON(w, http.StatusCreated, map[string]any{
 			"id": "ep_1", "url": "https://example.com/wh",
@@ -173,15 +173,15 @@ func TestCreateEndpointRouteValidation(t *testing.T) {
 func TestListAndDeleteEndpoints(t *testing.T) {
 	s := newStub(t)
 	armApp(s)
-	s.respond["GET /api/v1/app/user:test-user-id/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
+	s.respond["GET /api/v1/app/user_test-user-id/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"data": []any{
 			map[string]any{"id": "ep_1", "url": "https://example.com/wh"},
 		}})
 	}
-	s.respond["DELETE /api/v1/app/user:test-user-id/endpoint/ep_1"] = func(w http.ResponseWriter, r *http.Request) {
+	s.respond["DELETE /api/v1/app/user_test-user-id/endpoint/ep_1"] = func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}
-	s.respond["DELETE /api/v1/app/user:test-user-id/endpoint/gone"] = func(w http.ResponseWriter, r *http.Request) {
+	s.respond["DELETE /api/v1/app/user_test-user-id/endpoint/gone"] = func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}
 	h := fullMux(t, handlerFor(t, clientFor(t, s)))
@@ -228,7 +228,7 @@ func TestPublishEvent(t *testing.T) {
 	s := newStub(t)
 	armApp(s)
 	var gotBody []byte
-	s.respond["POST /api/v1/app/user:test-user-id/msg"] = func(w http.ResponseWriter, r *http.Request) {
+	s.respond["POST /api/v1/app/user_test-user-id/msg"] = func(w http.ResponseWriter, r *http.Request) {
 		gotBody, _ = io.ReadAll(r.Body)
 		writeJSON(w, http.StatusCreated, map[string]string{"id": "msg_1", "eventType": "custom.ping"})
 	}
@@ -282,7 +282,7 @@ func TestPublishEvent(t *testing.T) {
 func TestDeliveries(t *testing.T) {
 	s := newStub(t)
 	armApp(s)
-	s.respond["GET /api/v1/app/user:test-user-id/msg/msg_1/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
+	s.respond["GET /api/v1/app/user_test-user-id/msg/msg_1/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"data": []any{
 			map[string]any{"id": "att_1", "status": "success", "responseStatusCode": 200, "timestamp": "2026-10-19T00:00:00Z"},
 		}})
@@ -315,7 +315,7 @@ func TestDeliveries(t *testing.T) {
 func TestSvixUnauthorizedBecomesMisconfigured(t *testing.T) {
 	s := newStub(t)
 	// Every call 401s: our management token is bad.
-	s.respond["GET /api/v1/app/user:test-user-id"] = func(w http.ResponseWriter, r *http.Request) {
+	s.respond["GET /api/v1/app/user_test-user-id"] = func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}
 	h := fullMux(t, handlerFor(t, clientFor(t, s)))
@@ -340,11 +340,11 @@ func TestEmitBestEffort(t *testing.T) {
 
 	// Live client: ensure-app + publish happen in a detached goroutine.
 	s := newStub(t)
-	s.respond["GET /api/v1/app/user:u1"] = func(w http.ResponseWriter, r *http.Request) {
+	s.respond["GET /api/v1/app/user_u1"] = func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"id": "app_u1"})
 	}
 	published := make(chan []byte, 1)
-	s.respond["POST /api/v1/app/user:u1/msg"] = func(w http.ResponseWriter, r *http.Request) {
+	s.respond["POST /api/v1/app/user_u1/msg"] = func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		select {
 		case published <- body:

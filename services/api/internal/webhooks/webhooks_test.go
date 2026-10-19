@@ -66,22 +66,22 @@ func TestDisabledNoop(t *testing.T) {
 		t.Fatal("expected disabled client")
 	}
 	ctx := context.Background()
-	if _, err := c.EnsureApp(ctx, "user:1", "n"); !errors.Is(err, ErrWebhooksDisabled) {
+	if _, err := c.EnsureApp(ctx, "user_1", "n"); !errors.Is(err, ErrWebhooksDisabled) {
 		t.Fatalf("EnsureApp: %v", err)
 	}
-	if _, err := c.CreateEndpoint(ctx, "user:1", EndpointIn{URL: "https://x.example"}); !errors.Is(err, ErrWebhooksDisabled) {
+	if _, err := c.CreateEndpoint(ctx, "user_1", EndpointIn{URL: "https://x.example"}); !errors.Is(err, ErrWebhooksDisabled) {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
-	if _, err := c.ListEndpoints(ctx, "user:1"); !errors.Is(err, ErrWebhooksDisabled) {
+	if _, err := c.ListEndpoints(ctx, "user_1"); !errors.Is(err, ErrWebhooksDisabled) {
 		t.Fatalf("ListEndpoints: %v", err)
 	}
-	if err := c.DeleteEndpoint(ctx, "user:1", "ep_1"); !errors.Is(err, ErrWebhooksDisabled) {
+	if err := c.DeleteEndpoint(ctx, "user_1", "ep_1"); !errors.Is(err, ErrWebhooksDisabled) {
 		t.Fatalf("DeleteEndpoint: %v", err)
 	}
-	if _, err := c.Publish(ctx, "user:1", "order.created", map[string]string{}, "e1"); !errors.Is(err, ErrWebhooksDisabled) {
+	if _, err := c.Publish(ctx, "user_1", "order.created", map[string]string{}, "e1"); !errors.Is(err, ErrWebhooksDisabled) {
 		t.Fatalf("Publish: %v", err)
 	}
-	if _, err := c.ListAttempts(ctx, "user:1", "msg_1"); !errors.Is(err, ErrWebhooksDisabled) {
+	if _, err := c.ListAttempts(ctx, "user_1", "msg_1"); !errors.Is(err, ErrWebhooksDisabled) {
 		t.Fatalf("ListAttempts: %v", err)
 	}
 }
@@ -106,7 +106,7 @@ func TestDefaultURLWhenEmpty(t *testing.T) {
 
 func TestAuthHeaderAndAppUID(t *testing.T) {
 	s := newStub(t)
-	s.respond["GET /api/v1/app/user:abc"] = func(w http.ResponseWriter, r *http.Request) {
+	s.respond["GET /api/v1/app/user_abc"] = func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]string{"id": "app_1"})
 	}
 	c := clientFor(t, s)
@@ -124,7 +124,7 @@ func TestAuthHeaderAndAppUID(t *testing.T) {
 
 func TestEnsureAppCreatesOn404(t *testing.T) {
 	s := newStub(t)
-	s.respond["GET /api/v1/app/user:new"] = func(w http.ResponseWriter, r *http.Request) {
+	s.respond["GET /api/v1/app/user_new"] = func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"code": "not_found", "detail": "app not found"})
 	}
 	var gotBody map[string]string
@@ -133,25 +133,25 @@ func TestEnsureAppCreatesOn404(t *testing.T) {
 		writeJSON(w, 201, map[string]string{"id": "app_2"})
 	}
 	c := clientFor(t, s)
-	id, err := c.EnsureApp(context.Background(), "user:new", "New Dev")
+	id, err := c.EnsureApp(context.Background(), "user_new", "New Dev")
 	if err != nil {
 		t.Fatalf("EnsureApp: %v", err)
 	}
 	if id != "app_2" {
 		t.Fatalf("id = %q", id)
 	}
-	if gotBody["uid"] != "user:new" || gotBody["name"] != "New Dev" {
+	if gotBody["uid"] != "user_new" || gotBody["name"] != "New Dev" {
 		t.Fatalf("create body = %v", gotBody)
 	}
 }
 
 func TestEnsureAppSurfacesOtherErrors(t *testing.T) {
 	s := newStub(t)
-	s.respond["GET /api/v1/app/user:bad"] = func(w http.ResponseWriter, r *http.Request) {
+	s.respond["GET /api/v1/app/user_bad"] = func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 401, map[string]string{"code": "authentication_failed", "detail": "bad token"})
 	}
 	c := clientFor(t, s)
-	_, err := c.EnsureApp(context.Background(), "user:bad", "x")
+	_, err := c.EnsureApp(context.Background(), "user_bad", "x")
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || !apiErr.Unauthorized() {
 		t.Fatalf("err = %v", err)
@@ -164,12 +164,12 @@ func TestEnsureAppSurfacesOtherErrors(t *testing.T) {
 func TestCreateEndpointShape(t *testing.T) {
 	s := newStub(t)
 	var got EndpointIn
-	s.respond["POST /api/v1/app/user:abc/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
+	s.respond["POST /api/v1/app/user_abc/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&got)
 		writeJSON(w, 201, Endpoint{ID: "ep_1", URL: got.URL, FilterTypes: got.FilterTypes, Secret: "whsec_gen123"})
 	}
 	c := clientFor(t, s)
-	ep, err := c.CreateEndpoint(context.Background(), "user:abc", EndpointIn{
+	ep, err := c.CreateEndpoint(context.Background(), "user_abc", EndpointIn{
 		URL:         "https://dev.example/hook",
 		Description: "orders",
 		FilterTypes: []string{"order.status_changed"},
@@ -188,34 +188,34 @@ func TestCreateEndpointShape(t *testing.T) {
 
 func TestCreateEndpointValidation(t *testing.T) {
 	s := newStub(t)
-	s.respond["POST /api/v1/app/user:abc/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
+	s.respond["POST /api/v1/app/user_abc/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 422, map[string]string{"code": "validation_error", "detail": "bad url"})
 	}
 	c := clientFor(t, s)
-	_, err := c.CreateEndpoint(context.Background(), "user:abc", EndpointIn{URL: "https://x.example"})
+	_, err := c.CreateEndpoint(context.Background(), "user_abc", EndpointIn{URL: "https://x.example"})
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || !apiErr.Validation() {
 		t.Fatalf("err = %v", err)
 	}
-	if _, err := c.CreateEndpoint(context.Background(), "user:abc", EndpointIn{}); err == nil {
+	if _, err := c.CreateEndpoint(context.Background(), "user_abc", EndpointIn{}); err == nil {
 		t.Fatal("expected error for empty URL")
 	}
 }
 
 func TestDeleteEndpointIdempotent(t *testing.T) {
 	s := newStub(t)
-	s.respond["DELETE /api/v1/app/user:abc/endpoint/ep_gone"] = func(w http.ResponseWriter, r *http.Request) {
+	s.respond["DELETE /api/v1/app/user_abc/endpoint/ep_gone"] = func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"code": "not_found"})
 	}
-	s.respond["DELETE /api/v1/app/user:abc/endpoint/ep_1"] = func(w http.ResponseWriter, r *http.Request) {
+	s.respond["DELETE /api/v1/app/user_abc/endpoint/ep_1"] = func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(204)
 	}
 	c := clientFor(t, s)
 	ctx := context.Background()
-	if err := c.DeleteEndpoint(ctx, "user:abc", "ep_gone"); err != nil {
+	if err := c.DeleteEndpoint(ctx, "user_abc", "ep_gone"); err != nil {
 		t.Fatalf("idempotent delete: %v", err)
 	}
-	if err := c.DeleteEndpoint(ctx, "user:abc", "ep_1"); err != nil {
+	if err := c.DeleteEndpoint(ctx, "user_abc", "ep_1"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 }
@@ -223,12 +223,12 @@ func TestDeleteEndpointIdempotent(t *testing.T) {
 func TestPublishSendsEventID(t *testing.T) {
 	s := newStub(t)
 	var got map[string]any
-	s.respond["POST /api/v1/app/user:abc/msg"] = func(w http.ResponseWriter, r *http.Request) {
+	s.respond["POST /api/v1/app/user_abc/msg"] = func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&got)
 		writeJSON(w, 202, map[string]string{"id": "msg_9", "eventType": "order.status_changed"})
 	}
 	c := clientFor(t, s)
-	msg, err := c.Publish(context.Background(), "user:abc", "order.status_changed",
+	msg, err := c.Publish(context.Background(), "user_abc", "order.status_changed",
 		map[string]any{"order_id": "o1"}, "dedupe-key-1")
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -239,24 +239,24 @@ func TestPublishSendsEventID(t *testing.T) {
 	if got["eventType"] != "order.status_changed" || got["eventId"] != "dedupe-key-1" {
 		t.Fatalf("request shape = %v", got)
 	}
-	if _, err := c.Publish(context.Background(), "user:abc", "", map[string]any{}, "k"); err == nil {
+	if _, err := c.Publish(context.Background(), "user_abc", "", map[string]any{}, "k"); err == nil {
 		t.Fatal("expected error for empty eventType")
 	}
-	if _, err := c.Publish(context.Background(), "user:abc", "e", map[string]any{}, ""); err == nil {
+	if _, err := c.Publish(context.Background(), "user_abc", "e", map[string]any{}, ""); err == nil {
 		t.Fatal("expected error for empty eventID")
 	}
 }
 
 func TestListAttemptsMapping(t *testing.T) {
 	s := newStub(t)
-	s.respond["GET /api/v1/app/user:abc/msg/msg_9/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
+	s.respond["GET /api/v1/app/user_abc/msg/msg_9/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"data": []map[string]any{
 			{"id": "atm_1", "status": "success", "responseStatusCode": 200, "timestamp": "2026-01-01T00:00:00Z"},
 			{"id": "atm_2", "status": "fail", "responseStatusCode": 500, "timestamp": "2026-01-01T00:01:00Z"},
 		}})
 	}
 	c := clientFor(t, s)
-	attempts, err := c.ListAttempts(context.Background(), "user:abc", "msg_9")
+	attempts, err := c.ListAttempts(context.Background(), "user_abc", "msg_9")
 	if err != nil {
 		t.Fatalf("ListAttempts: %v", err)
 	}
@@ -267,11 +267,11 @@ func TestListAttemptsMapping(t *testing.T) {
 
 func TestListAttemptsNotFound(t *testing.T) {
 	s := newStub(t)
-	s.respond["GET /api/v1/app/user:abc/msg/nope/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
+	s.respond["GET /api/v1/app/user_abc/msg/nope/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"code": "not_found"})
 	}
 	c := clientFor(t, s)
-	_, err := c.ListAttempts(context.Background(), "user:abc", "nope")
+	_, err := c.ListAttempts(context.Background(), "user_abc", "nope")
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || !apiErr.NotFound() {
 		t.Fatalf("err = %v", err)
@@ -283,7 +283,7 @@ func TestServerDownIsError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	_, err = c.ListEndpoints(context.Background(), "user:abc")
+	_, err = c.ListEndpoints(context.Background(), "user_abc")
 	if err == nil || !strings.Contains(err.Error(), "unreachable") {
 		t.Fatalf("err = %v", err)
 	}

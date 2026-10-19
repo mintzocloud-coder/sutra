@@ -9,7 +9,7 @@
 // scheme), the delivery retry schedule, and the attempt log. The Go
 // API never signs or retries webhook deliveries itself; it maps
 // Sutra users to Svix *applications* (one app per user, uid
-// "user:<user-id>"), registers developer endpoints on them, and
+// "user_<user-id>"), registers developer endpoints on them, and
 // publishes platform events to them. A developer's endpoint secret
 // (returned once, at creation) is the shared key they use to verify
 // signatures; the API never stores it — Svix does.
@@ -93,8 +93,11 @@ func (e *APIError) Validation() bool { return e.Status == http.StatusUnprocessab
 
 // AppUIDForUser maps a Sutra user id to the Svix application uid that
 // owns that user's webhook endpoints. One app per user, stable and
-// URL-safe.
-func AppUIDForUser(userID string) string { return "user:" + userID }
+// URL-safe. The separator is an UNDERSCORE, not a colon: Svix validates
+// UIDs against ^[a-zA-Z0-9\-_.]+$ (server/svix-server/src/core/types),
+// so "user:<uuid>" 422s on the real server (triaged in smoke — the stub
+// servers in the tests never enforced the grammar).
+func AppUIDForUser(userID string) string { return "user_" + userID }
 
 // Endpoint is one developer-registered delivery target on their Svix
 // application.

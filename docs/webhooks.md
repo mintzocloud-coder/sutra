@@ -6,12 +6,14 @@ self-hosted [Svix](https://www.svix.com) server (`svix/svix-server`, MIT,
 pinned in `docker-compose.yml`). Svix owns the hard parts — per-endpoint
 HMAC signatures, the delivery retry schedule, and the attempt log. The
 Sutra API only maps users to Svix *applications* (one app per user,
-`user:<id>`), registers endpoints on them, and publishes events to them.
+`user_<id>` — underscore, because Svix UIDs must match
+`^[a-zA-Z0-9\-_.]+$` and reject colons), registers endpoints on them,
+and publishes events to them.
 
 ## The model
 
 - **One Svix app per Sutra user.** `POST /v1/webhooks/endpoints` and friends
-  always act on the caller's own `user:<id>` app. A developer can never see
+  always act on the caller's own `user_<id>` app. A developer can never see
   or touch another user's endpoints — the app UID is derived from the
   verified OIDC subject, never from request input.
 - **Endpoints are delivery targets** (your HTTPS URL). Register as many as

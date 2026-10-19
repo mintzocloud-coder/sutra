@@ -8,7 +8,7 @@ sidebar_position: 3
 
 Sutra delivers platform events to your own HTTPS endpoints through a
 self-hosted Svix server. The model: **one Svix app per Sutra user**
-(`user:<id>`); you register delivery targets on it; Svix signs every
+(`user_<id>`); you register delivery targets on it; Svix signs every
 delivery and retries failures; a delivery log shows what happened.
 
 The deep contract — event catalog, emission semantics, the full signature

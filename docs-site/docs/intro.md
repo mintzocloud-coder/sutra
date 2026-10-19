@@ -14,7 +14,7 @@ just **with** it:
   [`docs/openapi.yaml`][spec] is the single source of truth: CI fails
   the build if code and spec drift (`docs/dev-platform.md`).
 - **Webhooks** — your own HTTPS endpoints, registered on a per-user Svix
-  app (`user:<id>`), with HMAC-signed deliveries and a delivery log.
+  app (`user_<id>`), with HMAC-signed deliveries and a delivery log.
   See the [webhooks guide](./webhooks.md).
 - **Mini-apps** — sandboxed HTML/JS apps in the platform frame, with a
   permission-manifest JS bridge and HMAC launch tokens. See the
