@@ -1923,7 +1923,7 @@ orchestration joins chat/presence).
     openapi lint valid; compose/CI YAML parse; bash -n smoke.sh.
     Full stack boot is CI-gated (no docker/PG on this VM).
     **G2 COMPLETE — Phase G: G3 (mini-app runtime) next.**
-- [ ] G3: Mini-app runtime — mini-app registry (migration + CRUD), sandboxed
+- [x] G3: Mini-app runtime — mini-app registry (migration + CRUD), sandboxed
   runtime contract (Telegram model: iframe/WebView bridge, permission
   manifest, JS API surface), directory listing + install flow, Go service,
   docs/mini-apps.md, OpenAPI + tests + smoke.
@@ -1952,8 +1952,39 @@ orchestration joins chat/presence).
     non-owner 403s, draft/suspended not installable, install
     idempotency, shelf with entry_url+manifest, suspend/resume,
     archive-terminal; directory: 3 published newest-first across 2
-    pages + draft leak check). Next: G3 part 2 (runtime contract +
-    docs/mini-apps.md + OpenAPI + smoke round-trip).
+    pages + draft leak check).
+  - [x] G3 part 2 DONE 2026-10-19 ~08:55 IST: runtime contract. New
+    `internal/miniapp/bridge.go`: closed JS bridge API surface
+    (`BridgeMethods` — 14 dotted methods mapped to manifest
+    permissions, `init.getData` permission-free; unknown method names
+    are loud errors, not silent denies), `MethodAllowed` manifest
+    gating, HMAC-SHA256 launch token (`v1.<b64>.<b64>`, 5-min TTL,
+    `MintLaunchToken`/`VerifyLaunchToken`), `Service.Launch` gate
+    (owner launches any status as draft preview; others need install
+    edge, draft never launchable by non-owners; archived→404;
+    empty secret fails closed). HTTP: `POST /v1/mini-apps/{id}/launch`
+    → 200 `{app, launch_token, expires_at}`; 403 `launch_not_allowed`,
+    503 `launch_unavailable` (empty `MINIAPP_LAUNCH_SECRET` → loud
+    boot WARN). New `config.MiniappLaunchSecret` from env.
+    `docs/mini-apps.md`: trust model (registry row + launch token are
+    the only trusted inputs), launch flow, init-data shape, full JS
+    API table, non-negotiable security rules, developer checklist.
+    OpenAPI: `mini-apps` tag + 7 paths + 7 schemas (MiniApp,
+    MiniAppManifest, MiniAppRegister, MiniAppUpdate,
+    MiniAppDirectoryPage, MiniAppInstalled, MiniAppLaunch).
+    smoke.sh: G3 part-2 round-trip — register 201 → slug race 409 →
+    bad permission 400 → owner draft launch (token HMAC verified
+    offline in python) → non-owner draft 403 → publish → uninstalled
+    403 → install 201/200 → launch 200 → directory + shelf asserts →
+    suspend → new install 422, installed launch 200 → archive 204 →
+    GET 404 → secretless api launch 503 fail-closed. VERIFIED:
+    gofmt clean, go build+vet green, `go test ./internal/miniapp/`
+    green (bridge allowlist matrix, unknown-method-is-error,
+    allowlist-covers-permissions, token round-trip/tamper/expiry/
+    malformed/needs-secret; integration launch-gate suite runs on
+    CI's PG) ; redocly lint valid; bash -n smoke.sh; SPDX check green.
+    Full stack boot is CI-gated (no docker/PG on this VM).
+    **G3 COMPLETE — Phase G: G4 (dev platform) next.**
 - [ ] G4: Dev platform — OpenAPI promoted to single source of truth
   (SDK stub generation check in CI), Docusaurus docs site skeleton (MIT),
   developer onboarding guide (app keys, webhooks, mini-app submission),
@@ -2290,3 +2321,5 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-19 ~06:35 IST: G1 part 2 done (see G1 task note) — webhook ingress + crash-host sweeper; new internal/live/{webhook,reconcile}.go, config + main.go wiring, docs/live.md + production.md + compose env, smoke.sh webhook round-trip. Verified: gofmt/build/vet clean, full go test green (3 new webhook tests), bash -n on smoke.sh, compose YAML parse below. CI-gated for the live run. **G1 COMPLETE; Phase G continues with G2 (Svix webhooks).**
 
 - 2026-10-19 ~08:40 IST: G3 part 1 done (see G3 task note) — mini-app registry: migration 0015, internal/miniapp (service + handlers + cursor), main.go route wiring. Verified: go build+vet clean, full go test ./... green incl. 2 integration suites on real PG16 (lifecycle + directory pagination). Part 2 (sandboxed runtime contract, docs/mini-apps.md, OpenAPI, smoke round-trip) next run. Pushed.
+
+- 2026-10-19 ~09:00 IST: G3 part 2 done (see G3 task note) — sandboxed runtime contract: internal/miniapp/bridge.go (closed JS bridge API surface, MethodAllowed gating, HMAC-SHA256 5-min launch token, Service.Launch gate), POST /v1/mini-apps/{id}/launch (403 launch_not_allowed, 503 launch_unavailable fail-closed; MINIAPP_LAUNCH_SECRET env + loud boot WARN), docs/mini-apps.md (trust model, launch flow, init data, JS API table, security rules, dev checklist), OpenAPI mini-apps tag + 7 paths + 7 schemas (redocly valid), smoke.sh G3 part-2 round-trip incl. offline HMAC verification + fail-closed 503 proof. Verified: gofmt/build/vet green, miniapp tests green (bridge matrix, token tamper/expiry/malformed, launch-gate integration), bash -n smoke.sh, SPDX headers green. CI gates the live stack run. **G3 COMPLETE; Phase G continues with G4 (dev platform).**

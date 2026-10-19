@@ -87,6 +87,16 @@
 #     unset); the shipment:update event round-trips through
 #     POST /internal/events: valid envelope → 202, missing order_id → 422,
 #     string or negative cod_expected_paise → 422.
+#   - The G3 part-2 mini-app round-trip: the api is recreated with
+#     MINIAPP_LAUNCH_SECRET; register draft (201) -> slug race 409 ->
+#     bad permission 400 invalid_manifest -> owner launches the draft
+#     (preview) and the signed v1 token's HMAC is verified offline ->
+#     publish -> second user's uninstalled launch 403s (launch_not_allowed)
+#     -> install (201 then idempotent 200) -> launch 200 -> the directory
+#     lists the app -> the shelf shows entry_url+manifest -> uninstall ->
+#     suspend -> new install 422s (install_not_allowed) -> archive -> GET
+#     404s -> the api is restored secretless and launch answers 503
+#     launch_unavailable (fail-closed).
 # The chat release fails closed at boot without a real SECRET_KEY_BASE, so
 # this script generates an ephemeral one (kept in the environment only,
 # never written to disk or committed).
@@ -1910,6 +1920,223 @@ grep -qi '^Retry-After: [1-9]' "$s503_hdr" \
 [ "$(python3 -c 'import json; print(json.load(open("'"$s_body"'"))["error"]["code"])')" = "search_unavailable" ] \
   || fail "search: 503 envelope code is not search_unavailable"
 pass "search: unconfigured → 503 search_unavailable + Retry-After"
+
+# --- Mini-app runtime round-trip (G3 part 2) -----------------------------------
+# Registry + sandboxed-runtime contract through the production auth path
+# (bypass off): register -> slug race -> bad manifest -> owner launches
+# draft (preview, signed v1 token, HMAC verified offline) -> publish ->
+# second user blocked until install -> install 201/200 -> launch 200 ->
+# directory + shelf -> suspend blocks new installs -> archive -> 404 ->
+# secretless api -> launch 503 fail-closed.
+echo "smoke: mini-app runtime round-trip (G3 part 2)"
+
+SMOKE_MINIAPP_SECRET="$(openssl rand -hex 32)"
+echo "smoke: recreating api with MINIAPP_LAUNCH_SECRET"
+MINIAPP_LAUNCH_SECRET="$SMOKE_MINIAPP_SECRET" docker compose up -d --no-deps api
+wait_for 90 "api /healthz (miniapp launch secret)" curl -sf "$API_URL/healthz"
+
+# Two fresh identities: the app developer (owner) and a second user.
+mdev_client="sutra-smoke-md-$(date +%s)"
+muser_client="sutra-smoke-mu-$(date +%s)"
+mdev_secret="$(openssl rand -hex 24)"
+muser_secret="$(openssl rand -hex 24)"
+for pair in "$mdev_client $mdev_secret" "$muser_client $muser_secret"; do
+  set -- $pair
+  if ! docker compose run --rm hydra hydra create client \
+      --endpoint http://hydra:4445 \
+      --id "$1" \
+      --secret "$2" \
+      --grant-type client_credentials \
+      --grant-type urn:ietf:params:oauth:grant-type:jwt-bearer \
+      --response-type token \
+      --scope openid \
+      --audience sutra-api \
+      --token-endpoint-auth-method client_secret_basic \
+      >/tmp/sutra-hydra-client-m.out 2>&1; then
+    cat /tmp/sutra-hydra-client-m.out >&2
+    fail "hydra oauth2 client '$1' creation failed"
+  fi
+done
+pass "hydra oauth2 clients for mini-app smoke created"
+hydra_token() { # hydra_token <client> <secret> — client_credentials token
+  curl -sf -u "$1:$2" \
+    --data-urlencode 'grant_type=client_credentials' \
+    --data-urlencode 'audience=sutra-api' \
+    --data-urlencode 'scope=openid' \
+    http://localhost:4444/oauth2/token \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])'
+}
+mdev_token="$(hydra_token "$mdev_client" "$mdev_secret")" || fail "hydra token for dev client failed"
+muser_token="$(hydra_token "$muser_client" "$muser_secret")" || fail "hydra token for user client failed"
+
+mapp_slug="smoke-app-$(date +%s)"
+mapp="$(curl -sf -X POST \
+  -H "Authorization: Bearer $mdev_token" -H 'Content-Type: application/json' \
+  -d "{\"name\":\"Smoke App\",\"slug\":\"$mapp_slug\",\"entry_url\":\"https://smoke.example/app\",\"manifest\":{\"permissions\":[\"storage\",\"share\"]}}" \
+  "$API_URL/v1/mini-apps")" || fail "miniapp: register draft failed"
+[ "$(printf '%s' "$mapp" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')" = "draft" ] \
+  || fail "miniapp: new app is not draft"
+mapp_id="$(jget "$mapp" id)"
+pass "miniapp: registered draft '$mapp_slug' ($mapp_id)"
+
+# Slug race: second registration with the same slug loses.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $mdev_token" -H 'Content-Type: application/json' \
+  -d "{\"name\":\"Copy\",\"slug\":\"$mapp_slug\",\"entry_url\":\"https://smoke.example/x\"}" \
+  "$API_URL/v1/mini-apps")" = "409" ] \
+  || fail "miniapp: duplicate slug did not return 409"
+pass "miniapp: slug race -> 409 slug_taken"
+
+# Unknown permission is rejected at write time.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $mdev_token" -H 'Content-Type: application/json' \
+  -d "{\"name\":\"Bad\",\"slug\":\"smoke-bad-$(date +%s)\",\"entry_url\":\"https://smoke.example/x\",\"manifest\":{\"permissions\":[\"telepathy\"]}}" \
+  "$API_URL/v1/mini-apps")" = "400" ] \
+  || fail "miniapp: unknown permission did not return 400"
+pass "miniapp: unknown permission -> 400 invalid_manifest"
+
+# Owner launches the draft (preview): 200 + signed v1 launch token.
+mlaunch="$(curl -sf -X POST \
+  -H "Authorization: Bearer $mdev_token" \
+  "$API_URL/v1/mini-apps/$mapp_id/launch")" || fail "miniapp: owner draft launch failed"
+mtoken="$(jget "$mlaunch" launch_token)"
+[ "${mtoken#v1.}" != "$mtoken" ] || fail "miniapp: launch token is not versioned v1"
+python3 - "$SMOKE_MINIAPP_SECRET" "$mtoken" <<PYEOF \
+  || fail "miniapp: launch token signature invalid"
+import sys, hmac, hashlib, base64, json
+secret = sys.argv[1].encode()
+token = sys.argv[2]
+ver, body, sig = token.split('.')
+assert ver == 'v1', 'version tag'
+want = base64.urlsafe_b64encode(
+    hmac.new(secret, f'{ver}.{body}'.encode(), hashlib.sha256).digest()
+).rstrip(b'=').decode()
+assert hmac.compare_digest(want, sig), 'signature mismatch'
+payload = json.loads(base64.urlsafe_b64decode(body + '=='))
+assert payload['v'] == 1 and payload['uid'] and payload['aid'], 'payload shape'
+PYEOF
+pass "miniapp: owner draft launch -> signed v1 token (HMAC verified offline)"
+
+# Non-owner cannot launch a draft: 403 launch_not_allowed.
+ml_body="$(mktemp)"
+ml_code="$(curl -s -o "$ml_body" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $muser_token" \
+  "$API_URL/v1/mini-apps/$mapp_id/launch")"
+[ "$ml_code" = "403" ] || { rm -f "$ml_body"; fail "miniapp: non-owner draft launch did not 403 (got $ml_code)"; }
+[ "$(python3 -c 'import json; print(json.load(open("'"$ml_body"'"))["error"]["code"])')" = "launch_not_allowed" ] \
+  || { rm -f "$ml_body"; fail "miniapp: 403 envelope code is not launch_not_allowed"; }
+rm -f "$ml_body"
+pass "miniapp: non-owner draft launch -> 403 launch_not_allowed"
+
+# Publish; the second user still cannot launch (no install edge) -> 403.
+mpub="$(curl -sf -X POST \
+  -H "Authorization: Bearer $mdev_token" \
+  "$API_URL/v1/mini-apps/$mapp_id/publish")" || fail "miniapp: publish failed"
+[ "$(jget "$mpub" status)" = "published" ] || fail "miniapp: app not published"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $muser_token" \
+  "$API_URL/v1/mini-apps/$mapp_id/launch")" = "403" ] \
+  || fail "miniapp: uninstalled user launch did not 403"
+pass "miniapp: published; uninstalled user launch -> 403"
+
+# Install: 201 first, 200 on idempotent retry.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $muser_token" \
+  "$API_URL/v1/mini-apps/$mapp_id/install")" = "201" ] \
+  || fail "miniapp: install did not return 201"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $muser_token" \
+  "$API_URL/v1/mini-apps/$mapp_id/install")" = "200" ] \
+  || fail "miniapp: install retry did not return 200"
+pass "miniapp: install -> 201 then idempotent 200"
+
+# Installed user launches: 200, token signature still verifies.
+mlaunch2="$(curl -sf -X POST \
+  -H "Authorization: Bearer $muser_token" \
+  "$API_URL/v1/mini-apps/$mapp_id/launch")" || fail "miniapp: installed launch failed"
+mtoken2="$(jget "$mlaunch2" launch_token)"
+python3 - "$SMOKE_MINIAPP_SECRET" "$mtoken2" <<PYEOF \
+  || fail "miniapp: installed launch token invalid"
+import sys, hmac, hashlib, base64
+secret = sys.argv[1].encode()
+token = sys.argv[2]
+ver, body, sig = token.split('.')
+want = base64.urlsafe_b64encode(
+    hmac.new(secret, f'{ver}.{body}'.encode(), hashlib.sha256).digest()
+).rstrip(b'=').decode()
+assert hmac.compare_digest(want, sig), 'signature mismatch'
+PYEOF
+pass "miniapp: installed user launch -> 200 signed token"
+
+# Directory lists the published app; the shelf shows entry_url+manifest.
+mdir="$(curl -sf -H "Authorization: Bearer $muser_token" "$API_URL/v1/mini-apps?limit=100")" \
+  || fail "miniapp: directory failed"
+python3 - "$mdir" "$mapp_slug" <<PYEOF || fail "miniapp: app missing from directory"
+import json, sys
+page = json.loads(sys.argv[1])
+slugs = [a['slug'] for a in page['apps']]
+assert sys.argv[2] in slugs, f'slug not in directory: {slugs}'
+PYEOF
+mshelf="$(curl -sf -H "Authorization: Bearer $muser_token" "$API_URL/v1/me/mini-apps")" \
+  || fail "miniapp: shelf failed"
+python3 - "$mshelf" "$mapp_id" <<PYEOF || fail "miniapp: shelf missing entry_url/manifest"
+import json, sys
+shelf = json.loads(sys.argv[1])
+apps = [a for a in shelf['apps'] if a['app']['id'] == sys.argv[2]]
+assert len(apps) == 1, 'app not on shelf'
+assert apps[0]['app']['entry_url'].startswith('https://'), 'entry_url missing'
+assert set(apps[0]['app']['manifest']['permissions']) == {'storage', 'share'}, 'manifest mismatch'
+PYEOF
+pass "miniapp: directory lists app; shelf carries entry_url + manifest"
+
+# Suspend: new installs 422, but the installed user still launches.
+msus="$(curl -sf -X POST \
+  -H "Authorization: Bearer $mdev_token" \
+  "$API_URL/v1/mini-apps/$mapp_id/suspend")" || fail "miniapp: suspend failed"
+[ "$(jget "$msus" status)" = "suspended" ] || fail "miniapp: app not suspended"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $mdev_token" \
+  "$API_URL/v1/mini-apps/$mapp_id/install")" = "422" ] \
+  || fail "miniapp: install on suspended app did not 422"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $muser_token" \
+  "$API_URL/v1/mini-apps/$mapp_id/launch")" = "200" ] \
+  || fail "miniapp: installed user launch on suspended app failed"
+pass "miniapp: suspended -> new installs 422, installed launches keep working"
+
+# Archive (owner) -> 204; GET 404s.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+  -H "Authorization: Bearer $mdev_token" \
+  "$API_URL/v1/mini-apps/$mapp_id")" = "204" ] \
+  || fail "miniapp: archive did not return 204"
+[ "$(curl -s -o /dev/null -w '%{http_code}' \
+  -H "Authorization: Bearer $mdev_token" \
+  "$API_URL/v1/mini-apps/$mapp_id")" = "404" ] \
+  || fail "miniapp: archived app did not 404"
+pass "miniapp: archived -> 404 everywhere"
+
+# Fail-closed: secretless api answers 503 launch_unavailable.
+echo "smoke: restoring api without MINIAPP_LAUNCH_SECRET"
+docker compose up -d --no-deps api
+wait_for 90 "api /healthz (launchless)" curl -sf "$API_URL/healthz"
+mapp2="$(curl -sf -X POST \
+  -H "Authorization: Bearer $mdev_token" -H 'Content-Type: application/json' \
+  -d "{\"name\":\"Smoke App 2\",\"slug\":\"smoke-app2-$(date +%s)\",\"entry_url\":\"https://smoke.example/b\"}" \
+  "$API_URL/v1/mini-apps")" || fail "miniapp: register app 2 failed"
+mapp2_id="$(jget "$mapp2" id)"
+m503_body="$(mktemp)"
+m503_code="$(curl -s -o "$m503_body" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $mdev_token" \
+  "$API_URL/v1/mini-apps/$mapp2_id/launch")"
+[ "$m503_code" = "503" ] || { rm -f "$m503_body"; fail "miniapp: secretless launch did not 503 (got $m503_code)"; }
+[ "$(python3 -c 'import json; print(json.load(open("'"$m503_body"'"))["error"]["code"])')" = "launch_unavailable" ] \
+  || { rm -f "$m503_body"; fail "miniapp: 503 envelope code is not launch_unavailable"; }
+rm -f "$m503_body"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+  -H "Authorization: Bearer $mdev_token" \
+  "$API_URL/v1/mini-apps/$mapp2_id")" = "204" ] \
+  || fail "miniapp: cleanup archive of app 2 failed"
+pass "miniapp: secretless launch -> 503 launch_unavailable (fail-closed)"
 
 # --- Chat websocket round-trip --------------------------------------------
 wait_for 90 "chat websocket listener" \

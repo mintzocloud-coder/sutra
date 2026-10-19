@@ -68,6 +68,11 @@ type Config struct {
 	// LiveKitReconcileGraceHours is how old a "live" registry row must
 	// be before the sweep checks it against the SFU; <=0 = 6.
 	LiveKitReconcileGraceHours int
+	// Mini-app runtime (G3 part 2): HMAC key for the signed launch
+	// token minted at POST /v1/mini-apps/{id}/launch. Empty disables
+	// the launch endpoint fail-closed (dev default); production must
+	// set MINIAPP_LAUNCH_SECRET. Never commit a value.
+	MiniappLaunchSecret string
 	// Transcode worker (D4b): background HLS pipeline draining
 	// media:transcode.
 	TranscodeGroup         string
@@ -230,6 +235,9 @@ func Load() Config {
 			n, _ := strconv.Atoi(getEnv("LIVEKIT_RECONCILE_GRACE_HOURS", "6"))
 			return n
 		}(),
+		// Mini-app runtime (G3 part 2): empty = launch endpoint
+		// disabled fail-closed (503 launch_unavailable).
+		MiniappLaunchSecret: getEnv("MINIAPP_LAUNCH_SECRET", ""),
 		// Transcode worker (D4b): background video pipeline.
 		TranscodeGroup: func() string { return getEnv("TRANSCODE_GROUP", "transcode-workers") }(),
 		TranscodeConsumer: func() string {

@@ -47,6 +47,12 @@ tags:
       resource; reads are public storefront reads. Money is always integer
       paise (`price_paise`, `mrp_paise`); the platform commission is 0%
       (`commission_rate_bps` default 0).
+  - name: mini-apps
+    description: |
+      Wave-4 mini-app runtime: developer registry, published-only
+      directory, status transitions, per-user installs, and the launch
+      gate that mints the short-lived HMAC token for the sandboxed
+      frame (docs/mini-apps.md).
 paths:
   /healthz:
     get:
@@ -3424,6 +3430,519 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
 
+  /v1/mini-apps:
+    post:
+      tags: [mini-apps]
+      summary: Register a mini-app
+      description: |
+        Registers a new mini-app as a **draft** owned by the caller.
+        The slug is first-come, first-served and immutable. The
+        permission manifest must be a subset of the bridge allowlist
+        (docs/mini-apps.md); anything else is rejected with
+        `invalid_manifest`.
+      operationId: registerMiniApp
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MiniAppRegister'
+      responses:
+        '201':
+          description: Draft app registered.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MiniApp'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Invalid fields (`invalid_field`, `invalid_slug`, `invalid_manifest`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Slug already taken (`slug_taken`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    get:
+      tags: [mini-apps]
+      summary: Public mini-app directory
+      description: |
+        Lists **published** apps only, newest first, keyset-paginated
+        (`limit` ≤ 100, opaque `cursor`). Draft, suspended and archived
+        apps never appear here.
+      operationId: listMiniApps
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          description: Page size (default 20, max 100).
+          schema:
+            type: integer
+            minimum: 1
+            default: 20
+        - name: cursor
+          in: query
+          description: Opaque cursor from the previous page's `next_cursor`.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Directory page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MiniAppDirectoryPage'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Bad pagination (`invalid_pagination`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/mini-apps/{id}:
+    get:
+      tags: [mini-apps]
+      summary: Read a mini-app
+      description: |
+        Reads one registry row. Archived apps behave as not-found
+        everywhere (`mini_app_not_found`).
+      operationId: getMiniApp
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Mini-app UUID.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The mini-app row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MiniApp'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No such (or archived) app (`mini_app_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags: [mini-apps]
+      summary: Update a mini-app
+      description: |
+        Owner-only partial update. Every field is optional; explicit
+        `null` clears description/icon. Slug and status are not updatable
+        here — status moves via publish/suspend/archive.
+      operationId: updateMiniApp
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Mini-app UUID.
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MiniAppUpdate'
+      responses:
+        '200':
+          description: Updated row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MiniApp'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Invalid fields or manifest (`invalid_field`, `invalid_manifest`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not the developer (`not_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: No such app (`mini_app_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [mini-apps]
+      summary: Archive a mini-app
+      description: |
+        Owner-only. Archive is terminal: the row disappears everywhere,
+        installs are deleted by the database cascade, and the slug stays
+        tombstoned (never recycled).
+      operationId: archiveMiniApp
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Mini-app UUID.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Archived.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not the developer (`not_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: No such app (`mini_app_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/mini-apps/{id}/publish:
+    post:
+      tags: [mini-apps]
+      summary: Publish a mini-app
+      description: |
+        Owner-only. Moves draft → published (or suspended → published).
+        Published apps become installable and appear in the directory.
+      operationId: publishMiniApp
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Mini-app UUID.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Published row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MiniApp'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Illegal transition (`invalid_status_transition`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not the developer (`not_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: No such app (`mini_app_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/mini-apps/{id}/suspend:
+    post:
+      tags: [mini-apps]
+      summary: Suspend a mini-app
+      description: |
+        Owner-only. Moves published → suspended: the app leaves the
+        directory and stops accepting new installs; already-installed
+        users keep launching it.
+      operationId: suspendMiniApp
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Mini-app UUID.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Suspended row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MiniApp'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Illegal transition (`invalid_status_transition`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not the developer (`not_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: No such app (`mini_app_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/mini-apps/{id}/install:
+    post:
+      tags: [mini-apps]
+      summary: Install a mini-app
+      description: |
+        Installs the app on the caller's shelf. Only **published** apps
+        are installable. Idempotent: first install → 201, repeat → 200.
+      operationId: installMiniApp
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Mini-app UUID.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '201':
+          description: Installed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [installed, app_id]
+                properties:
+                  installed:
+                    type: boolean
+                    example: true
+                  app_id:
+                    type: string
+                    format: uuid
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '200':
+          description: Already installed (idempotent).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [installed, app_id]
+                properties:
+                  installed:
+                    type: boolean
+                    example: true
+                  app_id:
+                    type: string
+                    format: uuid
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No such app (`mini_app_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Not installable (draft/suspended, `install_not_allowed`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [mini-apps]
+      summary: Uninstall a mini-app
+      description: |
+        Removes the app from the caller's shelf. Idempotent — 204
+        whether or not the install existed.
+      operationId: uninstallMiniApp
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Mini-app UUID.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Uninstalled.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/mini-apps/{id}/launch:
+    post:
+      tags: [mini-apps]
+      summary: Launch a mini-app
+      description: |
+        The sandboxed frame's entry gate (empty body). Returns the
+        registry row plus a short-lived (5-minute) HMAC launch token
+        the client injects into the frame for attribution
+        (docs/mini-apps.md). The owner may launch in any status
+        (draft preview); other users need the install edge and the app
+        must not be a draft. Fails closed with 503 `launch_unavailable`
+        when MINIAPP_LAUNCH_SECRET is unset.
+      operationId: launchMiniApp
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Mini-app UUID.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Launch payload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MiniAppLaunch'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Cannot launch (`launch_not_allowed`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: No such app (`mini_app_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: Launch secret not configured (`launch_unavailable`, + `Retry-After`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /v1/me/mini-apps:
+    get:
+      tags: [mini-apps]
+      summary: My installed mini-apps
+      description: |
+        The caller's installed shelf, newest install first, with the
+        full rows the client needs to boot each frame (`entry_url` +
+        `manifest`). Suspended apps are included (they keep working);
+        archived apps are excluded.
+      operationId: myMiniApps
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Installed shelf.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [apps]
+                properties:
+                  apps:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MiniAppInstalled'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
 components:
   parameters:
     UserId:
@@ -3652,6 +4171,156 @@ components:
             Per-endpoint HMAC signing secret. Present ONLY in the 201
             create response — never on list, never again.
           example: whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw
+    MiniApp:
+      type: object
+      required: [id, developer_id, name, slug, entry_url, manifest, version, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        developer_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          maxLength: 80
+          example: Groceries
+        slug:
+          type: string
+          pattern: '^[a-z0-9-]{3,40}$'
+          description: Immutable first-come identifier.
+          example: groceries
+        description:
+          type: string
+          maxLength: 500
+        icon_url:
+          type: string
+          format: uri
+        entry_url:
+          type: string
+          format: uri
+          description: Sandboxed frame entry point (http(s) only).
+          example: https://groceries.example/app
+        manifest:
+          $ref: '#/components/schemas/MiniAppManifest'
+        version:
+          type: string
+          example: 1.2.0
+        status:
+          type: string
+          enum: [draft, published, suspended, archived]
+          example: published
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    MiniAppManifest:
+      type: object
+      required: [permissions]
+      properties:
+        permissions:
+          type: array
+          description: Declared subset of the bridge allowlist (docs/mini-apps.md).
+          items:
+            type: string
+            enum: [camera, microphone, geolocation, notifications, payments, storage, share, clipboard, vibration, biometric]
+          example: [storage, payments]
+      description: |
+        Permission manifest. Unknown metadata keys are preserved
+        verbatim but never interpreted by the platform.
+    MiniAppRegister:
+      type: object
+      required: [name, slug, entry_url]
+      properties:
+        name:
+          type: string
+          maxLength: 80
+          example: Groceries
+        slug:
+          type: string
+          pattern: '^[a-z0-9-]{3,40}$'
+          description: First-come, first-served; immutable after registration.
+          example: groceries
+        description:
+          type: string
+          maxLength: 500
+        icon_url:
+          type: string
+          format: uri
+        entry_url:
+          type: string
+          format: uri
+          example: https://groceries.example/app
+        manifest:
+          $ref: '#/components/schemas/MiniAppManifest'
+        version:
+          type: string
+          maxLength: 32
+          example: 1.0.0
+    MiniAppUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 80
+        description:
+          type: string
+          maxLength: 500
+          nullable: true
+          description: Explicit null clears the description.
+        icon_url:
+          type: string
+          format: uri
+          nullable: true
+          description: Explicit null clears the icon.
+        entry_url:
+          type: string
+          format: uri
+        manifest:
+          $ref: '#/components/schemas/MiniAppManifest'
+        version:
+          type: string
+          maxLength: 32
+      description: Partial update; omit a field to leave it untouched.
+    MiniAppDirectoryPage:
+      type: object
+      required: [apps]
+      properties:
+        apps:
+          type: array
+          items:
+            $ref: '#/components/schemas/MiniApp'
+        next_cursor:
+          type: string
+          description: Opaque keyset cursor; absent on the last page.
+    MiniAppInstalled:
+      type: object
+      required: [app, installed_at]
+      properties:
+        app:
+          $ref: '#/components/schemas/MiniApp'
+        installed_at:
+          type: string
+          format: date-time
+    MiniAppLaunch:
+      type: object
+      required: [app, launch_token, expires_at]
+      properties:
+        app:
+          $ref: '#/components/schemas/MiniApp'
+        launch_token:
+          type: string
+          description: |
+            5-minute HMAC-SHA256 token binding (user_id, app_id) —
+            v1.<base64url payload>.<base64url signature>. The client
+            injects it into the frame's init data; the developer backend
+            verifies attribution with the launch secret.
+          example: v1.eyJ2IjoxLCJ1aWQiOiIuLi4iLCJhaWQiOiIuLi4iLCJleHAiOjE3NjA5MjIwMDB9.c2ln
+        expires_at:
+          type: string
+          format: date-time
     WebhookEndpointCreate:
       type: object
       required: [url]

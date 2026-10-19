@@ -16,6 +16,7 @@
 //	DELETE /v1/mini-apps/{id}            archive (owner) → 204
 //	POST   /v1/mini-apps/{id}/install    install (published only) → 201/200
 //	DELETE /v1/mini-apps/{id}/install    uninstall (idempotent) → 204
+//	POST   /v1/mini-apps/{id}/launch     launch gate: app + signed token → 200
 //	GET    /v1/me/mini-apps              my installs → 200
 package miniapp
 
@@ -89,7 +90,8 @@ func clientErr(err error) bool {
 	for _, e := range []error{
 		ErrMiniAppNotFound, ErrSlugTaken, ErrInvalidSlug, ErrInvalidManifest,
 		ErrInvalidField, ErrBadStatusTransition, ErrNotOwner, ErrInstallNotAllowed,
-		ErrInvalidCursor,
+		ErrInvalidCursor, ErrLaunchNotAllowed, ErrLaunchSecretMissing,
+		ErrUnknownBridgeMethod,
 	} {
 		if errors.Is(err, e) {
 			return true
@@ -124,6 +126,10 @@ func miniappError(w http.ResponseWriter, r *http.Request, log *slog.Logger, op s
 			status, code, msg = http.StatusUnprocessableEntity, "install_not_allowed", err.Error()
 		case errors.Is(err, ErrInvalidCursor):
 			code, msg = "invalid_pagination", "limit must be a positive integer and cursor must be valid"
+		case errors.Is(err, ErrLaunchNotAllowed):
+			status, code, msg = http.StatusForbidden, "launch_not_allowed", "this mini app cannot be launched by you"
+		case errors.Is(err, ErrLaunchSecretMissing):
+			status, code, msg = http.StatusServiceUnavailable, "launch_unavailable", "mini-app launches are temporarily unavailable"
 		}
 		middleware.WriteJSONError(w, r, status, code, msg)
 		return
@@ -164,8 +170,12 @@ func AppsMux(pool *db.Pool, svc *Service, log *slog.Logger) http.HandlerFunc {
 
 // AppMux serves the item routes: GET/PATCH/DELETE
 // /v1/mini-apps/{id}, POST /v1/mini-apps/{id}/publish,
-// POST /v1/mini-apps/{id}/suspend, POST/DELETE /v1/mini-apps/{id}/install.
-func AppMux(pool *db.Pool, svc *Service, log *slog.Logger) http.HandlerFunc {
+// POST /v1/mini-apps/{id}/suspend, POST/DELETE /v1/mini-apps/{id}/install,
+// POST /v1/mini-apps/{id}/launch.
+//
+// launchSecret is the HMAC key for the launch token (MINIAPP_LAUNCH_SECRET);
+// empty disables the launch endpoint fail-closed (503).
+func AppMux(pool *db.Pool, svc *Service, log *slog.Logger, launchSecret []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := targetUUID(w, r)
 		if !ok {
@@ -173,6 +183,8 @@ func AppMux(pool *db.Pool, svc *Service, log *slog.Logger) http.HandlerFunc {
 		}
 		action := r.PathValue("action")
 		switch {
+		case action == "launch" && r.Method == http.MethodPost:
+			launchHandler(pool, svc, log, launchSecret).ServeHTTP(w, r)
 		case action == "" && r.Method == http.MethodGet:
 			app, err := svc.Get(r.Context(), id)
 			if err != nil {
@@ -310,6 +322,39 @@ func directoryHandler(svc *Service, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, page)
+	}
+}
+
+// launchHandler serves POST /v1/mini-apps/{id}/launch: the sandboxed
+// frame's entry gate. Returns the registry row (so the client can boot
+// the frame) plus a short-lived signed launch token for attribution.
+// The body is empty; the launch is a pure gate, not a write.
+//
+// Rules: the owner may launch in any status (draft preview for
+// testing); everyone else needs the install edge (draft is never
+// launchable by non-owners). An unset launch secret fails closed with
+// 503 launch_unavailable.
+func launchHandler(pool *db.Pool, svc *Service, log *slog.Logger, launchSecret []byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if len(launchSecret) == 0 {
+			middleware.WriteJSONError(w, r, http.StatusServiceUnavailable,
+				"launch_unavailable", "mini-app launches are temporarily unavailable")
+			return
+		}
+		id, ok := targetUUID(w, r)
+		if !ok {
+			return
+		}
+		caller, ok := callerUUID(w, r, pool, log)
+		if !ok {
+			return
+		}
+		launch, err := svc.Launch(r.Context(), caller, id, launchSecret)
+		if err != nil {
+			miniappError(w, r, log, "launch app", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, launch)
 	}
 }
 

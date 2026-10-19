@@ -222,12 +222,16 @@ func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *
 	// publish/suspend/install actions; AppMux dispatches on the action
 	// path value (empty action = the bare item route).
 	miniappSvc := miniapp.NewService(pool)
+	launchSecret := []byte(cfg.MiniappLaunchSecret)
+	if len(launchSecret) == 0 {
+		log.Warn("MINIAPP_LAUNCH_SECRET is empty — /v1/mini-apps/{id}/launch will answer 503 (fail-closed)")
+	}
 	v1.Handle("/v1/mini-apps", methodGuard([]string{http.MethodPost, http.MethodGet},
 		miniapp.AppsMux(pool, miniappSvc, log)))
 	v1.Handle("/v1/mini-apps/{id}", methodGuard([]string{http.MethodGet, http.MethodPatch, http.MethodDelete},
-		miniapp.AppMux(pool, miniappSvc, log)))
+		miniapp.AppMux(pool, miniappSvc, log, launchSecret)))
 	v1.Handle("/v1/mini-apps/{id}/{action}", methodGuard([]string{http.MethodPost, http.MethodDelete},
-		miniapp.AppMux(pool, miniappSvc, log)))
+		miniapp.AppMux(pool, miniappSvc, log, launchSecret)))
 	v1.Handle("/v1/me/mini-apps", methodGuard([]string{http.MethodGet},
 		miniapp.MyInstallsHandler(pool, miniappSvc, log)))
 
