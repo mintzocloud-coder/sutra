@@ -2445,6 +2445,36 @@ with documented contracts until then.
       DIAG 000 + rc 1; bash -n green. H1 part 2 STAYS OPEN: the next
       CI smoke run will print the REAL error; next run triages #26
       from that evidence. Pushed.
+    - [x] H1 part 2u DONE 2026-10-19 ~23:55 IST: CI-red triage #26
+      (route-lock tests + Allow-header diagnostics; root cause of the
+      405 NOT isolated this run — honest status below).
+      Run 39297253142 (the 2t push) finished 6/7 green; the new 2t
+      diagnostics printed the REAL error for the first time:
+      `PATCH /v1/orders/52fb52ed…/status → confirmed: HTTP 405`
+      `{"code":"method_not_allowed"}` — NOT the 422 the 2s triage had
+      assumed. Exhaustive analysis this run: the route IS registered
+      PATCH-only in main.go (line 428, unchanged since F3 part 2a
+      added it); working tree == CI SHA 27e5541d5f for main.go,
+      orders_handler.go, orders.go (verified via GitHub contents API);
+      a repro through the REAL newHandler + full middleware chain
+      reaches OrderStatusHandler (500 on the nil pool via Recover —
+      i.e. NOT 404/405); no other v1 pattern can match that path;
+      only the Go API emits the method_not_allowed envelope; CI
+      checkout SHA, fresh docker build, and container recreates all
+      check out. The 405 is therefore NOT explainable from the source
+      — the CI-serving binary behaved as if the route rejected PATCH.
+      FIX (this run): (1) new `cmd/api/orders_status_route_test.go`
+      — PATCH reaches the handler (asserts not-404/405) + GET/POST/
+      PUT/DELETE → 405 with `Allow: PATCH`; runs DB-free in CI's
+      go-api job, locking the contract; (2) smoke.sh ord_st now
+      captures response headers (`curl -D`) and the DIAG prints the
+      `Allow:` header — on the next run this identifies EXACTLY which
+      guard emitted the 405 (Allow: PATCH = status route's own guard
+      saw a non-PATCH method; anything else = a shadowing route).
+      VERIFIED: gofmt/go build/go vet clean, new tests green, bash -n
+      green, SPDX checker green. H1 part 2 STAYS OPEN: next run reads
+      the Allow header from the CI smoke log and continues triage
+      from that evidence. Pushed.
 - [ ] H2: Business integrations — WhatsApp Cloud API direct adapter
   (fail-closed stub; no BSP), Tally on-premise bridge design + stub,
   Zoho Books default adapter (fail-closed stub), docs/integrations.md

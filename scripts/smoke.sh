@@ -1814,25 +1814,32 @@ pass "price snapshot immutable after seller reprice to 159900"
 # failing (triage pattern: a blind `curl -sf | json.load` hides the real
 # error — the created→confirmed step must never fail without evidence).
 ord_st() {
-  local oid="$1" to="$2" st_body st_http
+  local oid="$1" to="$2" st_body st_hdrs st_http
   st_body="$(mktemp)"
+  st_hdrs="$(mktemp)"
   # `|| true`: a curl transport failure must reach the diag branch below,
-  # not trip `set -e` inside the function.
-  st_http="$(curl -s -o "$st_body" -w '%{http_code}' -X PATCH \
+  # not trip `set -e` inside the function. -D captures response headers:
+  # on a 405 the Allow header identifies WHICH route guard rejected the
+  # request (triage #26: PATCH /v1/orders/{id}/status 405'd in CI while
+  # the same source routes correctly locally — Allow: PATCH means the
+  # status route's own guard saw a non-PATCH method; anything else means
+  # a different route shadowed it).
+  st_http="$(curl -s -D "$st_hdrs" -o "$st_body" -w '%{http_code}' -X PATCH \
     -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
     -d "{\"status\":\"$to\"}" "$API_URL/v1/orders/$oid")" || true
   if [ "$st_http" != "200" ]; then
     echo "smoke DIAG: PATCH /v1/orders/$oid/status -> $to: HTTP $st_http" >&2
+    grep -i '^allow:' "$st_hdrs" >&2 || echo "smoke DIAG: no Allow header" >&2
     cat "$st_body" >&2
-    rm -f "$st_body"
+    rm -f "$st_body" "$st_hdrs"
     return 1
   fi
   # `if !` keeps `set -e` from aborting the function before cleanup.
   if ! python3 -c 'import json; print(json.load(open("'"$st_body"'"))["status"])'; then
-    rm -f "$st_body"
+    rm -f "$st_body" "$st_hdrs"
     return 1
   fi
-  rm -f "$st_body"
+  rm -f "$st_body" "$st_hdrs"
   return 0
 }
 [ "$(ord_st "$ord_id" confirmed)" = "confirmed" ] || fail "created → confirmed failed"
