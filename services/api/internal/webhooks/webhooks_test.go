@@ -251,7 +251,12 @@ func TestCreateEndpointShape(t *testing.T) {
 	var got EndpointIn
 	s.respond["POST /api/v1/app/user_abc/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&got)
-		writeJSON(w, 201, Endpoint{ID: "ep_1", URL: got.URL, FilterTypes: got.FilterTypes, Secret: "whsec_gen123"})
+		// Real Svix never puts the secret in the create response —
+		// it is only readable through the dedicated secret read.
+		writeJSON(w, 201, Endpoint{ID: "ep_1", URL: got.URL, FilterTypes: got.FilterTypes})
+	}
+	s.respond["GET /api/v1/app/user_abc/endpoint/ep_1/secret"] = func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]string{"key": "whsec_gen123"})
 	}
 	c := clientFor(t, s)
 	ep, err := c.CreateEndpoint(context.Background(), "user_abc", EndpointIn{
@@ -268,6 +273,58 @@ func TestCreateEndpointShape(t *testing.T) {
 	if got.URL != "https://dev.example/hook" || got.Description != "orders" ||
 		len(got.FilterTypes) != 1 || got.FilterTypes[0] != "order.status_changed" {
 		t.Fatalf("request shape = %+v", got)
+	}
+}
+
+func TestCreateEndpointSecretReadFailureSurfaces(t *testing.T) {
+	// Svix created the endpoint but the secret read broke: fail closed —
+	// a 201 without the secret would hand the developer an endpoint
+	// whose signing key they can never see.
+	s := newStub(t)
+	s.respond["POST /api/v1/app/user_abc/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 201, Endpoint{ID: "ep_1", URL: "https://dev.example/hook"})
+	}
+	c := clientFor(t, s)
+	ep, err := c.CreateEndpoint(context.Background(), "user_abc", EndpointIn{URL: "https://dev.example/hook"})
+	if err == nil {
+		t.Fatalf("expected error, got %+v", ep)
+	}
+	if !strings.Contains(err.Error(), "ep_1") {
+		t.Fatalf("error should name the endpoint: %v", err)
+	}
+}
+
+func TestCreateEndpointKeepsSuppliedSecret(t *testing.T) {
+	// The caller brought their own key: Svix never echoes it, so the
+	// client carries it forward from the request — no secret read needed.
+	s := newStub(t)
+	s.respond["POST /api/v1/app/user_abc/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 201, Endpoint{ID: "ep_1", URL: "https://dev.example/hook"})
+	}
+	c := clientFor(t, s)
+	ep, err := c.CreateEndpoint(context.Background(), "user_abc", EndpointIn{
+		URL:    "https://dev.example/hook",
+		Secret: "whsec_mine",
+	})
+	if err != nil {
+		t.Fatalf("CreateEndpoint: %v", err)
+	}
+	if ep.Secret != "whsec_mine" {
+		t.Fatalf("ep.Secret = %q, want whsec_mine", ep.Secret)
+	}
+}
+
+func TestGetEndpointSecretEmptyKey(t *testing.T) {
+	s := newStub(t)
+	s.respond["GET /api/v1/app/user_abc/endpoint/ep_1/secret"] = func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]string{"key": ""})
+	}
+	c := clientFor(t, s)
+	if _, err := c.GetEndpointSecret(context.Background(), "user_abc", "ep_1"); err == nil {
+		t.Fatal("expected error for an empty secret")
+	}
+	if _, err := c.GetEndpointSecret(context.Background(), "", "ep_1"); err == nil {
+		t.Fatal("expected error for an empty app uid")
 	}
 }
 

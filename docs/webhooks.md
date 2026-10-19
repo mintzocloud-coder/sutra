@@ -63,6 +63,9 @@ curl -X POST $API/v1/webhooks/endpoints \
 **The `secret` is shown exactly once** — in this response. Svix never
 returns it again and the Sutra API never stores a copy. Save it now; to
 rotate, delete the endpoint and create a new one.
+(Implementation note: self-hosted Svix never puts the generated secret
+in its own create response — the API fetches it right after create via
+Svix's dedicated secret read, so you still get it exactly once here.)
 
 - `filter_types` is optional; omit it to receive every event type.
   Event types named in `filter_types` are registered just-in-time —

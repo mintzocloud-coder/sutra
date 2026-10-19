@@ -111,10 +111,14 @@ type Endpoint struct {
 	URL         string   `json:"url"`
 	Description string   `json:"description,omitempty"`
 	FilterTypes []string `json:"filterTypes,omitempty"`
-	// Secret is the per-endpoint signing key. Svix returns it on
-	// create (auto-generated when not supplied); it is never
-	// returned again. Hand it to the developer once and let them
-	// store it — the API does not keep a copy.
+	// Secret is the per-endpoint signing key. Svix NEVER includes it in
+	// the create response: self-hosted svix-server (v1.101.0, verified
+	// against its source) stores the key encrypted and exposes it only
+	// through the dedicated secret read — CreateEndpoint performs that
+	// read immediately after create, so the handler can hand the key to
+	// the developer exactly once, in the 201. It is never returned again.
+	// Hand it to the developer once and let them store it — the API
+	// does not keep a copy.
 	Secret string `json:"secret,omitempty"`
 }
 
@@ -126,9 +130,11 @@ type EndpointIn struct {
 	URL         string   `json:"url"`
 	Description string   `json:"description,omitempty"`
 	FilterTypes []string `json:"filterTypes,omitempty"`
-	// Secret, when empty, makes Svix generate a random one and
-	// return it in the response. Supplying one lets developers
-	// bring their own key.
+	// Secret, when empty, makes Svix generate a random one server-side;
+	// when empty, CreateEndpoint reads the generated key back through
+	// the dedicated secret endpoint and returns it (the create response
+	// never carries it — see Endpoint.Secret). Supplying one lets
+	// developers bring their own key.
 	Secret string `json:"secret,omitempty"`
 }
 
@@ -338,6 +344,12 @@ func (c *Client) EnsureEventType(ctx context.Context, name, description string) 
 	return nil
 }
 
+// EndpointSecretOut is the reply to the endpoint secret read:
+// GET /api/v1/app/{app_id}/endpoint/{endpoint_id}/secret.
+type EndpointSecretOut struct {
+	Key string `json:"key"`
+}
+
 // CreateEndpoint registers a delivery target on the user's Svix app.
 // The returned Endpoint carries Secret exactly once — hand it to the
 // developer now, because neither Svix nor this API will show it again.
@@ -349,10 +361,51 @@ func (c *Client) CreateEndpoint(ctx context.Context, appUID string, in EndpointI
 	if in.URL == "" {
 		return ep, errors.New("webhooks: endpoint url required")
 	}
+	supplied := in.Secret
 	if err := c.do(ctx, http.MethodPost, "/api/v1/app/"+url.PathEscape(appUID)+"/endpoint", in, &ep); err != nil {
 		return ep, err
 	}
+	if supplied != "" {
+		// Caller brought their own key; Svix never echoes it back,
+		// so carry it forward from the request.
+		ep.Secret = supplied
+		return ep, nil
+	}
+	// The create response never carries the generated secret (it is
+	// stored encrypted server-side — verified against svix-server
+	// v1.101.0; the "returned once at creation" contract holds only on
+	// Svix's cloud). Read it immediately through the dedicated secret
+	// endpoint so the handler can hand it to the developer exactly once.
+	secret, err := c.GetEndpointSecret(ctx, appUID, ep.ID)
+	if err != nil {
+		// Fail closed: a 201 without the secret would hand the
+		// developer an endpoint whose signing key they can never see.
+		return ep, fmt.Errorf("webhooks: endpoint %s created but secret unreadable: %w", ep.ID, err)
+	}
+	ep.Secret = secret
 	return ep, nil
+}
+
+// GetEndpointSecret returns the endpoint's signing key. The secret is
+// readable any time with the management token (unlike the create
+// response, which never carries it on self-hosted Svix), but this API
+// only surfaces it once — in the endpoint-create 201 — to keep the
+// developer contract "shown exactly once".
+func (c *Client) GetEndpointSecret(ctx context.Context, appUID, endpointID string) (string, error) {
+	if err := c.disabled(); err != nil {
+		return "", err
+	}
+	if appUID == "" || endpointID == "" {
+		return "", errors.New("webhooks: app uid and endpoint id required")
+	}
+	var out EndpointSecretOut
+	if err := c.do(ctx, http.MethodGet, "/api/v1/app/"+url.PathEscape(appUID)+"/endpoint/"+url.PathEscape(endpointID)+"/secret", nil, &out); err != nil {
+		return "", err
+	}
+	if out.Key == "" {
+		return "", errors.New("webhooks: svix returned an empty endpoint secret")
+	}
+	return out.Key, nil
 }
 
 // ListEndpoints returns the developer's registered endpoints on their

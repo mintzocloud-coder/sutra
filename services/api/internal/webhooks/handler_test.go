@@ -137,11 +137,15 @@ func TestCreateEndpoint(t *testing.T) {
 	var gotBody []byte
 	s.respond["POST /api/v1/app/user_test-user-id/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
 		gotBody, _ = io.ReadAll(r.Body)
+		// The create response carries no secret on self-hosted Svix;
+		// the handler reads it back through the dedicated endpoint.
 		writeJSON(w, http.StatusCreated, map[string]any{
 			"id": "ep_1", "url": "https://example.com/wh",
 			"description": "smoke", "filterTypes": []string{"order.created"},
-			"secret": "whsec_only-once",
 		})
+	}
+	s.respond["GET /api/v1/app/user_test-user-id/endpoint/ep_1/secret"] = func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"key": "whsec_only-once"})
 	}
 	h := fullMux(t, handlerFor(t, clientFor(t, s)))
 
@@ -176,8 +180,11 @@ func TestCreateEndpointRegistersMissingEventTypes(t *testing.T) {
 	created := armEventTypes(s, "order.created")
 	s.respond["POST /api/v1/app/user_test-user-id/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusCreated, map[string]any{
-			"id": "ep_2", "url": "https://example.com/wh", "secret": "whsec_x",
+			"id": "ep_2", "url": "https://example.com/wh",
 		})
+	}
+	s.respond["GET /api/v1/app/user_test-user-id/endpoint/ep_2/secret"] = func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"key": "whsec_x"})
 	}
 	h := fullMux(t, handlerFor(t, clientFor(t, s)))
 

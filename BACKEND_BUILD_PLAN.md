@@ -2255,6 +2255,34 @@ Then report to founder: production-ready backend live on main.
 
 ## Log
 
+- 2026-10-19 ~17:05 IST: H1 part 2i done — CI-RED TRIAGE #14. Run
+  39241830005 (the 2h push) finished 6/7 green; smoke RED again at
+  "smoke FAIL: webhooks round-trip" — new symptom this time: the
+  smoke asserted the created endpoint's `secret` starts with
+  `whsec_`, but the real Svix reply carried NO secret at all.
+  ROOT CAUSE (verified against svix-webhooks source, main): the
+  create-endpoint response type `EndpointOut` has NO secret field —
+  `create_endp_from_data` stores the key encrypted and the response
+  never carries it. The secret is only readable via the dedicated
+  `GET /api/v1/app/{app_id}/endpoint/{endpoint_id}/secret` route
+  (v1.endpoint.get-secret → `EndpointSecretOut { key }`). Our
+  "Svix returns the secret once at creation" assumption holds only
+  on Svix's cloud, never on self-hosted svix-server v1.101.0.
+  FIX (Go, internal/webhooks): new `Client.GetEndpointSecret`
+  (GET .../endpoint/{id}/secret, fail-closed on empty key);
+  `CreateEndpoint` now reads the secret immediately after create
+  (caller-supplied secrets are carried forward — Svix never echoes
+  them); fail-closed error if the read fails (a 201 without the
+  secret would orphan an unusable endpoint). Unit/handler stubs
+  re-armed to the real two-call contract; docs/webhooks.md notes
+  the mechanism (developer-facing behavior unchanged: the 201 still
+  shows the secret exactly once); OpenAPI untouched (shape
+  unchanged). VERIFIED: gofmt clean, `go build`+`go vet` clean,
+  full `go test ./...` green (25 packages ok, 3 new tests:
+  secret-read failure surfaces, supplied secret kept, empty-key
+  fail-closed). Smoke CI re-runs on this push — confirm green next
+  run; H1 part 2 STAYS OPEN pending CI-green.
+
 - 2026-10-19 ~16:25 IST: H1 part 2h done — CI-RED TRIAGE ATTEMPT #13.
   Run 39240863067 (the 2g push) finished 6/7 green; smoke RED again
   at "smoke FAIL: webhooks round-trip" — POST /v1/webhooks/endpoints
