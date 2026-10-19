@@ -2249,6 +2249,31 @@ with documented contracts until then.
       green. H1 part 2 STAYS OPEN: CI-green confirmation of the smoke
       job on this push — next run checks the G2 section passes and
       H1 follows. Pushed.
+    - [x] H1 part 2m DONE 2026-10-19 ~18:50 IST: CI-red triage #18.
+      Run 39254529649 (the 2l push) finished 6/7 green; smoke RED at
+      "smoke FAIL: /v1/ai/healthz without token did not 401 — auth
+      bypass leaked?" — in the E1 section, AFTER the webhooks
+      round-trip had PASSED (triage #17's fix held: deliveries 200).
+      ROOT CAUSE (smoke.sh, not Go): the G2 webhooks section recreated
+      the api with `SVIX_API_TOKEN=... docker compose up -d --no-deps
+      api` — which inherited the script's exported AUTH_BYPASS=1 and
+      silently re-enabled the auth bypass. With the bypass on, the
+      no-token /v1/ai/healthz request was stamped dev-user and 200'd
+      through the proxy instead of 401ing. FIX: explicit AUTH_BYPASS=
+      on that recreate (comment rewritten), plus the same one-token
+      prefix on ALL other later `docker compose up -d --no-deps api`
+      recreates (velocity 2x, commerce 2x, searchless, miniapp 2x —
+      they all inherited =1 too, a latent repeat of the same bug), and
+      an INVARIANT note at the "bypass off from here on" comment so
+      future edits don't reintroduce it. The webhooks round-trip uses
+      the hydra JWT ($access_token), so bypass-off exercises the real
+      auth path — strictly stronger than the old "bypass exercises
+      route wiring" reasoning. VERIFIED: bash -n green; no Go/Python/
+      Elixir touched (build/vet/test untouched per convention); the
+      2l CI log proves the D1 recreate's `AUTH_BYPASS=` pattern works
+      ("/v1/me 401 without token (bypass confirmed off)" passed).
+      H1 part 2 STAYS OPEN: CI-green confirmation of the smoke job on
+      this push — next run checks it. Pushed.
 - [ ] H2: Business integrations — WhatsApp Cloud API direct adapter
   (fail-closed stub; no BSP), Tally on-premise bridge design + stub,
   Zoho Books default adapter (fail-closed stub), docs/integrations.md
@@ -2865,3 +2890,15 @@ Then report to founder: production-ready backend live on main.
   OpenAPI, Python AI); Go, Elixir, compose, smoke in progress. No code
   changes; no push (a log-only push would trigger a redundant CI run).
   Next run: confirm the smoke job is green on this push.
+
+- 2026-10-19 ~18:50 IST: H1 part 2m done — CI-RED TRIAGE #18 (smoke.sh
+  bug, Go code untouched). Run 39254529649: 6/7 green, smoke RED at E1
+  "/v1/ai/healthz without token did not 401". Root cause: the G2
+  webhooks recreate (`SVIX_API_TOKEN=... docker compose up -d --no-deps
+  api`) inherited the script's exported AUTH_BYPASS=1, silently
+  re-enabling the bypass — every no-token request then 200'd instead of
+  401ing. Fix: explicit AUTH_BYPASS= on that recreate plus all other
+  later api recreates (8 total), comment rewritten, INVARIANT note added.
+  Webhooks round-trip uses the hydra JWT, so bypass-off is the stronger
+  contract. bash -n green. Next run: confirm smoke job green on this
+  push (H1 section should now be reached and pass).

@@ -562,10 +562,16 @@ wait_for 90 "svix-server management API (localhost:8071)" \
   curl -sf -o /dev/null -H "Authorization: Bearer $SVIX_TOKEN" \
   http://localhost:8071/api/v1/app
 pass "svix-server up (management API answering, 8071)"
-# Recreate the api with the dispatcher enabled. AUTH_BYPASS is still on
-# (dev-user), so the bypass exercises the route wiring; the Svix
-# management-token auth is the real contract under test.
-SVIX_API_TOKEN="$SVIX_TOKEN" docker compose up -d --no-deps api
+# Recreate the api with the dispatcher enabled. Triage #18 (2026-10-19):
+# AUTH_BYPASS MUST stay off here (explicit AUTH_BYPASS= prefix): the
+# exported AUTH_BYPASS=1 is still in the environment, and letting this
+# recreate inherit it silently re-enabled the bypass — which is exactly
+# what made E1's "/v1/ai/healthz without token did not 401" check fail
+# (the bypass stamps dev-user, so every no-token request 200s instead of
+# 401ing). The webhooks round-trip uses the hydra JWT ($access_token),
+# so bypass-off exercises the real auth path — strictly stronger than
+# the bypass for route-wiring purposes.
+AUTH_BYPASS= SVIX_API_TOKEN="$SVIX_TOKEN" docker compose up -d --no-deps api
 wait_for 90 "api /healthz (webhooks enabled)" curl -sf "$API_URL/healthz"
 # Triage #16 (2026-10-19): the 2j run proved the host-side probe is NOT
 # sufficient — it passed, yet the Go api's first Svix call still failed
@@ -749,6 +755,11 @@ wait_for 120 "ai /healthz (defaults restored)" curl -sf http://localhost:8000/he
 # NOTE: the api is intentionally left running WITHOUT the bypass from here
 # on — the more production-faithful state. Nothing later in this script
 # needs the bypass (chat keeps its own for the websocket round-trip).
+# INVARIANT (triage #18, 2026-10-19): every later
+# `docker compose up -d --no-deps api` MUST carry an explicit AUTH_BYPASS=
+# prefix — AUTH_BYPASS=1 is exported at the top of this script, and any
+# recreate that inherits it silently re-enables the bypass, breaking all
+# later no-token 401 checks (E1 proved it).
 
 # --- Business AI copilot round-trip (H1) ---------------------------------------
 # POST /v1/ai/business (proxied to the ai service's /business) answers
@@ -1454,7 +1465,7 @@ pass "internal/events 422: shipment:update negative cod_expected_paise rejected"
 echo "smoke: velocity abuse guards (D6)"
 
 echo "smoke: recreating api with tight velocity caps (1/hour)"
-POST_VELOCITY_PER_HOUR=1 FOLLOW_VELOCITY_PER_HOUR=1 docker compose up -d --no-deps api
+AUTH_BYPASS= POST_VELOCITY_PER_HOUR=1 FOLLOW_VELOCITY_PER_HOUR=1 docker compose up -d --no-deps api
 wait_for 90 "api /healthz (velocity caps on)" curl -sf "$API_URL/healthz"
 
 vel_client="sutra-smoke-v-$(date +%s)"
@@ -1510,7 +1521,7 @@ pass "follow velocity: 201 then 429 follow_velocity_limited + Retry-After; retry
 
 # Restore the default caps so later sections use production values.
 echo "smoke: restoring api to default velocity caps"
-docker compose up -d --no-deps api
+AUTH_BYPASS= docker compose up -d --no-deps api
 wait_for 90 "api /healthz (defaults restored)" curl -sf "$API_URL/healthz"
 
 # --- Commerce catalog round-trip (F1b part 2) --------------------------------
@@ -1856,7 +1867,7 @@ pass "order event bus: $msgs message(s) in the sutra stream (order.created/order
 # same client is unaffected by the exhausted commerce budget.
 echo "smoke: commerce rate budget (F6)"
 echo "smoke: recreating api with tight commerce caps (1 rps / 1 burst)"
-COMMERCE_LIMIT_RPS=1 COMMERCE_LIMIT_BURST=1 docker compose up -d --no-deps api
+AUTH_BYPASS= COMMERCE_LIMIT_RPS=1 COMMERCE_LIMIT_BURST=1 docker compose up -d --no-deps api
 wait_for 90 "api /healthz (commerce caps)" curl -sf "$API_URL/healthz"
 
 curl -sf -H "Authorization: Bearer $token_c" "$API_URL/v1/categories" >/dev/null \
@@ -1875,7 +1886,7 @@ pass "commerce budget: 200 → 429 commerce_rate_limited + Retry-After"
 pass "commerce budget: non-commerce path unaffected"
 
 echo "smoke: restoring api to default commerce caps"
-COMMERCE_LIMIT_RPS= COMMERCE_LIMIT_BURST= docker compose up -d --no-deps api
+AUTH_BYPASS= COMMERCE_LIMIT_RPS= COMMERCE_LIMIT_BURST= docker compose up -d --no-deps api
 wait_for 90 "api /healthz (commerce caps restored)" curl -sf "$API_URL/healthz"
 
 # --- Product search round-trip (F2 part 2b) --------------------------------
@@ -2086,7 +2097,7 @@ pass "search: archive → documents leave the index (cleanup)"
 # with no SEARCH_MASTER_KEY the proxy is disabled → 503 search_unavailable
 # + Retry-After (never a 500 — search is a dependency, not a bug).
 echo "smoke: restoring api to searchless defaults"
-docker compose up -d --no-deps api
+AUTH_BYPASS= docker compose up -d --no-deps api
 wait_for 90 "api /healthz (searchless)" curl -sf "$API_URL/healthz"
 s503_hdr="/tmp/sutra-search-503-hdr.txt"
 s503_code="$(curl -s -o "$s_body" -D "$s503_hdr" -w '%{http_code}' \
@@ -2110,7 +2121,7 @@ echo "smoke: mini-app runtime round-trip (G3 part 2)"
 
 SMOKE_MINIAPP_SECRET="$(openssl rand -hex 32)"
 echo "smoke: recreating api with MINIAPP_LAUNCH_SECRET"
-MINIAPP_LAUNCH_SECRET="$SMOKE_MINIAPP_SECRET" docker compose up -d --no-deps api
+AUTH_BYPASS= MINIAPP_LAUNCH_SECRET="$SMOKE_MINIAPP_SECRET" docker compose up -d --no-deps api
 wait_for 90 "api /healthz (miniapp launch secret)" curl -sf "$API_URL/healthz"
 
 # Two fresh identities: the app developer (owner) and a second user.
@@ -2282,7 +2293,7 @@ pass "miniapp: archived -> 404 everywhere"
 
 # Fail-closed: secretless api answers 503 launch_unavailable.
 echo "smoke: restoring api without MINIAPP_LAUNCH_SECRET"
-docker compose up -d --no-deps api
+AUTH_BYPASS= docker compose up -d --no-deps api
 wait_for 90 "api /healthz (launchless)" curl -sf "$API_URL/healthz"
 mapp2="$(curl -sf -X POST \
   -H "Authorization: Bearer $mdev_token" -H 'Content-Type: application/json' \
