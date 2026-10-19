@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later (comment-only; header checker skips YAML)
+# Golden prompt set v1 for the Sutra business copilot (H1), consumed by
+# run_eval.py. Cases target /v1/ai/business via the `path` field.
+#
+# Stub-backend cases prove the plumbing (auth -> proxy -> graph ->
+# grounding block -> verified SSE): the stub echoes the question, so
+# expect_all asserts on the echoed text and on structural markers.
+# Real-backend cases exercise the "never invent attributes" guardrail
+# against a seeded seller store (see docs/business-ai.md roadmap): the
+# true price must be stated and a fabricated price must be absent.
+# Human-graded quality eval is Wave-2 work.
+#
+# Case fields: name, backends, path, turns, expect_all, expect_absent,
+# send_empty/expect_status (see eval/golden/v1_chat.yaml for the full
+# field list).
+version: v1
+prompt_version: business_v1   # the case set pins the persona version it was written against
+cases:
+  - name: biz_stub_plumbing
+    backends: [stub]
+    path: /v1/ai/business
+    turns:
+      - user: "what is the price of kurta?"
+    # The stub echoes the question; this proves the proxy -> business
+    # graph -> SSE path delivered the input intact on the new endpoint.
+    expect_all: ["what is the price of kurta?"]
+    expect_absent: []
+
+  - name: biz_stub_insights_plumbing
+    backends: [stub]
+    path: /v1/ai/business
+    turns:
+      - user: "how much revenue did I make this month?"
+    # Insights intent on the stub backend: proves intent routing runs
+    # before the (stub) model on the business endpoint.
+    expect_all: ["how much revenue did I make this month?"]
+    expect_absent: []
+
+  - name: biz_real_grounded_price
+    backends: [real]
+    path: /v1/ai/business
+    turns:
+      - user: "what is the price of the Red Cotton Kurta, size M?"
+    # Seeded fixture: SKU KURTA-RED-M at ₹1,299. The true price must be
+    # stated; the guardrail must keep the fabricated ₹999 out.
+    expect_all: ["1,299", "KURTA-RED-M"]
+    expect_absent: ["999"]
+
+  - name: biz_real_unknown_attribute
+    backends: [real]
+    path: /v1/ai/business
+    turns:
+      - user: "what is the warranty period of the Red Cotton Kurta?"
+    # Warranty is not a catalog attribute: the copilot must say the
+    # detail is not in the catalog data, never invent one.
+    expect_all: ["not in"]
+    expect_absent: ["year", "month", "lifetime"]

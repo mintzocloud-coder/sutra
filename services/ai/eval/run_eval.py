@@ -60,9 +60,10 @@ def _sse_text_events(body: bytes) -> list[dict]:
     return events
 
 
-def _post_chat(api_base: str, bearer: str, payload: dict) -> tuple[int, bytes, dict]:
+def _post_turn(api_base: str, bearer: str, path: str,
+               payload: dict) -> tuple[int, bytes, dict]:
     req = urllib.request.Request(
-        api_base.rstrip("/") + "/v1/ai/chat",
+        api_base.rstrip("/") + path,
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "Authorization": f"Bearer {bearer}",
@@ -82,9 +83,12 @@ def _run_case(api_base: str, bearer: str, case: dict, thread_id: str | None) -> 
     """Run one golden case; returns a result dict (no exceptions escape)."""
     name = case["name"]
     started = time.monotonic()
+    # Cases may target a different AI endpoint (e.g. the H1 business
+    # copilot at /v1/ai/business); default is the personal-chat endpoint.
+    path = case.get("path", "/v1/ai/chat")
     try:
         if case.get("send_empty"):
-            status, body, _ = _post_chat(api_base, bearer, {"messages": []})
+            status, body, _ = _post_turn(api_base, bearer, path, {"messages": []})
             expected = case.get("expect_status", 422)
             ok = status == expected
             detail = f"status={status} (expected {expected})"
@@ -97,7 +101,7 @@ def _run_case(api_base: str, bearer: str, case: dict, thread_id: str | None) -> 
             }
             if thread_id:
                 payload["thread_id"] = thread_id
-            status, body, _ = _post_chat(api_base, bearer, payload)
+            status, body, _ = _post_turn(api_base, bearer, path, payload)
             if status != 200:
                 return _result(name, False, f"turn failed: HTTP {status}", started, thread_id)
             events = _sse_text_events(body)

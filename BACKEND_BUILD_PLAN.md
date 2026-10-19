@@ -2079,6 +2079,48 @@ with documented contracts until then.
   business copilots (catalog Q&A, order insights), "never invent
   attributes" guardrail in prompts + eval, DPDP consent/purpose-limitation
   notes (duties live May 2027), docs/business-ai.md, tests + smoke.
+  - [x] H1 part 1 DONE 2026-10-19 ~11:15 IST: business copilot core
+    (Python, no Go changes — /v1/ai/* proxies the whole prefix).
+    `POST /business` (Go serves as `/v1/ai/business`): LangGraph
+    `recall → retrieve → generate → persist` on the Wave-2 stack
+    (AG-UI SSE, PG threads/budgets, versioned prompt, Ollama/vLLM/stub
+    model client). New `app/bizdata.py` — read-only commerce access
+    (explicit `BEGIN READ ONLY` per query block; 25006 on any write
+    attempt), seller resolution subject→users→sellers (403
+    `not_a_seller` eager, before guards/graph), catalog keyword search
+    (content-word extraction; empty → recent-actives fallback, never a
+    dump) with variant price/SKU/attributes/available-stock hydration,
+    30d order insights (status counts, delivered revenue, top-5 by
+    units). New `app/business.py` — the "never invent attributes"
+    guardrail in code: pure `GroundingGuard` (price normalized to
+    paise, `SKU <id>` mentions, both required in the injected block;
+    violation → safe fallback, never the wire), pure `classify_intent`
+    + `product_keywords`; generate BUFFERS then verifies (streaming
+    starts only after the reply is verified — time-to-first-token
+    traded for grounding certainty); violations logged with
+    thread+subject. Guards eager: AI_BIZ_RPM (20) + shared daily token
+    budget pool with /chat (one user, one pool) → JSON 429s.
+    `prompts/system/business_v1.yaml` (guardrail + DPDP boundaries in
+    the persona). `docs/business-ai.md` (architecture, 3-layer
+    guardrail, read-only design, DPDP notes — purpose limitation, data
+    minimization, no buyer PII, consent; duties live May 2027). Eval:
+    `eval/golden/v1_business.yaml` (2 stub plumbing + 2 real-model
+    grounded cases) + run_eval.py `path` field. OpenAPI
+    `/v1/ai/business` + BusinessInput (redocly valid; coverage gate
+    51 paths OK). production.md AI_BIZ_* rows + shared-budget note;
+    compose ai env passthroughs. Two REAL bugs fixed pre-push from the
+    new tests: (1) intent "top selling product" missed insights
+    ("selling" not in the insight vocab); (2) SKU regex ate trailing
+    sentence punctuation ("SKU KURTA-RED-M." flagged as invented).
+    VERIFIED: 26/26 new pytest green (intent matrix, keywords, money/
+    SKU extraction, guard matrix incl. ₹1,299==₹1299.00, read-only
+    BEGIN ordering, 403 path, full graph invoke, SSE shape, stub-
+    violation→fallback) + full suite 77 passed/1 skipped (pre-existing
+    skip); py_compile clean; openapi coverage gate + redocly green;
+    SPDX checker green; compose YAML parses. Go build/vet untouched
+    (no Go changes). H1 STAYS OPEN: part 2 = smoke.sh H1 round-trip
+    (stub model: grounded question → true price in SSE; non-seller
+    403; 429 paths) + CI-green confirmation.
 - [ ] H2: Business integrations — WhatsApp Cloud API direct adapter
   (fail-closed stub; no BSP), Tally on-premise bridge design + stub,
   Zoho Books default adapter (fail-closed stub), docs/integrations.md
@@ -2098,6 +2140,16 @@ All boxes ticked, CI green, `scripts/smoke.sh` passes, docs complete.
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-19 ~11:15 IST: H1 part 1 done — business copilot core (Python):
+  POST /business (LangGraph recall→retrieve→generate→persist; read-only
+  BEGIN READ ONLY commerce access; seller-scoped; 403 not_a_seller eager);
+  GroundingGuard (price paise-normalized + SKU mentions verified pre-stream;
+  violation → safe fallback); business_v1.yaml persona; docs/business-ai.md
+  (DPDP notes, duties May 2027); eval golden v1_business.yaml; OpenAPI path;
+  26/26 new tests green, full suite 77 passed. Two real bugs fixed pre-push
+  ("selling" intent vocab; SKU trailing-punctuation). H1 stays open: part 2
+  = smoke.sh H1 round-trip + CI confirmation. **Next: H1 part 2 (smoke).**
 
 - 2026-10-19 ~10:35 IST: G4 part 2b done — Docusaurus docs site skeleton
   (MIT) + developer onboarding guide (`docs-site/`; skeleton MIT /

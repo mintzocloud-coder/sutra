@@ -340,6 +340,81 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/ai/business:
+    post:
+      tags: [ai]
+      summary: Business copilot for sellers (proxied, SSE)
+      description: |
+        Proxied to the Python AI service's /business (the /v1/ai prefix is
+        stripped by the Go proxy). Requires the caller's JWT; the proxy adds
+        the internal service Bearer <redacted> and forwards the verified subject
+        as X-Sutra-Subject. One LangGraph turn (recall -> retrieve ->
+        generate -> persist): retrieve runs read-only (BEGIN READ ONLY)
+        catalog Q&A (the seller's own active products/variants, keyword
+        search) and/or order insights (trailing-30d status counts, delivered
+        revenue, top products) per the turn's intent; generate buffers the
+        model reply and GroundingGuard verifies every stated price
+        (paise-normalized) and SKU against the injected facts BEFORE the
+        first streamed frame — a fabricated attribute becomes the safe
+        fallback, never the wire. Event sequence mirrors /v1/ai/chat
+        (retrieve adds its own STEP pair). Non-sellers get 403
+        not_a_seller eagerly, before any store data is touched. Guards
+        run EAGERLY (JSON, never truncated streams): per-user rate limit
+        (AI_BIZ_RPM, default 20/min) -> `ai_rate_limited`, and the daily
+        token budget (AI_DAILY_TOKEN_BUDGET, SHARED pool with /v1/ai/chat)
+        -> `ai_budget_exhausted`, both with Retry-After.
+        Contract: docs/business-ai.md.
+      operationId: aiBusiness
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BusinessInput'
+      responses:
+        '200':
+          description: SSE stream of AG-UI BaseEvents for the business turn (reply is grounding-verified before streaming)
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/AguiEvent'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Caller has no seller store (not_a_seller)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Invalid input (empty_messages, message_too_long)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Per-user business rate limit (ai_rate_limited) or daily token budget exhausted (ai_budget_exhausted); the Go API per-IP limiter shares this envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            Retry-After:
+              type: integer
+              description: Seconds until the next window / UTC midnight
+        '503':
+          description: AI service not configured or unreachable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /readyz:
     get:
       tags: [system]
@@ -5417,6 +5492,24 @@ components:
           type: string
           example: TEXT_MESSAGE_CONTENT
       additionalProperties: true
+    BusinessInput:
+      type: object
+      description: |
+        H1 business-copilot input (catalog Q&A + order insights for the
+        caller's own seller store). thread_id is the client's conversation
+        key (scoped to the user); omit it to start a new thread. Turns are
+        stamped with the business_v1 prompt version; the served reply is
+        grounding-verified (GroundingGuard) before streaming.
+      properties:
+        thread_id:
+          type: string
+          maxLength: 128
+          example: thread-a1b2c3d4e5f6
+        messages:
+          type: array
+          description: Message history tail for this turn (max 8000 chars per message).
+          items:
+            $ref: '#/components/schemas/AguiMessage'
 
   headers:
     XRequestID:

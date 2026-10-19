@@ -202,6 +202,13 @@ services:
       AI_AGUI_RPM: "${AI_AGUI_RPM:-60}"
       AI_MAX_HISTORY: "${AI_MAX_HISTORY:-30}"
       AI_PROMPT_VERSION: "${AI_PROMPT_VERSION:-v1}"
+      # Business copilot (H1): catalog Q&A + order insights for sellers.
+      # The daily token budget is SHARED with /chat (one user, one pool);
+      # the per-minute rate limit is separate (AI_BIZ_RPM, default 20).
+      AI_BIZ_RPM: "${AI_BIZ_RPM:-20}"
+      AI_BIZ_PROMPT_VERSION: "${AI_BIZ_PROMPT_VERSION:-business_v1}"
+      AI_BIZ_MAX_HISTORY: "${AI_BIZ_MAX_HISTORY:-10}"
+      AI_BIZ_MAX_GROUNDING_CHARS: "${AI_BIZ_MAX_GROUNDING_CHARS:-6000}"
       # Language bridge (E4): Valkey cache + rate limits are REQUIRED —
       # the ai service refuses to boot without VALKEY_ADDR reachable.
       VALKEY_ADDR: "valkey:6379"

@@ -197,9 +197,13 @@ API calls `/translate` directly with the same service credential).
 | `TRANSLATE_CACHE_TTL` | `2592000` (30d) | Valkey cache TTL for `(backend, src, tgt, text)` translations — deterministic, so long TTLs are safe (E4) |
 | `VALKEY_ADDR` | `valkey:6379` | REQUIRED — translation cache + per-user rate limits; the service refuses to boot without it (fail-closed) (E4) |
 | `AI_MODEL_STUB` | *(unset)* | `1` = deterministic stub chat model for smoke/CI instead of sarvam-30B (E2) |
-| `AI_DAILY_TOKEN_BUDGET` | `50000` | Per-user daily token budget; over the cap → 429 `ai_budget_exhausted` (E2) |
+| `AI_DAILY_TOKEN_BUDGET` | `50000` | Per-user daily token budget, SHARED pool across `/v1/ai/chat` and `/v1/ai/business`; over the cap → 429 `ai_budget_exhausted` (E2, H1) |
 | `AI_CHAT_RPM` | `20` | Per-user chat rate limit; over the cap → 429 `ai_rate_limited` (E2) |
 | `AI_AGUI_RPM` | `60` | Per-user rate limit on the AG-UI echo endpoint (`/v1/ai/ag-ui/run`); over the cap → 429 `ai_rate_limited` (E6) |
+| `AI_BIZ_RPM` | `20` | Per-user rate limit on the business copilot (`/v1/ai/business`); over the cap → 429 `ai_rate_limited` (H1) |
+| `AI_BIZ_PROMPT_VERSION` | `business_v1` | Versioned business-copilot persona (`prompts/system/business_v1.yaml`); roll out as new file + flip (H1) |
+| `AI_BIZ_MAX_HISTORY` | `10` | Business-thread history window (shorter than chat; task-oriented) (H1) |
+| `AI_BIZ_MAX_GROUNDING_CHARS` | `6000` | Grounding-block ceiling for retrieved catalog facts (H1) |
 
 ## 4. Build the images
 

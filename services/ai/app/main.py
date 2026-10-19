@@ -17,6 +17,13 @@ Routes:
                      /v1/ai/translate): IndicTrans2 translation between en
                      and Indic languages, Valkey-cached by (hash, target),
                      per-user rate-limited. JSON response (not SSE).
+  POST /business   — H1 business copilot (the Go proxy serves this as
+                     /v1/ai/business): catalog Q&A + order insights for
+                     the caller's own seller store, read-only grounding
+                     (BEGIN READ ONLY) + GroundingGuard price/SKU
+                     verification before the first streamed frame.
+                     Requires the service token AND X-Sutra-Subject;
+                     non-sellers get 403 not_a_seller.
 
 Event model follows the AG-UI 1.0 vocabulary (RUN_STARTED, STEP_STARTED /
 STEP_FINISHED, TEXT_MESSAGE_START / TEXT_MESSAGE_CONTENT /
@@ -37,6 +44,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import budget as budget_mod
+from . import business as business_mod
 from . import chat as chat_mod
 from . import db as db_mod
 from . import graph as agent_graph
@@ -76,10 +84,13 @@ async def lifespan(app: FastAPI):
     pool = await asyncio.to_thread(db_mod.open_pool, settings.database_url)
     app.state.pool = pool
     app.state.chat = await asyncio.to_thread(chat_mod.new_service, pool, settings)
+    app.state.business = await asyncio.to_thread(
+        business_mod.new_service, pool, settings)
     app.state.translate = await asyncio.to_thread(
         translate_mod.new_service, settings)
-    log.info("sutra-ai ready (prompt=%s model=%s stub=%s translate=%s)",
-             settings.prompt_version, settings.model, settings.model_stub,
+    log.info("sutra-ai ready (prompt=%s biz_prompt=%s model=%s stub=%s translate=%s)",
+             settings.prompt_version, settings.biz_prompt_version,
+             settings.model, settings.model_stub,
              settings.translate_backend)
     yield
     pool.close()
@@ -127,6 +138,16 @@ class ChatInput(BaseModel):
     """E2 personal-AI chat input. thread_id is the client's conversation
     key (scoped to the user); omit it to start a new thread — the minted
     id comes back in RUN_STARTED's threadId."""
+
+    thread_id: str | None = Field(default=None, max_length=128)
+    messages: list[Message] = Field(default_factory=list)
+
+
+class BusinessInput(BaseModel):
+    """H1 business-copilot input (the Go proxy serves POST /business as
+    /v1/ai/business): catalog Q&A + order insights for the caller's own
+    seller store. Same thread semantics as ChatInput; turns are stamped
+    with the business_v1 prompt version."""
 
     thread_id: str | None = Field(default=None, max_length=128)
     messages: list[Message] = Field(default_factory=list)
@@ -243,6 +264,43 @@ def chat(
     # Guards already passed (stream_turn raises eagerly on rejection), so
     # anything failing from here on becomes RUN_ERROR inside the SSE,
     # matching /ag-ui/run semantics.
+    return StreamingResponse(frames, media_type="text/event-stream")
+
+
+@app.post("/business")
+def business(
+    body: BusinessInput,
+    request: Request,
+    _: None = Depends(require_service_token),
+) -> StreamingResponse:
+    """H1 business copilot: catalog Q&A + order insights for sellers,
+    streamed as AG-UI SSE.
+
+    The Go proxy authenticates the user (JWT) and forwards the verified
+    subject as X-Sutra-Subject; without it the request is refused. The
+    turn resolves the caller's seller store eagerly (403 not_a_seller
+    for non-sellers — no store's data is ever touched on their behalf),
+    then guards (validation, per-user rate limit AI_BIZ_RPM, daily
+    token budget — shared pool with /chat) run before anything else:
+    rejections are JSON 429s with Retry-After, never truncated streams.
+
+    The reply is grounding-verified BEFORE the first frame: catalog
+    facts are injected read-only (BEGIN READ ONLY) and GroundingGuard
+    requires every stated price/SKU to appear in them. A fabricated
+    attribute becomes the safe fallback, never the wire.
+    """
+    subject = request.headers.get("x-sutra-subject", "").strip()
+    if not subject:
+        return _envelope(401, "unauthorized",
+                         "missing X-Sutra-Subject — call through the Go API proxy")
+    service: business_mod.BusinessService = request.app.state.business
+    try:
+        frames = service.stream_turn(
+            subject, body.thread_id,
+            [{"role": m.role, "content": m.content} for m in body.messages],
+        )
+    except business_mod.biz_mod.BusinessError as err:
+        return _envelope(err.status_code, err.code, err.message, err.retry_after)
     return StreamingResponse(frames, media_type="text/event-stream")
 
 

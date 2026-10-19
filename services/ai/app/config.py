@@ -72,6 +72,21 @@ class Settings:
     # is never hardcoded — a rollout is a new YAML file + this knob.
     prompt_version: str = _get_env("AI_PROMPT_VERSION", "v1")
 
+    # Business copilot (H1): catalog Q&A + order insights for sellers.
+    # Separate per-user rate limit (the business turn runs grounding
+    # queries before the model, so it costs more than a chat turn);
+    # the daily token budget pool is SHARED with /chat — one user, one
+    # pool, so a heavy business session cannot dodge the cap by
+    # switching endpoints. Separate prompt version + shorter history
+    # window (business threads are task-oriented, not conversational).
+    biz_requests_per_minute: int = _get_int("AI_BIZ_RPM", 20)
+    biz_prompt_version: str = _get_env("AI_BIZ_PROMPT_VERSION", "business_v1")
+    biz_max_history: int = _get_int("AI_BIZ_MAX_HISTORY", 10)
+    # Grounding-block ceiling (chars): the retrieved catalog facts are
+    # truncated past this (documented in the reply) so one turn cannot
+    # blow the context window or the budget pre-flight estimate.
+    biz_max_grounding_chars: int = _get_int("AI_BIZ_MAX_GROUNDING_CHARS", 6000)
+
     # Language bridge (E4). TRANSLATE_BACKEND: "indictrans2" (real AI4Bharat
     # checkpoints, MIT) or "stub" (deterministic test double, smoke/CI).
     # The stub is never a silent fallback — an unknown value refuses boot.
