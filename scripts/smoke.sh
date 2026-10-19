@@ -313,6 +313,48 @@ else
   pass "hydra oauth2 client 'sutra-smoke' created"
 fi
 
+# create_jwt_client <client-id> <client-secret> — Hydra OAuth2 client with
+# access_token_strategy=jwt, via the Admin REST API (host-side curl to
+# localhost:4445, the same path the D1 sutra-smoke block above proves).
+# The version-fragile `hydra create client` CLI is NOT used: its strategy
+# flag name changed across Hydra versions, and Hydra v2 mints OPAQUE tokens
+# when no strategy is set — which the Go API's JWKS verifier rejects
+# (triage #8: "hydra returned an opaque token, not a JWT"). On
+# "already exists" (SMOKE_KEEP_UP=1 re-runs) the client is deleted and
+# recreated, so a stale opaque-strategy client can never survive a re-run.
+create_jwt_client() {
+  local cid="$1" csecret="$2" out
+  out="$(mktemp)"
+  local body
+  body=$(cat <<EOF
+{"client_id":"$cid","client_secret":"$csecret",\
+"grant_types":["client_credentials","urn:ietf:params:oauth:grant-type:jwt-bearer"],\
+"response_types":["token"],"scope":"openid","audience":["sutra-api"],\
+"token_endpoint_auth_method":"client_secret_basic","access_token_strategy":"jwt"}
+EOF
+)
+  if curl -sf -X POST http://localhost:4445/clients \
+      -H 'Content-Type: application/json' \
+      -d "$body" >"$out" 2>&1; then
+    rm -f "$out"
+    pass "hydra oauth2 client '$cid' created (jwt strategy)"
+    return 0
+  fi
+  if grep -qiE "already exists|conflict" "$out"; then
+    echo "smoke: hydra client '$cid' already exists — recreating with jwt strategy"
+    if curl -sf -X DELETE "http://localhost:4445/clients/$cid" >/dev/null \
+      && curl -sf -X POST http://localhost:4445/clients \
+          -H 'Content-Type: application/json' \
+          -d "$body" >"$out" 2>&1; then
+      rm -f "$out"
+      pass "hydra oauth2 client '$cid' recreated (jwt strategy)"
+      return 0
+    fi
+  fi
+  cat "$out" >&2; rm -f "$out"
+  fail "hydra oauth2 client '$cid' creation failed"
+}
+
 token_json="$(curl -sf -u "sutra-smoke:$SMOKE_HYDRA_CLIENT_SECRET" \
   --data-urlencode 'grant_type=client_credentials' \
   --data-urlencode 'audience=sutra-api' \
@@ -666,22 +708,7 @@ wait_for 120 "ai /healthz (stub model, H1)" curl -sf http://localhost:8000/healt
 biz_client="sutra-smoke-h-$(date +%s)"
 echo "smoke: creating hydra oauth2 client '$biz_client'"
 SMOKE_HYDRA_CLIENT_H_SECRET="$(openssl rand -hex 32)"
-if ! docker compose run --rm hydra create client \
-    --endpoint http://hydra:4445 \
-    --id "$biz_client" \
-    --secret "$SMOKE_HYDRA_CLIENT_H_SECRET" \
-    --grant-type client_credentials \
-    --grant-type urn:ietf:params:oauth:grant-type:jwt-bearer \
-    --response-type token \
-    --scope openid \
-    --audience sutra-api \
-    --token-endpoint-auth-method client_secret_basic \
-    >/tmp/sutra-hydra-client-h.out 2>&1; then
-  cat /tmp/sutra-hydra-client-h.out >&2
-  fail "hydra oauth2 client '$biz_client' creation failed"
-else
-  pass "hydra oauth2 client '$biz_client' created"
-fi
+create_jwt_client "$biz_client" "$SMOKE_HYDRA_CLIENT_H_SECRET"
 
 token_h_json="$(curl -sf -u "$biz_client:$SMOKE_HYDRA_CLIENT_H_SECRET" \
   --data-urlencode 'grant_type=client_credentials' \
@@ -750,18 +777,7 @@ pass "H1: fabricated price (₹999) blocked — safe fallback streamed, nothing 
 # before any guard, graph, or model call.
 biz2_client="sutra-smoke-h2-$(date +%s)"
 SMOKE_HYDRA_CLIENT_H2_SECRET="$(openssl rand -hex 32)"
-docker compose run --rm hydra create client \
-  --endpoint http://hydra:4445 \
-  --id "$biz2_client" \
-  --secret "$SMOKE_HYDRA_CLIENT_H2_SECRET" \
-  --grant-type client_credentials \
-  --grant-type urn:ietf:params:oauth:grant-type:jwt-bearer \
-  --response-type token \
-  --scope openid \
-  --audience sutra-api \
-  --token-endpoint-auth-method client_secret_basic \
-  >/tmp/sutra-hydra-client-h2.out 2>&1 \
-  || { cat /tmp/sutra-hydra-client-h2.out >&2; fail "hydra oauth2 client '$biz2_client' creation failed"; }
+create_jwt_client "$biz2_client" "$SMOKE_HYDRA_CLIENT_H2_SECRET"
 token_h2="$(curl -sf -u "$biz2_client:$SMOKE_HYDRA_CLIENT_H2_SECRET" \
   --data-urlencode 'grant_type=client_credentials' \
   --data-urlencode 'audience=sutra-api' \
@@ -822,22 +838,7 @@ wait_for 120 "ai /healthz (agui rpm=1)" curl -sf http://localhost:8000/healthz
 agui_client="sutra-smoke-g-$(date +%s)"
 echo "smoke: creating hydra oauth2 client '$agui_client'"
 SMOKE_HYDRA_CLIENT_G_SECRET="${SMOKE_HYDRA_CLIENT_G_SECRET:-$(openssl rand -hex 16)}"
-if ! docker compose run --rm hydra create client \
-    --endpoint http://hydra:4445 \
-    --id "$agui_client" \
-    --secret "$SMOKE_HYDRA_CLIENT_G_SECRET" \
-    --grant-type client_credentials \
-    --grant-type urn:ietf:params:oauth:grant-type:jwt-bearer \
-    --response-type token \
-    --scope openid \
-    --audience sutra-api \
-    --token-endpoint-auth-method client_secret_basic \
-    >/tmp/sutra-hydra-client-g.out 2>&1; then
-  cat /tmp/sutra-hydra-client-g.out >&2
-  fail "hydra oauth2 client '$agui_client' creation failed"
-else
-  pass "hydra oauth2 client '$agui_client' created"
-fi
+create_jwt_client "$agui_client" "$SMOKE_HYDRA_CLIENT_G_SECRET"
 
 token_g_json="$(curl -sf -u "$agui_client:$SMOKE_HYDRA_CLIENT_G_SECRET" \
   --data-urlencode 'grant_type=client_credentials' \
@@ -885,26 +886,7 @@ echo "smoke: social follow round-trip (D2)"
 
 echo "smoke: creating hydra oauth2 client 'sutra-smoke-b'"
 SMOKE_HYDRA_CLIENT_B_SECRET="${SMOKE_HYDRA_CLIENT_B_SECRET:-$(openssl rand -hex 24)}"
-if ! docker compose run --rm hydra create client \
-    --endpoint http://hydra:4445 \
-    --id sutra-smoke-b \
-    --secret "$SMOKE_HYDRA_CLIENT_B_SECRET" \
-    --grant-type client_credentials \
-    --grant-type urn:ietf:params:oauth:grant-type:jwt-bearer \
-    --response-type token \
-    --scope openid \
-    --audience sutra-api \
-    --token-endpoint-auth-method client_secret_basic \
-    >/tmp/sutra-hydra-client-b.out 2>&1; then
-  if grep -qiE "already exists|conflict" /tmp/sutra-hydra-client-b.out; then
-    echo "smoke: hydra client 'sutra-smoke-b' already exists — reusing"
-  else
-    cat /tmp/sutra-hydra-client-b.out >&2
-    fail "hydra oauth2 client 'sutra-smoke-b' creation failed"
-  fi
-else
-  pass "hydra oauth2 client 'sutra-smoke-b' created"
-fi
+create_jwt_client sutra-smoke-b "$SMOKE_HYDRA_CLIENT_B_SECRET"
 
 token_b_json="$(curl -sf -u "sutra-smoke-b:$SMOKE_HYDRA_CLIENT_B_SECRET" \
   --data-urlencode 'grant_type=client_credentials' \
@@ -1416,22 +1398,7 @@ wait_for 90 "api /healthz (velocity caps on)" curl -sf "$API_URL/healthz"
 vel_client="sutra-smoke-v-$(date +%s)"
 echo "smoke: creating hydra oauth2 client '$vel_client'"
 SMOKE_HYDRA_CLIENT_V_SECRET="${SMOKE_HYDRA_CLIENT_V_SECRET:-$(openssl rand -hex 16)}"
-if ! docker compose run --rm hydra create client \
-    --endpoint http://hydra:4445 \
-    --id "$vel_client" \
-    --secret "$SMOKE_HYDRA_CLIENT_V_SECRET" \
-    --grant-type client_credentials \
-    --grant-type urn:ietf:params:oauth:grant-type:jwt-bearer \
-    --response-type token \
-    --scope openid \
-    --audience sutra-api \
-    --token-endpoint-auth-method client_secret_basic \
-    >/tmp/sutra-hydra-client-v.out 2>&1; then
-  cat /tmp/sutra-hydra-client-v.out >&2
-  fail "hydra oauth2 client '$vel_client' creation failed"
-else
-  pass "hydra oauth2 client '$vel_client' created"
-fi
+create_jwt_client "$vel_client" "$SMOKE_HYDRA_CLIENT_V_SECRET"
 
 token_v_json="$(curl -sf -u "$vel_client:$SMOKE_HYDRA_CLIENT_V_SECRET" \
   --data-urlencode 'grant_type=client_credentials' \
@@ -1495,22 +1462,7 @@ echo "smoke: commerce catalog round-trip (F1b)"
 com_client="sutra-smoke-c-$(date +%s)"
 echo "smoke: creating hydra oauth2 client '$com_client'"
 SMOKE_HYDRA_CLIENT_C_SECRET=${SMOKE_HYDRA_CLIENT_C_SECRET:-$(openssl rand -hex 16)}
-if ! docker compose run --rm hydra create client \
-    --endpoint http://hydra:4445 \
-    --id "$com_client" \
-    --secret "$SMOKE_HYDRA_CLIENT_C_SECRET" \
-    --grant-type client_credentials \
-    --grant-type urn:ietf:params:oauth:grant-type:jwt-bearer \
-    --response-type token \
-    --scope openid \
-    --audience sutra-api \
-    --token-endpoint-auth-method client_secret_basic \
-    >/tmp/sutra-hydra-client-c.out 2>&1; then
-  cat /tmp/sutra-hydra-client-c.out >&2
-  fail "hydra oauth2 client '$com_client' creation failed"
-else
-  pass "hydra oauth2 client '$com_client' created"
-fi
+create_jwt_client "$com_client" "$SMOKE_HYDRA_CLIENT_C_SECRET"
 
 token_c_json="$(curl -sf -u "$com_client:$SMOKE_HYDRA_CLIENT_C_SECRET" \
   --data-urlencode 'grant_type=client_credentials' \
@@ -1884,22 +1836,7 @@ wait_for 90 "api /healthz (search enabled)" curl -sf "$API_URL/healthz"
 search_client="sutra-smoke-s-$(date +%s)"
 echo "smoke: creating hydra oauth2 client '$search_client'"
 SMOKE_HYDRA_CLIENT_S_SECRET="$(openssl rand -hex 16)"
-if ! docker compose run --rm hydra create client \
-    --endpoint http://hydra:4445 \
-    --id "$search_client" \
-    --secret "$SMOKE_HYDRA_CLIENT_S_SECRET" \
-    --grant-type client_credentials \
-    --grant-type urn:ietf:params:oauth:grant-type:jwt-bearer \
-    --response-type token \
-    --scope openid \
-    --audience sutra-api \
-    --token-endpoint-auth-method client_secret_basic \
-    >/tmp/sutra-hydra-client-s.out 2>&1; then
-  cat /tmp/sutra-hydra-client-s.out >&2
-  fail "hydra oauth2 client '$search_client' creation failed"
-else
-  pass "hydra oauth2 client '$search_client' created"
-fi
+create_jwt_client "$search_client" "$SMOKE_HYDRA_CLIENT_S_SECRET"
 
 token_s_json="$(curl -sf -u "$search_client:$SMOKE_HYDRA_CLIENT_S_SECRET" \
   --data-urlencode 'grant_type=client_credentials' \
@@ -2121,20 +2058,7 @@ mdev_secret="$(openssl rand -hex 24)"
 muser_secret="$(openssl rand -hex 24)"
 for pair in "$mdev_client $mdev_secret" "$muser_client $muser_secret"; do
   set -- $pair
-  if ! docker compose run --rm hydra create client \
-      --endpoint http://hydra:4445 \
-      --id "$1" \
-      --secret "$2" \
-      --grant-type client_credentials \
-      --grant-type urn:ietf:params:oauth:grant-type:jwt-bearer \
-      --response-type token \
-      --scope openid \
-      --audience sutra-api \
-      --token-endpoint-auth-method client_secret_basic \
-      >/tmp/sutra-hydra-client-m.out 2>&1; then
-    cat /tmp/sutra-hydra-client-m.out >&2
-    fail "hydra oauth2 client '$1' creation failed"
-  fi
+  create_jwt_client "$1" "$2"
 done
 pass "hydra oauth2 clients for mini-app smoke created"
 hydra_token() { # hydra_token <client> <secret> — client_credentials token

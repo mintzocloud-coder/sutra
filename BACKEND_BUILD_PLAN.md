@@ -2192,6 +2192,32 @@ with documented contracts until then.
       http://hydra:4444, aud sutra-api, sub client_id). Full smoke run is
       CI-gated (no docker daemon on this VM). Smoke CI re-runs on this
       push — confirm green next run; if still red, continue triage there.
+    - [x] H1 part 2d DONE 2026-10-19 ~14:00 IST: CI-red triage #9.
+      Run 39221569036 (the 2c push) finished: 6/7 jobs green, smoke RED
+      again. Root cause found while that run was still in flight: triage
+      #8 fixed only the ONE 'sutra-smoke' client (Admin REST API +
+      access_token_strategy=jwt), but SEVEN more OAuth2 clients were still
+      created the old way via the version-fragile `hydra create client`
+      CLI with NO strategy — Hydra v2 mints opaque tokens for those (the
+      2c finding), and every section using them runs with AUTH_BYPASS off:
+      H1's two biz clients (first opaque-token call = "H1: POST /v1/sellers
+      failed" at 401), E6 agui, D2 sutra-smoke-b, D6 velocity, F1 commerce,
+      F2 search, G3's two mini-app clients. FIX: new shared
+      `create_jwt_client()` in scripts/smoke.sh (host-side curl to
+      localhost:4445, the path the D1 block proves; body mirrors every old
+      CLI flag + "access_token_strategy":"jwt"; on "already exists" it
+      DELETEs and recreates, so a stale opaque client can never survive
+      SMOKE_KEEP_UP=1 re-runs — this also fixes D2's old "reuse" branch,
+      which would have broken token requests on re-runs with a fresh
+      per-run secret). All 8 CLI blocks replaced (the only remaining
+      `hydra create client` strings are comments). VERIFIED: bash -n
+      green; the helper's 3 paths exercised with a stubbed curl
+      (create → PASS, conflict → recreate → PASS, hard failure → FAIL +
+      exit 1); the exact POST body JSON-validated (jwt strategy present,
+      grant_types/response_types/scope/audience/auth-method all match the
+      old flags). H1 part 2 STAYS OPEN: CI-green confirmation of the smoke
+      job on this push; next run verifies the H1 section passes in the
+      smoke log.
 - [ ] H2: Business integrations — WhatsApp Cloud API direct adapter
   (fail-closed stub; no BSP), Tally on-premise bridge design + stub,
   Zoho Books default adapter (fail-closed stub), docs/integrations.md
@@ -2588,3 +2614,5 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-19 ~11:40 IST: H1 part 2a done (see H1 task note) — smoke.sh "Business AI copilot round-trip (H1)" section: grounded question streams the true price (₹1,299, json.dumps-escaped grep verified), fabricated ₹999 gets the safe fallback with nothing leaked, non-seller → 403 not_a_seller, AI_BIZ_RPM=1 → 429 ai_rate_limited + Retry-After; ai restored to defaults. Verified: bash -n green, 26/26 test_business.py green (new persistent venv ~/workspace/venvs/sutra-ai), SSE-encoding simulation green. Full smoke run is CI-gated (no docker on this VM). Part 2b = CI-green confirmation of the smoke job on this push. Pushed.
 
 - 2026-10-19 ~13:35 IST: H1 part 2c done — CI-red triage #8 (see H1 part-2 note): smoke job on run 39214445220 failed at "hydra oauth2 client creation" with `smoke FAIL: hydra returned an opaque token, not a JWT`. Root cause: client created without any access-token strategy (the old smoke.sh comment described the Hydra v1 flag; v2 uses client field `access_token_strategy`, values `jwt`/`opaque`). Fix: scripts/smoke.sh creates 'sutra-smoke' via the Admin REST API (POST localhost:4445/clients, `access_token_strategy: "jwt"`), DELETE + re-POST on "already exists". Verified: bash -n green, request JSON validated, JWT claims match the Go JWKS verifier (iss/aud/sub). Full smoke run CI-gated. Pushed.
+
+- 2026-10-19 ~14:00 IST: H1 part 2d done — CI-red triage #9 (see H1 part-2 note): run 39221569036 (the 2c push) finished 6/7 green, smoke RED again. Root cause found while that run was still in flight: triage #8 had fixed only the 'sutra-smoke' client; seven more OAuth2 clients were still created via the version-fragile `hydra create client` CLI with no strategy → Hydra v2 mints opaque tokens (the 2c finding), and every section using them runs with AUTH_BYPASS off (H1 x2, E6 agui, D2 sutra-smoke-b, D6 velocity, F1 commerce, F2 search, G3 x2). Fix: shared `create_jwt_client()` in scripts/smoke.sh (Admin REST API + access_token_strategy=jwt, DELETE+recreate on conflict); all 8 CLI blocks replaced. Verified: bash -n green, helper's 3 paths stub-tested, POST body JSON-validated. H1 part 2 STAYS OPEN: CI-green confirmation of the smoke job on this push — next run checks it. Pushed.
