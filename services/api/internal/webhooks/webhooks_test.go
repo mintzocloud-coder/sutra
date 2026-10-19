@@ -391,10 +391,12 @@ func TestPublishSendsEventID(t *testing.T) {
 
 func TestListAttemptsMapping(t *testing.T) {
 	s := newStub(t)
-	s.respond["GET /api/v1/app/user_abc/msg/msg_9/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
+	s.respond["GET /api/v1/app/user_abc/attempt/msg/msg_9"] = func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"data": []map[string]any{
-			{"id": "atm_1", "status": "success", "responseStatusCode": 200, "timestamp": "2026-01-01T00:00:00Z"},
-			{"id": "atm_2", "status": "fail", "responseStatusCode": 500, "timestamp": "2026-01-01T00:01:00Z"},
+			// Real Svix wire shape: status is an INTEGER enum
+			// (0=success, 1=pending, 2=fail, 3=sending), not a string.
+			{"id": "atm_1", "status": 0, "responseStatusCode": 200, "timestamp": "2026-01-01T00:00:00Z"},
+			{"id": "atm_2", "status": 2, "responseStatusCode": 500, "timestamp": "2026-01-01T00:01:00Z"},
 		}})
 	}
 	c := clientFor(t, s)
@@ -402,14 +404,19 @@ func TestListAttemptsMapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAttempts: %v", err)
 	}
-	if len(attempts) != 2 || attempts[0].Status != "success" || attempts[1].ResponseStatus != 500 {
+	if len(attempts) != 2 || attempts[0].Status != MessageStatusSuccess || attempts[1].Status != MessageStatusFail || attempts[1].ResponseStatus != 500 {
 		t.Fatalf("attempts = %+v", attempts)
+	}
+	// The developer-facing JSON carries the string name.
+	raw, err := json.Marshal(attempts[0])
+	if err != nil || !strings.Contains(string(raw), `"status":"success"`) {
+		t.Fatalf("attempt JSON = %s, err = %v", raw, err)
 	}
 }
 
 func TestListAttemptsNotFound(t *testing.T) {
 	s := newStub(t)
-	s.respond["GET /api/v1/app/user_abc/msg/nope/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
+	s.respond["GET /api/v1/app/user_abc/attempt/msg/nope"] = func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"code": "not_found"})
 	}
 	c := clientFor(t, s)

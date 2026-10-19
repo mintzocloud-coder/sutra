@@ -590,6 +590,10 @@ dump_webhooks_diag() {
   docker compose ps svix-server api >&2 || true
   echo "--- svix-server log tail:" >&2
   docker compose logs --tail=80 svix-server >&2 || true
+  echo "--- api log tail (Triage #17: the Go api logs the exact Svix" >&2
+  echo "--- error — 'webhooks: svix unreachable' with op/err — without" >&2
+  echo "--- this, a 502 looks like a network problem when it isn't):" >&2
+  docker compose logs --tail=60 api >&2 || true
   echo "--- host re-probe (localhost:8071):" >&2
   curl -s -o /dev/null -w 'host probe http_code=%{http_code}\n' \
     -H "Authorization: Bearer $SVIX_TOKEN" \

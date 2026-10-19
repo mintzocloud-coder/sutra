@@ -361,9 +361,10 @@ func TestPublishEvent(t *testing.T) {
 func TestDeliveries(t *testing.T) {
 	s := newStub(t)
 	armApp(s)
-	s.respond["GET /api/v1/app/user_test-user-id/msg/msg_1/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
+	s.respond["GET /api/v1/app/user_test-user-id/attempt/msg/msg_1"] = func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"data": []any{
-			map[string]any{"id": "att_1", "status": "success", "responseStatusCode": 200, "timestamp": "2026-10-19T00:00:00Z"},
+			// Real Svix wire shape: status is an integer enum.
+			map[string]any{"id": "att_1", "status": 0, "responseStatusCode": 200, "timestamp": "2026-10-19T00:00:00Z"},
 		}})
 	}
 	h2 := NewHandler(nil, clientFor(t, s), testLog())
@@ -386,8 +387,12 @@ func TestDeliveries(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if out.MessageID != "msg_1" || len(out.Attempts) != 1 || out.Attempts[0].Status != "success" {
+	if out.MessageID != "msg_1" || len(out.Attempts) != 1 || out.Attempts[0].Status != MessageStatusSuccess {
 		t.Errorf("unexpected delivery log: %+v", out)
+	}
+	// The developer-facing wire carries the string name.
+	if !strings.Contains(rec.Body.String(), `"status":"success"`) {
+		t.Errorf("developer JSON lacks the string status: %s", rec.Body.String())
 	}
 }
 

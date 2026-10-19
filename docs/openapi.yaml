@@ -3452,8 +3452,8 @@ paths:
       summary: Delivery attempt log
       description: |
         Svix's per-message delivery-attempt log — the proof of delivery.
-        Attempt statuses are Svix wire values (`success`, `pending`,
-        `fail`, `sending`) passed through verbatim.
+        Attempt statuses are the Svix integer enum (0/1/2/3) surfaced as
+        their names (`success`, `pending`, `fail`, `sending`).
       operationId: getWebhookDeliveries
       security:
         - bearerAuth: []
@@ -4456,7 +4456,7 @@ components:
         status:
           type: string
           enum: [success, pending, fail, sending]
-          description: Svix wire status, passed through verbatim.
+          description: Delivery status (Svix wire enum 0/1/2/3 mapped to its name).
         responseStatusCode:
           type: integer
           description: HTTP status your endpoint returned (0 when unreachable).

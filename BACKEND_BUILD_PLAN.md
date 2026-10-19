@@ -2235,6 +2235,20 @@ with documented contracts until then.
       3-part JWT (pass), an opaque token (fail), and empty (fail).
       No Go changes. H1 part 2 STAYS OPEN: CI-green confirmation of
       the smoke job on this push — next run checks it. Pushed.
+    - [x] H1 part 2l DONE 2026-10-19 ~18:35 IST: CI-red triage #17 —
+      ROOT CAUSE of the webhooks round-trip 502s found and fixed
+      (Go-side, not network): ListAttempts called the wrong Svix
+      route (`/msg/{id}/endpoint` = attempted destinations, not the
+      attempt log) AND decoded `status` as a Go string while Svix
+      sends an integer enum (0/1/2/3) — the decode failure mapped to
+      502 "webhook gateway is unreachable". Fix: `MessageStatus` int
+      type (String/MarshalJSON/UnmarshalJSON), correct
+      `/attempt/msg/{msg_id}` route, stubs now use the real wire
+      shape, OpenAPI descriptions corrected, smoke.sh diagnostics now
+      dump the api log tail. Full go test suite + vet green; bash -n
+      green. H1 part 2 STAYS OPEN: CI-green confirmation of the smoke
+      job on this push — next run checks the G2 section passes and
+      H1 follows. Pushed.
 - [ ] H2: Business integrations — WhatsApp Cloud API direct adapter
   (fail-closed stub; no BSP), Tally on-premise bridge design + stub,
   Zoho Books default adapter (fail-closed stub), docs/integrations.md
@@ -2254,6 +2268,46 @@ All boxes ticked, CI green, `scripts/smoke.sh` passes, docs complete.
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-19 ~18:35 IST: H1 part 2l done — CI-RED TRIAGE #17 (ROOT CAUSE
+  FOUND, real fix). Run 39251067087 (the 2k push) finished 6/7 green;
+  smoke RED at "smoke FAIL: webhooks round-trip" — 502
+  `webhooks_upstream` "webhook gateway is unreachable". New evidence
+  killed the network-race theory: (a) the triage-#16 container-path
+  gate PASSED; (b) python steps 1-3 of the round-trip PASSED
+  (endpoint registered 201, listed, event published 202); (c) the
+  svix-server's own log shows the dispatch SUCCEEDED ("Webhook
+  success", response_code=200) — the webhook WAS delivered to the
+  canary. The failing assert is line 34 = the DELIVERIES step
+  (GET /v1/webhooks/deliveries), not the register call as the 2k log
+  guessed. ROOT CAUSE (two bugs, both Go-side, both invisible to the
+  stub tests because the stubs mirrored the wrong assumptions):
+  (1) `ListAttempts` called
+  `GET /api/v1/app/{uid}/msg/{msg_id}/endpoint` — the real Svix route
+  for that path is "list attempted DESTINATIONS" (a different shape,
+  no responseStatusCode); the "list attempts by message" route is
+  `GET /api/v1/app/{app_id}/attempt/msg/{msg_id}`; (2) `Attempt.Status`
+  was typed Go `string`, but Svix sends `status` as an INTEGER enum
+  (0=success, 1=pending, 2=fail, 3=sending — verified against
+  svix-server source + Svix integration tests). The JSON decode
+  failed → non-APIError → svixError mapped it to 502 "unreachable".
+  FIX: new `MessageStatus` int type with String()/MarshalJSON
+  (developer-facing JSON keeps {"status":"success",...})/
+  UnmarshalJSON (accepts wire int AND string name); ListAttempts hits
+  the correct route. Unit tests now use the REAL wire shape (int
+  statuses) — TestListAttemptsMapping + TestDeliveries stubs updated;
+  new assertion that the developer JSON carries "success". OpenAPI
+  WebhookAttempt status stays string enum (contract unchanged) —
+  descriptions corrected (int enum mapped to names). smoke.sh
+  `dump_webhooks_diag` now also dumps the api log tail (the exact
+  `webhooks: svix unreachable` op/err line) so the next 502 is
+  self-diagnosing. VERIFIED: go build ./... + go vet + full
+  `go test ./...` green; bash -n green; openapi.yaml parses (51
+  paths) — the 17 redocly warnings under npx's latest recommended
+  ruleset are pre-existing (Retry-After headers, nullable,
+  parameters) in untouched sections, none in deliveries/WebhookAttempt.
+  H1 part 2 STAYS OPEN: CI-green confirmation of the smoke job on
+  this push — next run checks the G2 section passes and H1 follows.
 
 - 2026-10-19 ~17:45 IST: H1 part 2k done — CI-RED TRIAGE #16. Run
   39246655308 (the 2j push) finished 6/7 green; smoke RED again at

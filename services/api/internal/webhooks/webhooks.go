@@ -144,16 +144,82 @@ type MessageOut struct {
 	EventType string `json:"eventType"`
 }
 
+// MessageStatus is Svix's delivery-attempt status. On the wire Svix
+// sends it as an INTEGER enum (verified against svix-server v1.101.0:
+// 0=success, 1=pending, 2=fail, 3=sending — the triage-the-hard-way
+// finding: decoding the wire int into a Go string fails and the whole
+// deliveries call collapses into a 502 "webhook gateway is
+// unreachable"). The developer-facing API keeps the string form
+// (success/pending/fail/sending), so Status marshals to its name.
+type MessageStatus int
+
+const (
+	MessageStatusSuccess MessageStatus = 0
+	MessageStatusPending MessageStatus = 1
+	MessageStatusFail    MessageStatus = 2
+	MessageStatusSending MessageStatus = 3
+)
+
+// String names the status the way the developer docs and the Svix SDKs
+// do.
+func (s MessageStatus) String() string {
+	switch s {
+	case MessageStatusSuccess:
+		return "success"
+	case MessageStatusPending:
+		return "pending"
+	case MessageStatusFail:
+		return "fail"
+	case MessageStatusSending:
+		return "sending"
+	default:
+		return "unknown"
+	}
+}
+
+// MarshalJSON emits the string name — the developer-facing contract
+// for GET /v1/webhooks/deliveries is {"status":"success",...}.
+func (s MessageStatus) MarshalJSON() ([]byte, error) {
+	return json.Marshal(s.String())
+}
+
+// UnmarshalJSON accepts both the wire integer enum and the
+// developer-facing string name, so the type round-trips.
+func (s *MessageStatus) UnmarshalJSON(raw []byte) error {
+	var n int
+	if err := json.Unmarshal(raw, &n); err == nil {
+		*s = MessageStatus(n)
+		return nil
+	}
+	var name string
+	if err := json.Unmarshal(raw, &name); err != nil {
+		return err
+	}
+	switch name {
+	case "success":
+		*s = MessageStatusSuccess
+	case "pending":
+		*s = MessageStatusPending
+	case "fail":
+		*s = MessageStatusFail
+	case "sending":
+		*s = MessageStatusSending
+	default:
+		return fmt.Errorf("webhooks: unknown message status %q", name)
+	}
+	return nil
+}
+
 // Attempt is one delivery attempt of a message to one endpoint, from
 // Svix's own attempt log — this is the delivery log the developer-
-// facing routes surface. Status is one of "success", "pending",
-// "fail", "sending" (Svix wire values, passed through verbatim so
-// clients can match the Svix docs).
+// facing routes surface. Status arrives as a Svix integer enum and is
+// surfaced as its string name (success, pending, fail, sending) so
+// clients can match the developer docs.
 type Attempt struct {
-	ID             string `json:"id"`
-	Status         string `json:"status"`
-	ResponseStatus int    `json:"responseStatusCode"`
-	Timestamp      string `json:"timestamp"`
+	ID             string        `json:"id"`
+	Status         MessageStatus `json:"status"`
+	ResponseStatus int           `json:"responseStatusCode"`
+	Timestamp      string        `json:"timestamp"`
 }
 
 // Client talks to one Svix server instance. The zero client is never
@@ -465,9 +531,13 @@ func (c *Client) Publish(ctx context.Context, appUID, eventType string, payload 
 }
 
 // ListAttempts returns Svix's delivery-attempt log for one message —
-// the delivery log behind the developer-facing routes. Statuses are
-// Svix wire values ("success", "pending", "fail", "sending") passed
-// through verbatim.
+// the delivery log behind the developer-facing routes. This is the
+// "list attempts by message" route (GET /app/{app_id}/attempt/msg/
+// {msg_id}); the similar-looking /msg/{msg_id}/endpoint route lists
+// attempted DESTINATIONS (a different shape, no responseStatusCode),
+// and hitting it here silently returned the wrong log (triaged in CI:
+// the deliveries step saw 502s because Attempt decoded an int-enum
+// status into a string field).
 func (c *Client) ListAttempts(ctx context.Context, appUID, msgID string) ([]Attempt, error) {
 	if err := c.disabled(); err != nil {
 		return nil, err
@@ -476,7 +546,7 @@ func (c *Client) ListAttempts(ctx context.Context, appUID, msgID string) ([]Atte
 		Data []Attempt `json:"data"`
 	}
 	if err := c.do(ctx, http.MethodGet,
-		"/api/v1/app/"+url.PathEscape(appUID)+"/msg/"+url.PathEscape(msgID)+"/endpoint", nil, &list); err != nil {
+		"/api/v1/app/"+url.PathEscape(appUID)+"/attempt/msg/"+url.PathEscape(msgID), nil, &list); err != nil {
 		return nil, err
 	}
 	if list.Data == nil {
