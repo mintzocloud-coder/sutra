@@ -1861,6 +1861,39 @@ orchestration joins chat/presence).
 - [ ] G2: Svix webhooks — Svix server in compose (pinned) + Go webhook
   dispatcher (platform events → per-app endpoints, signing, retries,
   delivery log), developer-facing webhook docs, OpenAPI + tests + smoke.
+  - [x] G2 part 1 DONE 2026-10-19 ~07:15 IST: compose `svix-server`
+    (svix/svix-server:v1.101.0 pinned — Docker Hub tag verified to
+    exist, amd64+arm64, 2026-08-26; the GitHub v2.x release tags are SDK
+    versions, NOT server images — the D1 Hydra lesson applied), env
+    contract taken from the official README + config.default.toml
+    (SVIX_JWT_SECRET / SVIX_DB_DSN / SVIX_REDIS_DSN / SVIX_QUEUE_TYPE;
+    port 8071; `svix-server jwt generate` for the management token;
+    whitelist_subnets dev-only via a mounted docker/svix/config.toml —
+    the SSRF guard stays ON in production), dedicated `svix` database in
+    initdb (Hydra/Kratos `networks`-table lesson), api SVIX_URL /
+    SVIX_API_TOKEN passthroughs. New `internal/webhooks` (stdlib-only
+    Svix v1 client: NewClient fail-closed/disabled contracts mirroring
+    search, EnsureApp GET-first create, CreateEndpoint/ListEndpoints/
+    DeleteEndpoint idempotent, Publish with eventId idempotency key,
+    ListAttempts delivery log, typed APIError with
+    NotFound/Unauthorized/Validation; one Svix app per user
+    `user:<id>`; Svix owns signing/retries — the API never fakes
+    deliveries), config SVIX_URL/SVIX_API_TOKEN, main.go fail-closed
+    construction + whClient plumbed through newHandler (routes land in
+    part 2). VERIFIED: gofmt/build/vet clean, full `go test ./...` green
+    (12 new suites: disabled no-op matrix, fail-closed URL matrix,
+    auth header, EnsureApp 200/create-on-404/401-surface,
+    CreateEndpoint shape+secret echo+422, delete idempotency,
+    Publish eventId shape + required-field guards, attempts mapping,
+    404, server-down), compose YAML parses, initdb bash -n, SPDX
+    checker green. Full compose boot is CI-gated (no docker on this VM).
+  - [ ] G2 part 2: developer routes (POST/GET/DELETE /v1/webhooks/
+    endpoints, POST /v1/webhooks/events publish, GET /v1/webhooks/
+    deliveries attempt log), platform-event publish hooks
+    (order/shipment/live → user's Svix app), docs/webhooks.md (signing
+    scheme, retry schedule, verification guide), OpenAPI, production.md
+    SVIX_* rows, smoke.sh round-trip (jwt generate → register endpoint
+    → publish → attempt log shows the delivery). Then G2 [x].
 - [ ] G3: Mini-app runtime — mini-app registry (migration + CRUD), sandboxed
   runtime contract (Telegram model: iframe/WebView bridge, permission
   manifest, JS API surface), directory listing + install flow, Go service,
@@ -1905,6 +1938,16 @@ All boxes ticked, CI green, `scripts/smoke.sh` passes, docs complete.
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-19 ~07:15 IST: G2 part 1 done — Svix server in compose
+  (svix/svix-server:v1.101.0, Docker-Hub-verified pin) + Go stdlib-only
+  v1 client (internal/webhooks) + config/main.go fail-closed wiring +
+  tests (see G2 task note). Pin discipline: GitHub's v2.8.0 release tag
+  has NO Docker image (D1's fabricated-pin lesson, again) — v1.101.0 is
+  the newest real server tag on the Hub. Env contract sourced from the
+  official README + config.default.toml, not memory. CI-gated for the
+  live boot; G2 part 2 (routes, publish hooks, docs, OpenAPI, smoke)
+  is the next task.
 
 - 2026-10-19 ~05:45 IST: F6 part 3 done — commerce rate budget, docs/commerce.md, production.md NATS_* backfill, smoke.sh NATS + commerce-budget sections (see F6 task note). REAL SMOKE BLOCKER FIXED: compose sets NATS_URL=nats://nats:4222 but smoke.sh never started the nats service — with the api's fail-closed NewBus, the api would refuse to boot right after the kratos-4434 fix. nats now boots with the infra (8222 health gate) + a JetStream round-trip assertion. Verified: gofmt/build/vet clean, full go test green (4 new middleware suites), bash -n + heredoc compile, redocly 0 warnings, compose/CI YAML parse, SPDX green. CI-gated for the live run. **F6 COMPLETE — PHASE F (Wave 3: Commerce) COMPLETE — CI-green confirmation pending.**
   OPEN (documented in plan + docs/commerce.md): booking segment needs Wave 4's shipping address; cmd/saga-worker + compose wiring + reconciler sweep remain future work.

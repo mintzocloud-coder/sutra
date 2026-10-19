@@ -58,6 +58,37 @@ services:
     ports: ["4222:4222", "8222:8222"]
     volumes: [nats_data:/data]
 
+  # Developer webhooks (G2, Wave 4): Svix server (MIT), pinned. The Go
+  # API talks to its v1 management API (services/api/internal/webhooks);
+  # Svix owns per-endpoint HMAC signatures (svix-id / svix-timestamp /
+  # svix-signature), the delivery retry schedule, and the attempt log.
+  # Pinned to svix/svix-server:v1.101.0 — the tag was verified to exist
+  # on Docker Hub (amd64+arm64, published 2026-08-26); the GitHub
+  # release tags (v2.x) are SDK versions, NOT server images, so the
+  # Docker Hub tag is the pin that matters (the D1 Hydra lesson).
+  #
+  # SVIX_JWT_SECRET / SVIX_MAIN_SECRET default to DEV values — every
+  # production deploy MUST override them (docs/production.md). The API's
+  # management token is minted inside this container
+  # (`docker compose exec svix-server svix-server jwt generate`) and
+  # passed to the api as SVIX_API_TOKEN. No healthcheck: the API's
+  # webhook seam degrades honestly (503) when Svix is unreachable —
+  # the meilisearch precedent applies.
+  svix-server:
+    image: svix/svix-server:v1.101.0
+    ports: ["8071:8071"]
+    # Pin the working directory so the mounted config.toml lookup is
+    # deterministic (the server auto-loads ./config.toml; see the file).
+    working_dir: /svix
+    volumes:
+      - ./docker/svix/config.toml:/svix/config.toml:ro
+    environment:
+      SVIX_JWT_SECRET: ${SVIX_JWT_SECRET:-sutra-dev-jwt-secret-change-me}
+      SVIX_MAIN_SECRET: ${SVIX_MAIN_SECRET:-sutra-dev-main-secret-change-me}
+      SVIX_DB_DSN: "postgres://sutra:sutra@postgres:5432/svix?sslmode=disable"
+      SVIX_REDIS_DSN: "redis://valkey:6379"
+      SVIX_QUEUE_TYPE: "redis"
+
   # Live media (G1, Wave 4): LiveKit SFU (OSS, Apache-2.0) — the ONE
   # blessed readymade in the stack. Pinned image. The Go API mints
   # room-scoped participant JWTs against the keypair below; clients
@@ -297,6 +328,14 @@ services:
       # compose so checkout/status transitions publish order.created
       # and order.status_changed; empty (local dev) disables the bus.
       NATS_URL: "nats://nats:4222"
+      # Developer webhooks (G2 part 1): self-hosted Svix server. Empty
+      # SVIX_API_TOKEN (the default) DISABLES the dispatcher — the API
+      # logs a WARN and the webhook routes (G2 part 2) return 503.
+      # The token is a Bearer <redacted> `docker compose exec
+      # svix-server svix-server jwt generate` (signed with the server's
+      # SVIX_JWT_SECRET). Never commit a real token here.
+      SVIX_URL: "http://svix-server:8071"
+      SVIX_API_TOKEN: ${SVIX_API_TOKEN:-}
       # Payments (F4 part 1): payment-aggregator seam. Only "stub" boots
       # until the Cashfree onboarding completes post-investors — any other
       # PAYMENTS_PROVIDER makes the API refuse to boot (fail-closed), and

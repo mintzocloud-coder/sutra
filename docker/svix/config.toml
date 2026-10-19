@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Svix server dev config. Mounted at /svix/config.toml (the compose
+# service sets working_dir: /svix, so the server's automatic
+# ./config.toml lookup is deterministic). Everything else is configured
+# through SVIX_* environment variables; env wins over this file on
+# conflict (figment merge order).
+#
+# whitelist_subnets exists ONLY so this dev stack can deliver webhooks
+# to compose-internal endpoints (the smoke test's /healthz canary on
+# the api service). Svix's SSRF guard blocks private IPs by default —
+# that is the secure posture, and production MUST NOT carry this
+# whitelist (developers register real public URLs; see
+# docs/production.md). Never whitelist in production.
+whitelist_subnets = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]

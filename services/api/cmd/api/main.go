@@ -37,6 +37,7 @@ import (
 	"github.com/mintzocloud-coder/sutra/services/api/internal/search"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/social"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/users"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/webhooks"
 )
 
 // methodGuard wraps h so only the listed methods reach it; anything else
@@ -61,8 +62,9 @@ func methodGuard(allowed []string, h http.Handler) http.HandlerFunc {
 // rt may be nil: realtime event hooks are then unregistered. aiProxy may
 // be nil: the /v1/ai/* proxy routes are then unregistered. translator
 // may be nil or disabled: ?translate= is then a no-op and feed items
-// keep their original text.
-func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, mediaSvc *media.Service, rt realtime.Publisher, aiProxy *aiproxy.Proxy, log *slog.Logger, translator *feed.Translator, searchClient *search.Client, orderBus events.EventBus) http.Handler {
+// keep their original text. whClient may be nil or disabled: the
+// developer webhook routes (G2 part 2) are then unregistered.
+func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, mediaSvc *media.Service, rt realtime.Publisher, aiProxy *aiproxy.Proxy, log *slog.Logger, translator *feed.Translator, searchClient *search.Client, orderBus events.EventBus, whClient *webhooks.Client) http.Handler {
 	auth := middleware.RequireAuth(verifier, log, middleware.AuthOptions{
 		Bypass:        cfg.AuthBypass,
 		BypassSubject: cfg.BypassSubject,
@@ -616,9 +618,26 @@ func main() {
 		log.Info("order event bus enabled", "nats", cfg.NatsURL)
 	}
 
+	// Developer webhooks (G2 part 1): self-hosted Svix server. Empty
+	// token = dispatcher disabled (dev default, loud WARN); a token
+	// with a bad URL is a configuration bug — refuse to boot, same as
+	// search/realtime/aiproxy. Routes land in G2 part 2.
+	whClient, err := webhooks.NewClient(cfg.SvixURL, cfg.SvixAPIToken, log)
+	if err != nil {
+		log.Error("invalid Svix config — refusing to start", "err", err)
+		os.Exit(1)
+	}
+	if whClient.Enabled() {
+		svixURL := cfg.SvixURL
+		if svixURL == "" {
+			svixURL = webhooks.DefaultURL
+		}
+		log.Info("developer webhooks enabled", "svix", svixURL)
+	}
+
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	defer bgCancel() // stops the live reconciler (G1) on shutdown
-	handler := newHandler(bgCtx, cfg, pool, verifier, feedSvc, mediaSvc, rtPub, aiProxy, log, translator, searchClient, orderBus)
+	handler := newHandler(bgCtx, cfg, pool, verifier, feedSvc, mediaSvc, rtPub, aiProxy, log, translator, searchClient, orderBus, whClient)
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: handler}
 
 	go func() {

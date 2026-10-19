@@ -98,6 +98,12 @@ type Config struct {
 	// that will not connect refuses to boot (fail-closed), mirroring
 	// the search contract.
 	NatsURL string // e.g. nats://nats:4222; empty = bus disabled
+	// Webhooks (G2): self-hosted Svix server for developer webhooks.
+	// Empty SvixAPIToken disables the dispatcher (dev default — the
+	// API logs a WARN); a token with a bad URL refuses to boot
+	// (fail-closed), mirroring the search contract.
+	SvixURL      string // e.g. http://svix-server:8071; empty = compose default
+	SvixAPIToken string // Bearer JWT minted via `svix-server jwt generate`; never commit
 	// Payments (F4): payment-aggregator seam. PAYMENTS_PROVIDER is
 	// "stub" until the Cashfree onboarding completes post-investors
 	// (see internal/payments, docs/payments.md); any other value
@@ -269,6 +275,8 @@ func Load() Config {
 		AIServiceToken:    getEnv("AI_SERVICE_TOKEN", ""),
 		SearchURL:         getEnv("SEARCH_URL", "http://meilisearch:7700"),
 		SearchMasterKey:   getEnv("SEARCH_MASTER_KEY", ""),
+		SvixURL:           getEnv("SVIX_URL", ""),
+		SvixAPIToken:      getEnv("SVIX_API_TOKEN", ""),
 		NatsURL:           getEnv("NATS_URL", ""),
 		PaymentsProvider:  getEnv("PAYMENTS_PROVIDER", "stub"),
 		CashfreeAppID:     getEnv("CASHFREE_APP_ID", ""),
