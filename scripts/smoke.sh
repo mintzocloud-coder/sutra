@@ -407,8 +407,10 @@ mint_token() { # role -> token JSON
     "$API_URL/v1/live/token"
 }
 host_tok="$(mint_token host | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')"
-[ "$(printf '%s' "$host_tok" | tr '.' '\n' | wc -l)" = "3" ] \
-  || fail "host token is not a 3-part JWT"
+case "$host_tok" in
+  *.*.*) ;;
+  *) fail "host token is not a 3-part JWT" ;;
+esac
 host_grants="$(printf '%s' "$host_tok" | python3 -c '
 import json,sys,base64
 body = sys.stdin.read().strip().split(".")[1]

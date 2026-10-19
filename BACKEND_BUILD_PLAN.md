@@ -2218,6 +2218,23 @@ with documented contracts until then.
       old flags). H1 part 2 STAYS OPEN: CI-green confirmation of the smoke
       job on this push; next run verifies the H1 section passes in the
       smoke log.
+    - [x] H1 part 2e DONE 2026-10-19 ~14:45 IST: CI-red triage #10.
+      Run 39226339387 (the 2d push) finished 6/7 green, smoke RED at
+      "smoke FAIL: host token is not a 3-part JWT" — but the log shows
+      the room opened fine and this was the FIRST time the G1 section
+      ever executed end-to-end (all earlier smoke runs died at
+      hydra/kratos issues). ROOT CAUSE: a broken assertion in
+      scripts/smoke.sh, not the Go mint — `[ "$(printf '%s' "$host_tok"
+      | tr '.' '\n' | wc -l)" = "3" ]` can NEVER be true: `wc -l`
+      counts newlines, not parts (a real a.b.c token via printf '%s'
+      yields 2), and GNU coreutils pads the output ("      3" != "3")
+      on the CI runner. The Go MintToken emits a proper HS256 JWT
+      (unit-tested, go-api job green). FIX: replaced with the D1
+      section's `case "$host_tok" in *.*.*)` glob — padding/newline
+      immune. VERIFIED: bash -n green; the glob proven against a real
+      3-part JWT (pass), an opaque token (fail), and empty (fail).
+      No Go changes. H1 part 2 STAYS OPEN: CI-green confirmation of
+      the smoke job on this push — next run checks it. Pushed.
 - [ ] H2: Business integrations — WhatsApp Cloud API direct adapter
   (fail-closed stub; no BSP), Tally on-premise bridge design + stub,
   Zoho Books default adapter (fail-closed stub), docs/integrations.md
@@ -2237,6 +2254,20 @@ All boxes ticked, CI green, `scripts/smoke.sh` passes, docs complete.
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-19 ~14:45 IST: H1 part 2e done — CI-RED TRIAGE ATTEMPT #10.
+  Run 39226339387 (the 2d push) finished 6/7 jobs green; smoke died at
+  "smoke FAIL: host token is not a 3-part JWT" — the first time the G1
+  live section ever executed end-to-end (earlier runs died at
+  hydra/kratos). ROOT CAUSE: broken assertion in scripts/smoke.sh, not
+  the Go mint — `[ "$(printf '%s' "$host_tok" | tr '.' '\n' | wc -l)"
+  = "3" ]` can never be true (wc -l counts newlines: a real a.b.c
+  token yields 2; GNU coreutils also pads the output on the runner).
+  MintToken emits a proper HS256 JWT (unit-tested, go-api job green).
+  FIX: D1-style `case "$host_tok" in *.*.*)` glob; bash -n green,
+  proven pass on a real 3-part JWT and fail on opaque/empty. No Go
+  changes. H1 part 2 STAYS OPEN: CI-green confirmation of the smoke
+  job on this push — next run checks it. Pushed.
 
 - 2026-10-19 ~12:20 IST: CI-RED TRIAGE ATTEMPT #6 — triage #5's kratos fix
   WORKED (smoke log on 9c08c107: "smoke PASS: hydra + kratos up"), but the
