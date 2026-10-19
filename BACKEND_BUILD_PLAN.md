@@ -2726,6 +2726,23 @@ with documented contracts until then.
   Promovolve (Apache-2.0) for creative serving, advertiser API
   (campaigns, budgets, targeting), reporting, docs/ads.md, OpenAPI +
   tests + smoke.
+  - H3 part 1 (auction core) DONE 2026-10-20 ~04:20 IST: new
+    `internal/ads/auction.go` — deterministic Generalized Second Price
+    kernel (money in integer paise; rank = bid × quality desc; winner
+    pays ceil(displaced-score/own-quality)+1, floored at reserve, never
+    above own bid; bids below reserve / zero quality / junk excluded
+    BEFORE ranking so junk can never set prices; deterministic
+    tie-breaks score → quality → bidder ID, fully replayable for
+    billing disputes; quality is consumed, never computed, by the
+    kernel). `Winner()` convenience for single-slot feeds.
+    VERIFIED: gofmt clean, go vet clean, 15-case test matrix green
+    (classic GSP 100/80→81, quality-beats-bid, reserve floor, junk
+    exclusion, tie determinism incl. float replay, multi-slot cascade,
+    price≤own-bid clamp, slots/bids edge cases), full `go build ./...`+
+    `go vet ./...` green.
+  H3 STAYS OPEN: part 2 = advertiser API (campaigns/budgets/targeting,
+  HTTP routes + OpenAPI); part 3 = creative serving, reporting,
+  docs/ads.md, smoke coverage.
 - [ ] H4: Subscriptions — Cashfree + UPI AutoPay subscription adapter
   (fail-closed stub), plans/entitlements model, creator-membership
   billing wiring (70/30 split), docs/subscriptions.md, OpenAPI + tests +
