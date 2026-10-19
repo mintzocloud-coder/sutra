@@ -2,9 +2,11 @@
 # Production image for the Sutra chat service.
 #
 # B7: hardened — built with `mix release` (never `mix phx.server` /
-# `mix run` in production), non-root runtime user, minimal Alpine runtime
-# stage with the ERTS bundled into the release. `mix phx.server` stays the
-# dev workflow (see README.md).
+# `mix run` in production), non-root runtime user, runtime stage on the
+# SAME elixir:1.18-alpine image as the build (OTP NIFs like crypto link
+# against system OpenSSL — a pinned alpine:3.21 runtime drifted behind the
+# builder's Alpine 3.22/OpenSSL 3.5 and broke boot; same-image pairing is
+# drift-proof). `mix phx.server` stays the dev workflow (see README.md).
 #
 # Build:  docker build -f services/chat/Dockerfile services/chat
 # Run:    docker run -e DATABASE_URL=... -e SECRET_KEY_BASE=... -p 4000:4000 <image>
@@ -31,15 +33,22 @@ COPY lib lib/
 RUN mix compile
 RUN mix release
 
-# Builder is elixir:1.18-alpine (OTP 27, Alpine 3.21-based): keep the runtime
-# on the same Alpine generation so musl/libstdc++ stay compatible with the
-# bundled ERTS.
-FROM alpine:3.21 AS runtime
+# The release bundles its own ERTS, but OTP NIFs (notably `crypto`,
+# which links against the SYSTEM OpenSSL) do NOT ship their libs. The
+# builder image's Alpine generation drifts over time (elixir:1.18-alpine
+# moved to Alpine 3.22/OpenSSL 3.5 while the old pinned alpine:3.21 runtime
+# shipped OpenSSL 3.4) — a drifted runtime then fails boot with
+# "Error relocating .../crypto.so: EVP_PKEY_sign_message_init: symbol not
+# found" (smoke CI red, 2026-10-19). The ONLY drift-proof pairing is to run
+# on the SAME image reference as the build stage: both stages always
+# resolve to the same manifest within one build, so libcrypto (and musl)
+# can never mismatch the NIFs again.
+FROM elixir:1.18-alpine AS runtime
 
-# Runtime needs only: C/C++ stdlibs (ERTS + Bandit NIFs), ncurses (ERTS),
-# CA certificates (JWKS fetches over HTTPS — see docs/auth-contract.md).
-# No build tools, no source, no mix/hex.
-RUN apk add --no-cache libstdc++ libgcc ncurses-libs ca-certificates \
+# The elixir base already carries ERTS's C/C++ stdlibs and ncurses; add CA
+# certificates (JWKS fetches over HTTPS — see docs/auth-contract.md) plus
+# the non-root runtime user. No build tools, no source, no mix/hex.
+RUN apk add --no-cache ca-certificates \
   && addgroup -S app \
   && adduser -S -G app app
 

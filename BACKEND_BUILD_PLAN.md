@@ -2174,6 +2174,29 @@ Then report to founder: production-ready backend live on main.
 
 ## Log
 
+- 2026-10-19 ~12:20 IST: CI-RED TRIAGE ATTEMPT #6 — triage #5's kratos fix
+  WORKED (smoke log on 9c08c107: "smoke PASS: hydra + kratos up"), but the
+  NEXT blocker appeared at "smoke: running chat database migrations": the
+  chat RELEASE can't boot — `Failed to load NIF library:
+  'Error relocating /app/lib/crypto-5.8.3/priv/lib/crypto.so:
+  EVP_PKEY_sign_message_init: symbol not found'`. ROOT CAUSE: the B7
+  Dockerfile's pairing assumption ("builder is Alpine 3.21-based") rotted
+  — `elixir:1.18-alpine` has moved to Alpine 3.22/OpenSSL 3.5 (the crypto
+  NIF now needs the OpenSSL-3.5-only `EVP_PKEY_sign_message_init`) while
+  the pinned `alpine:3.21` runtime still ships OpenSSL 3.4. OTP releases
+  bundle ERTS but NOT the system OpenSSL the crypto NIF links against.
+  FIX: the runtime stage is now `FROM elixir:1.18-alpine` — the SAME image
+  reference as the build stage. Both stages resolve to the same manifest
+  within one build, so libcrypto (and musl) can never drift apart from
+  the NIFs again; this is drift-proof where re-pinning alpine:3.22 would
+  just break again on the next Alpine generation. Non-root `app` user +
+  ca-certificates + HEALTHCHECK + foreground CMD kept; only the now-
+  redundant libstdc++/libgcc/ncurses-libs apk line was dropped (the elixir
+  base carries ERTS's libs itself). No Go/Python/Elixir source changed, so
+  build/vet/test suites are untouched. CI-green confirmation STILL
+  pending — H1 part 2b STAYS OPEN, next run checks the smoke job on this
+  push and triages attempt #7 if needed.
+
 - 2026-10-19 ~11:55 IST: CI-RED TRIAGE ATTEMPT #5 — smoke red AGAIN on
   d7961218 (H1 part 2a): kratos-1 Started but /health/alive on :4434 never
   answered in 120s (no Exited event visible because it happens after
