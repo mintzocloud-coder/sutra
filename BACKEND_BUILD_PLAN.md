@@ -2529,6 +2529,28 @@ with documented contracts until then.
       CI-green confirmation of the smoke job on this push — next
       run checks the F6 round-trip (and everything after it) goes
       green and H1 closes. Pushed.
+    - [x] H1 part 2y DONE 2026-10-20 ~01:15 IST: CI-red triage #29 —
+      ROOT CAUSE FOUND (smoke.sh curl encoding bug, Go innocent).
+      Run 39309339211 (the 2x push) finished 6/7 green; smoke RED at
+      "smoke FAIL: search: min>max price envelope code is
+      invalid_min_price, want invalid_price_range" — the FIRST run ever
+      to reach the F2 400-matrix assertion (the 2x jsz fix made the F6
+      NATS round-trip PASS). ROOT CAUSE: `expect400` passed the query as
+      ONE `--data-urlencode "min_price_paise=200&max_price_paise=100"`;
+      curl treats the first `=` as the name/content split and encodes
+      the rest, so the server received a SINGLE param min_price_paise =
+      "200&max_price_paise=100" → ParseInt fails → `invalid_min_price`.
+      The Go contract was right all along (query.go:134 → min>max gives
+      invalid_price_range; unit tests + OpenAPI agree). FIX: `expect400`
+      now takes variadic query-strings (mirrors `count_hits`' existing
+      multi-param loop) and the min>max call passes the two params as
+      separate args. VERIFIED: bash -n green; live curl simulation
+      against a param-echoing stub — old form arrives as one mangled
+      param, new form as min_price_paise=200 + max_price_paise=100;
+      edited helper executed under `set -u` (single- and multi-param
+      calls). No Go/Python/Elixir touched. H1 part 2 STAYS OPEN:
+      CI-green confirmation of the smoke job on this push — next run
+      checks the F2 matrix passes and H1 closes. Pushed.
 - [ ] H2: Business integrations — WhatsApp Cloud API direct adapter
   (fail-closed stub; no BSP), Tally on-premise bridge design + stub,
   Zoho Books default adapter (fail-closed stub), docs/integrations.md
@@ -2548,6 +2570,24 @@ All boxes ticked, CI green, `scripts/smoke.sh` passes, docs complete.
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-20 ~01:15 IST: H1 part 2y done — CI-RED TRIAGE #29 (ROOT CAUSE
+  FOUND, smoke.sh assertion bug — service code untouched). Run
+  39309339211 (the 2x push) finished 6/7 green; smoke RED at
+  "search: min>max price envelope code is invalid_min_price, want
+  invalid_price_range" — the FIRST run ever to reach the F2 400-matrix
+  assertion (the 2x jsz fix made the F6 NATS round-trip PASS). ROOT
+  CAUSE: `expect400` passed the min>max query as ONE
+  `--data-urlencode "min_price_paise=200&max_price_paise=100"`; curl
+  splits on the first `=` and encodes the rest, so the server saw a
+  single min_price_paise="200&max_price_paise=100" → ParseInt fails →
+  invalid_min_price. Go's invalid_price_range contract was correct
+  (query.go:134, unit tests, OpenAPI all agree). FIX: `expect400` now
+  variadic over query-strings (the count_hits pattern); min>max passes
+  the two params as separate args. VERIFIED: bash -n green + live curl
+  simulation against a param-echo stub (old = one mangled param, new =
+  two clean params). H1 part 2 STAYS OPEN: CI-green confirmation on
+  this push — next run checks the F2 matrix passes and H1 closes.
 
 - 2026-10-20 ~01:00 IST: H1 part 2x done — CI-RED TRIAGE #28 (ROOT CAUSE
   FOUND, smoke.sh assertion bug — service code untouched). The 2w push

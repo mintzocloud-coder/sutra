@@ -2133,16 +2133,18 @@ pass "search: keyset pagination (2 + 1, no dupes, terminates)"
 
 # 400 param matrix — malformed known params are 400 with stable codes.
 s_body="/tmp/sutra-search-body.json"
-expect400() { # expect400 <description> <expected_code> <query-string>
+expect400() { # expect400 <description> <expected_code> <query-string>...
+  local urlargs=() qs
+  for qs in "${@:3}"; do urlargs+=(--data-urlencode "$qs"); done
   code="$(curl -s -o "$s_body" -w '%{http_code}' -G -H "Authorization: Bearer $token_s" \
-    --data-urlencode 'q=searchable' --data-urlencode "$3" "$API_URL/v1/search")"
+    --data-urlencode 'q=searchable' "${urlargs[@]}" "$API_URL/v1/search")"
   [ "$code" = "400" ] || fail "search: $1 did not return 400 (got $code)"
   got="$(python3 -c 'import json; print(json.load(open("'"$s_body"'"))["error"]["code"])')"
   [ "$got" = "$2" ] || fail "search: $1 envelope code is $got, want $2"
 }
 expect400 "limit=999" "invalid_limit" "limit=999"
 expect400 "bad cursor" "invalid_cursor" "cursor=not-a-cursor"
-expect400 "min>max price" "invalid_price_range" "min_price_paise=200&max_price_paise=100"
+expect400 "min>max price" "invalid_price_range" "min_price_paise=200" "max_price_paise=100"
 expect400 "bad status" "invalid_status" "status=hidden"
 pass "search: 400 param matrix (invalid_limit/invalid_cursor/invalid_price_range/invalid_status)"
 
