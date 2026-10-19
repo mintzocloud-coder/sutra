@@ -33,6 +33,7 @@ import (
 
 	"github.com/mintzocloud-coder/sutra/services/api/internal/db"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/realtime"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/webhooks"
 )
 
 // reconcileListRoomsPath is the LiveKit RoomService twirp endpoint.
@@ -153,7 +154,7 @@ func (s *Service) staleLiveRooms(ctx context.Context, grace time.Duration) ([]*R
 // Fail-closed: any SFU fetch error ends nothing and returns the error.
 // Each flip publishes live:ended best-effort (via the detached
 // publisher), the same contract as the webhook path.
-func (s *Service) ReconcileStaleRooms(ctx context.Context, pool *db.Pool, rt realtime.Publisher, apiBaseURL string, grace time.Duration, log *slog.Logger) (ended, checked int, err error) {
+func (s *Service) ReconcileStaleRooms(ctx context.Context, pool *db.Pool, rt realtime.Publisher, wh *webhooks.Client, apiBaseURL string, grace time.Duration, log *slog.Logger) (ended, checked int, err error) {
 	if !s.Enabled() {
 		return 0, 0, ErrLiveDisabled
 	}
@@ -180,7 +181,7 @@ func (s *Service) ReconcileStaleRooms(ctx context.Context, pool *db.Pool, rt rea
 			}
 			return ended, checked, fmt.Errorf("live: reconcile end %s: %w", room.ID.String(), err)
 		}
-		publishLiveEnded(endedRoom, pool, rt, log)
+		publishLiveEnded(endedRoom, pool, rt, wh, log)
 		ended++
 	}
 	return ended, checked, nil
@@ -191,11 +192,11 @@ func (s *Service) ReconcileStaleRooms(ctx context.Context, pool *db.Pool, rt rea
 // error and waits for the next tick — a down SFU degrades the sweep,
 // never the API. Cancel the context to stop it (main wires it to
 // process shutdown).
-func StartReconciler(ctx context.Context, svc *Service, pool *db.Pool, rt realtime.Publisher, apiBaseURL string, interval, grace time.Duration, log *slog.Logger) {
+func StartReconciler(ctx context.Context, svc *Service, pool *db.Pool, rt realtime.Publisher, wh *webhooks.Client, apiBaseURL string, interval, grace time.Duration, log *slog.Logger) {
 	pass := func() {
 		cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
-		ended, checked, err := svc.ReconcileStaleRooms(cctx, pool, rt, apiBaseURL, grace, log)
+		ended, checked, err := svc.ReconcileStaleRooms(cctx, pool, rt, wh, apiBaseURL, grace, log)
 		switch {
 		case err != nil:
 			log.Warn("live: reconcile pass failed (fail-closed, nothing ended)",

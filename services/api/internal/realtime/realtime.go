@@ -30,6 +30,7 @@ import (
 	"github.com/mintzocloud-coder/sutra/services/api/internal/db"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/posts"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/social"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/webhooks"
 )
 
 // Event names the chat service understands. Reserved for Wave 2: post:like,
@@ -411,12 +412,19 @@ func PublishFollowerNew(ctx context.Context, pool *db.Pool, follower, followee p
 // (Wave 1 clients carry the key in local state; Wave 2's inbox dedupes
 // server-side). Errors are best-effort — returned to the saga, never to
 // an end-user request.
-func PublishShipmentUpdate(ctx context.Context, pool *db.Pool, buyerID pgtype.UUID, p ShipmentUpdatePayload, rt Publisher) error {
-	if !rt.Enabled() {
-		return nil
-	}
+func PublishShipmentUpdate(ctx context.Context, pool *db.Pool, buyerID pgtype.UUID, p ShipmentUpdatePayload, rt Publisher, wh *webhooks.Client) error {
 	if p.ShipmentID == "" || p.OrderID == "" || p.Status == "" {
 		return fmt.Errorf("realtime: shipment payload needs shipment_id, order_id and status")
+	}
+	// Developer webhooks (G2 part 2): shipment:update also fans out to
+	// the buyer's Svix app — best-effort, never delays the caller.
+	// EmitBestEffort no-ops on a nil/disabled client, so this stays safe
+	// when webhooks are unconfigured. The event id matches the realtime
+	// dedupe key so retries dedupe on both channels.
+	webhooks.EmitBestEffort(ctx, wh, buyerID.String(), EventShipmentUpdate, p,
+		"shipment:"+p.ShipmentID+":"+p.Status+":"+strconv.FormatInt(p.UpdatedAt.Unix(), 10), nil)
+	if !rt.Enabled() {
+		return nil
 	}
 	subject, err := subjectByID(ctx, pool, buyerID)
 	if err != nil {

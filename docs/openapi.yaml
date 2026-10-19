@@ -3177,6 +3177,253 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /v1/webhooks/endpoints:
+    get:
+      tags: [webhooks]
+      summary: List my webhook endpoints
+      description: |
+        Returns the delivery targets registered on the caller's own
+        `user:<id>` Svix app. Secrets are never returned here — Svix
+        shows each endpoint's signing secret exactly once, at creation.
+      operationId: listWebhookEndpoints
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Endpoint list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [endpoints]
+                properties:
+                  endpoints:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/WebhookEndpoint'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: Svix server unreachable (`webhooks_upstream`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Webhooks not enabled on this deployment (`webhooks_unavailable`, + `Retry-After`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    post:
+      tags: [webhooks]
+      summary: Register a webhook endpoint
+      description: |
+        Registers a delivery target (your HTTPS URL) on the caller's own
+        Svix app. The 201 response carries the endpoint's signing secret —
+        the one and only time it is shown. Save it now; rotate by deleting
+        and recreating the endpoint.
+      operationId: createWebhookEndpoint
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookEndpointCreate'
+      responses:
+        '201':
+          description: Endpoint registered (includes the one-time secret).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookEndpoint'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed JSON or unknown fields (`invalid_request_body`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: Bad URL (`invalid_endpoint_url`), bad filter type (`invalid_event_type`), or Svix-side validation (`webhooks_invalid`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: Svix server unreachable (`webhooks_upstream`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/webhooks/endpoints/{id}:
+    delete:
+      tags: [webhooks]
+      summary: Delete a webhook endpoint
+      description: |
+        Removes a delivery target from the caller's Svix app. Idempotent —
+        deleting an already-gone endpoint is still 204.
+      operationId: deleteWebhookEndpoint
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Endpoint id (from the create/list responses).
+      responses:
+        '204':
+          description: Endpoint deleted (or already gone).
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Missing endpoint id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No such endpoint (`webhook_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: Svix server unreachable (`webhooks_upstream`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/webhooks/events:
+    post:
+      tags: [webhooks]
+      summary: Publish a custom event
+      description: |
+        Publishes a developer-defined event to the caller's own Svix app;
+        every registered endpoint receives a signed delivery. 202 — delivery
+        is async; poll GET /v1/webhooks/deliveries for the attempt log.
+        `event_id` is the idempotency key: re-publishing the same event_id
+        returns the ORIGINAL message instead of double-delivering.
+      operationId: publishWebhookEvent
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookEventPublish'
+      responses:
+        '202':
+          description: Event accepted for delivery.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookMessage'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed JSON or unknown fields (`invalid_request_body`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: Bad event type (`invalid_event_type`) or missing payload (`event_payload_required`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: Svix server unreachable (`webhooks_upstream`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/webhooks/deliveries:
+    get:
+      tags: [webhooks]
+      summary: Delivery attempt log
+      description: |
+        Svix's per-message delivery-attempt log — the proof of delivery.
+        Attempt statuses are Svix wire values (`success`, `pending`,
+        `fail`, `sending`) passed through verbatim.
+      operationId: getWebhookDeliveries
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: message_id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Message id from the publish response.
+      responses:
+        '200':
+          description: Attempt log.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message_id, attempts]
+                properties:
+                  message_id:
+                    type: string
+                  attempts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/WebhookAttempt'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Missing message_id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No such message (`webhook_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: Svix server unreachable (`webhooks_upstream`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
 components:
   parameters:
     UserId:
@@ -3377,6 +3624,102 @@ components:
         ttl_seconds:
           type: integer
           description: Seconds until the token expires (re-mint on expiry).
+    WebhookEndpoint:
+      type: object
+      required: [id, url]
+      properties:
+        id:
+          type: string
+          description: Endpoint id (ep_...).
+          example: ep_2Z8xYzAbCdEfGh
+        url:
+          type: string
+          format: uri
+          description: Delivery target.
+          example: https://your-app.example.com/sutra-webhooks
+        description:
+          type: string
+          example: order notifications
+        filterTypes:
+          type: array
+          items:
+            type: string
+          description: Event-type filter (Svix v1 field name); empty/absent receives everything.
+          example: [order.created, order.status_changed]
+        secret:
+          type: string
+          description: |
+            Per-endpoint HMAC signing secret. Present ONLY in the 201
+            create response — never on list, never again.
+          example: whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw
+    WebhookEndpointCreate:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: Delivery target; must be an http(s) URL with a host.
+          example: https://your-app.example.com/sutra-webhooks
+        description:
+          type: string
+          maxLength: 256
+          example: order notifications
+        filter_types:
+          type: array
+          items:
+            type: string
+            pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+          description: Event-type filter; omit to receive everything.
+          example: [order.created, order.status_changed]
+        secret:
+          type: string
+          description: Bring-your-own signing secret; omit and Svix generates one.
+    WebhookEventPublish:
+      type: object
+      required: [event_type, payload]
+      properties:
+        event_type:
+          type: string
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+          example: inventory.low
+        payload:
+          description: Any JSON value — the delivery body.
+        event_id:
+          type: string
+          description: |
+            Idempotency key. Omit and the API mints one; re-publishing the
+            same event_id returns the original message.
+          example: evt_2026_10_19_001
+    WebhookMessage:
+      type: object
+      required: [id, event_type]
+      properties:
+        id:
+          type: string
+          description: Svix message id — use with GET /v1/webhooks/deliveries.
+          example: msg_2Z8xYzAbCdEfGh
+        event_type:
+          type: string
+          example: inventory.low
+    WebhookAttempt:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          type: string
+          example: att_2Z8xYzAbCdEfGh
+        status:
+          type: string
+          enum: [success, pending, fail, sending]
+          description: Svix wire status, passed through verbatim.
+        responseStatusCode:
+          type: integer
+          description: HTTP status your endpoint returned (0 when unreachable).
+          example: 200
+        timestamp:
+          type: string
+          format: date-time
     User:
       type: object
       required: [id, subject, display_name, created_at, updated_at]

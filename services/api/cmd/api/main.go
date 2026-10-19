@@ -166,14 +166,14 @@ func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *
 	if liveSvc.Enabled() {
 		v1.Handle("/v1/live/token", methodGuard([]string{http.MethodPost},
 			live.TokenHandler(liveSvc, pool, log)))
-		v1.Handle("/v1/live/rooms", live.RoomsHandler(liveSvc, pool, rt, log))
+		v1.Handle("/v1/live/rooms", live.RoomsHandler(liveSvc, pool, rt, whClient, log))
 		v1.Handle("/v1/live/rooms/{id}/end", methodGuard([]string{http.MethodPost},
-			live.EndRoomHandler(liveSvc, pool, rt, log)))
+			live.EndRoomHandler(liveSvc, pool, rt, whClient, log)))
 		// G1 part 2: LiveKit server-webhook ingress. NOT behind
 		// RequireAuth — the SFU has no user credential; its own signed
 		// webhook token is the auth (verified inside the handler).
 		mux.Handle("/internal/livekit/webhook", methodGuard([]string{http.MethodPost},
-			live.WebhookHandler(liveSvc, pool, rt, log)))
+			live.WebhookHandler(liveSvc, pool, rt, whClient, log)))
 		// Crash-host sweeper: reconciles the registry against SFU truth
 		// on an interval. Fail-closed per pass (see internal/live).
 		reconcileInterval := time.Duration(cfg.LiveKitReconcileMinutes) * time.Minute
@@ -184,7 +184,7 @@ func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *
 		if reconcileGrace <= 0 {
 			reconcileGrace = 6 * time.Hour
 		}
-		go live.StartReconciler(bg, liveSvc, pool, rt, cfg.LiveKitAPIURL,
+		go live.StartReconciler(bg, liveSvc, pool, rt, whClient, cfg.LiveKitAPIURL,
 			reconcileInterval, reconcileGrace, log)
 		log.Info("live media enabled", "ws_url", cfg.LiveKitWSURL,
 			"token_ttl_minutes", cfg.LiveTokenTTLMinutes,
@@ -194,6 +194,25 @@ func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *
 	} else {
 		log.Warn("live media disabled — LIVEKIT_API_SECRET is not set; " +
 			"/v1/live/* routes are unregistered")
+	}
+
+	// Developer webhooks (G2 part 2): endpoint registry, custom event
+	// publish, and the Svix delivery-attempt log. One Svix app per user
+	// (user:<id>); RequireAuth (the outer v1 wrapper) guarantees the
+	// caller can only ever touch their own. Unregistered when the
+	// dispatcher is disabled — developers then get 404, not a broken
+	// 503, and the platform-event hooks below no-op.
+	if whClient != nil && whClient.Enabled() {
+		whHandler := webhooks.NewHandler(pool, whClient, log)
+		v1.Handle("/v1/webhooks/endpoints", whHandler.Endpoints())
+		v1.Handle("/v1/webhooks/endpoints/{id}", methodGuard([]string{http.MethodDelete},
+			whHandler.DeleteEndpoint()))
+		v1.Handle("/v1/webhooks/events", methodGuard([]string{http.MethodPost},
+			whHandler.PublishEvent()))
+		v1.Handle("/v1/webhooks/deliveries", methodGuard([]string{http.MethodGet},
+			whHandler.Deliveries()))
+		log.Info("developer webhook routes registered",
+			"routes", "/v1/webhooks/endpoints,/v1/webhooks/events,/v1/webhooks/deliveries")
 	}
 
 	// Recommendations v1 (E5): the like store feeds the home-feed
@@ -360,17 +379,26 @@ func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *
 	// (list, ?role=buyer|seller) itself (405 + Allow inside);
 	// OrderStatusHandler takes PATCH only (405 + Allow inside).
 	ordersSvc := orders.NewService(pool)
-	// Order events (F6 part 1): the hook detaches with its own 15s
-	// deadline — publishing is best-effort and never delays the order
-	// response. A nil bus (tests) means no event emission.
-	if orderBus != nil && orderBus.Enabled() {
+	// Order events (F6 part 1 + G2 part 2): the hook detaches with its
+	// own 15s deadline — publishing is best-effort and never delays the
+	// order response. A nil bus (tests) means no JetStream emission; a
+	// nil/disabled webhook client means no webhook fan-out. Each sink
+	// works without the other.
+	if (orderBus != nil && orderBus.Enabled()) || (whClient != nil && whClient.Enabled()) {
 		ordersSvc.EventHook = func(ctx context.Context, ev events.OrderEvent) {
 			go func() {
 				cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 				defer cancel()
-				if err := orderBus.PublishOrderEvent(cctx, ev); err != nil {
-					log.Warn("events: order event publish failed", "event", ev.Event, "order_id", ev.OrderID, "err", err)
+				if orderBus != nil && orderBus.Enabled() {
+					if err := orderBus.PublishOrderEvent(cctx, ev); err != nil {
+						log.Warn("events: order event publish failed", "event", ev.Event, "order_id", ev.OrderID, "err", err)
+					}
 				}
+				// Developer webhooks (G2 part 2): the same order
+				// lifecycle fans out to the buyer + seller's Svix apps.
+				// EmitBestEffort no-ops when webhooks are unconfigured.
+				webhooks.EmitBestEffort(cctx, whClient, ev.BuyerID, ev.Event, ev, ev.EventID, log)
+				webhooks.EmitBestEffort(cctx, whClient, ev.SellerID, ev.Event, ev, ev.EventID, log)
 			}()
 		}
 	}

@@ -40,6 +40,12 @@
 #     media row to caption_status ready (VTT caption_url sidecar).
 #   - The D5 realtime endpoint: no token → 401, wrong token → 401,
 #     unknown event → 422, valid envelope → 202 accepted.
+#   - The G2 part-2 developer-webhooks round-trip: the api is recreated
+#     with SVIX_API_TOKEN minted via `svix-server jwt generate`; an
+#     endpoint is registered (secret shown once, never on list), a custom
+#     event is published (202), the attempt log is polled until a
+#     successful 200 delivery appears, then the endpoint is deleted
+#     (idempotent 204).
 #   - The D6 velocity guards: the api is recreated with 1/hour caps and
 #     a throwaway Hydra identity proves post 429 (post_velocity_limited
 #     + Retry-After) and follow 429 (follow_velocity_limited +
@@ -445,6 +451,79 @@ res="$(post_webhook room_finished someone-elses-room "$LK_SECRET")"
   && printf '%s' "$res" | python3 -c 'import json,sys; b=json.loads(sys.stdin.read().split("|",1)[1]); assert not b["handled"] and b["reason"]=="unknown_room", b' \
   || fail "room_finished for a foreign room was not ignored: $res"
 pass "room_finished for a foreign room is ignored"
+
+# --- Developer webhooks round-trip (G2 part 2) --------------------------------
+# Boots the Svix server, mints the management token inside its container,
+# recreates the api with SVIX_API_TOKEN (the dispatcher enabled), then:
+# register an endpoint → publish an event → the attempt log shows a
+# successful delivery → delete the endpoint (idempotent). The delivery
+# canary is the api's own /healthz (tolerates any method, always 200);
+# the dev compose whitelists the docker subnets for Svix's SSRF guard so
+# this compose-internal delivery is allowed (production must NOT carry
+# that whitelist — see docs/webhooks.md and docs/production.md).
+echo "smoke: developer webhooks (G2 part 2)"
+docker compose up -d svix-server
+wait_for 90 "svix-server (jwt generate)" \
+  docker compose exec -T svix-server svix-server jwt generate
+# A JWT is three base64url segments — extract it regardless of any
+# surrounding human-readable output from the generate command.
+SVIX_TOKEN="$(docker compose exec -T svix-server svix-server jwt generate \
+  | tr -d '\r' | grep -oE '[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' | head -1)"
+[ -n "$SVIX_TOKEN" ] || fail "svix-server jwt generate produced no JWT"
+# Recreate the api with the dispatcher enabled. AUTH_BYPASS is still on
+# (dev-user), so the bypass exercises the route wiring; the Svix
+# management-token auth is the real contract under test.
+SVIX_API_TOKEN="$SVIX_TOKEN" docker compose up -d --no-deps api
+wait_for 90 "api /healthz (webhooks enabled)" curl -sf "$API_URL/healthz"
+python3 - "$API_URL" <<'PYEOF' || fail "webhooks round-trip"
+import json, sys, time, urllib.request, urllib.error
+api = sys.argv[1]
+HDRS = {"Authorization": "Bearer smoke-bypass", "Content-Type": "application/json"}
+def call(method, path, body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(api + path, data=data, headers=HDRS, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return r.status, json.loads(r.read() or b"null")
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read() or b"null")
+# 1. register the endpoint (canary: the api's own /healthz)
+st, ep = call("POST", "/v1/webhooks/endpoints",
+              {"url": "http://api:8080/healthz", "description": "smoke canary",
+               "filter_types": ["smoke.ping"]})
+assert st == 201, (st, ep)
+assert ep.get("secret", "").startswith("whsec_"), ep  # secret shown once, at creation
+ep_id = ep["id"]
+# 2. list shows it — and never the secret
+st, lst = call("GET", "/v1/webhooks/endpoints")
+assert st == 200, (st, lst)
+mine = [e for e in lst["endpoints"] if e["id"] == ep_id]
+assert len(mine) == 1, lst
+assert not mine[0].get("secret"), lst
+# 3. publish a custom event
+st, msg = call("POST", "/v1/webhooks/events",
+               {"event_type": "smoke.ping", "payload": {"n": 1}})
+assert st == 202, (st, msg)
+# 4. the attempt log shows a successful delivery (async — poll)
+deadline = time.time() + 90
+attempts = []
+while True:
+    st, log = call("GET", "/v1/webhooks/deliveries?message_id=" + msg["id"])
+    assert st == 200, (st, log)
+    attempts = log["attempts"]
+    if any(a["status"] == "success" and a["responseStatusCode"] == 200 for a in attempts):
+        break
+    assert time.time() < deadline, "no successful delivery: %s" % json.dumps(attempts[:5])
+    time.sleep(3)
+# 5. delete the endpoint — and again (idempotent 204)
+st, _ = call("DELETE", "/v1/webhooks/endpoints/" + ep_id)
+assert st == 204, st
+st, _ = call("DELETE", "/v1/webhooks/endpoints/" + ep_id)
+assert st == 204, st
+print("webhooks: endpoint %s registered, message %s delivered (200), endpoint removed"
+      % (ep_id, msg["id"]))
+PYEOF
+pass "webhooks: register → publish → attempt log shows the delivery"
 
 # --- AI core round-trip (E1) -------------------------------------------------
 # The Python AI service boots behind its fail-closed service token; the Go

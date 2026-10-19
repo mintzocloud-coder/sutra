@@ -128,6 +128,8 @@ CORS_ORIGINS=https://app.sutra.example.com
 | `LIVEKIT_TOKEN_TTL_MINUTES` | `120` | Participant token lifetime; `<=0` falls back to 120 |
 | `LIVEKIT_API_URL` | `http://localhost:7880` | **Server-side** LiveKit HTTP API base the crash-host reconciler calls (RoomService.ListRooms). Compose sets `http://livekit:7880`; never handed to clients |
 | `LIVEKIT_RECONCILE_MINUTES` | `15` | Crash-host sweep interval (G1 part 2); `<=0` falls back to 15 |
+| `SVIX_URL` | `http://svix-server:8071` | Self-hosted Svix server base URL for developer webhooks (G2). Empty ⇒ compose default. A set-but-malformed URL refuses boot (fail-closed) |
+| `SVIX_API_TOKEN` | *(unset = webhooks disabled)* | **SECRET.** Bearer <redacted> for the Svix management API, minted with `svix-server jwt generate` using the server's `SVIX_JWT_SECRET`. Empty ⇒ the dispatcher is disabled: the `/v1/webhooks/*` routes are unregistered and platform-event hooks (order/live/shipment → developer apps) no-op with a loud WARN. A bad token surfaces as 500 `webhooks_misconfigured` — the token is never logged or returned. Override the compose dev default in production. See `docs/webhooks.md` |
 | `LIVEKIT_RECONCILE_GRACE_HOURS` | `6` | A `live` registry row must be this old before the sweep checks it against the SFU; `<=0` falls back to 6 |
 | `PAYMENTS_PROVIDER` | `stub` | Only `stub` boots until the post-investors Cashfree onboarding; any other value makes the API refuse to boot (fail-closed). See `docs/payments.md` |
 | `CASHFREE_APP_ID` | *(unset)* | Cashfree App ID (post-investors); loaded, never logged, ignored by the stub (loud WARN when set) |

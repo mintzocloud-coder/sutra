@@ -22,6 +22,7 @@ import (
 	"github.com/mintzocloud-coder/sutra/services/api/internal/middleware"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/realtime"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/users"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/webhooks"
 )
 
 // maxLiveBody caps the JSON bodies the live seam accepts: they are
@@ -54,6 +55,25 @@ func callerUUID(w http.ResponseWriter, r *http.Request, pool *db.Pool, log *slog
 		return pgtype.UUID{}, false
 	}
 	return id, true
+}
+
+// livePayload builds the developer-webhook payload (G2 part 2) for a
+// room lifecycle event. Timestamps are unix seconds.
+func livePayload(room *Room) webhooks.LivePayload {
+	p := webhooks.LivePayload{
+		RoomID:     room.ID.String(),
+		RoomName:   room.LiveKitRoomName,
+		Title:      room.Title,
+		Kind:       room.Kind,
+		HostUserID: room.HostID.String(),
+	}
+	started := room.CreatedAt.Unix()
+	p.StartedAt = &started
+	if room.EndedAt != nil {
+		ended := room.EndedAt.Unix()
+		p.EndedAt = &ended
+	}
+	return p
 }
 
 // liveError maps package errors to envelope responses; unexpected errors
@@ -178,7 +198,7 @@ type createRoomRequest struct {
 
 // RoomsHandler handles POST /v1/live/rooms (open a room as the caller)
 // and GET /v1/live/rooms (list what's on air, newest first).
-func RoomsHandler(svc *Service, pool *db.Pool, rt realtime.Publisher, log *slog.Logger) http.HandlerFunc {
+func RoomsHandler(svc *Service, pool *db.Pool, rt realtime.Publisher, wh *webhooks.Client, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
@@ -239,7 +259,7 @@ func RoomsHandler(svc *Service, pool *db.Pool, rt realtime.Publisher, log *slog.
 // EndRoomHandler handles POST /v1/live/rooms/{id}/end: the host ends
 // the room. Publishes live:ended on the host's topic (best-effort) so
 // the host's own devices can tear down immediately.
-func EndRoomHandler(svc *Service, pool *db.Pool, rt realtime.Publisher, log *slog.Logger) http.HandlerFunc {
+func EndRoomHandler(svc *Service, pool *db.Pool, rt realtime.Publisher, wh *webhooks.Client, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		caller, ok := callerUUID(w, r, pool, log)
 		if !ok {
@@ -268,6 +288,11 @@ func EndRoomHandler(svc *Service, pool *db.Pool, rt realtime.Publisher, log *slo
 				}
 			}()
 		}
+		// Developer webhooks (G2 part 2): live:ended to the host's Svix
+		// app — best-effort, deterministic event id for crash-retry
+		// dedupe (see the create path above).
+		webhooks.EmitBestEffort(r.Context(), wh, caller.String(), realtime.EventLiveEnded,
+			livePayload(room), "live-ended:"+room.ID.String(), log)
 		writeJSON(w, http.StatusOK, room)
 	}
 }

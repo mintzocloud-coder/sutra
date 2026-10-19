@@ -34,6 +34,7 @@ import (
 	"github.com/mintzocloud-coder/sutra/services/api/internal/db"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/middleware"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/realtime"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/webhooks"
 )
 
 // Webhook events the ingress handles. room_finished is acted on; every
@@ -194,8 +195,12 @@ func (s *Service) EndRoomBySFUName(ctx context.Context, sfuName string) (*Room, 
 
 // publishLiveEnded emits live:ended on the host's topic, best-effort,
 // in a detached goroutine — the SFU's webhook retry budget must never
-// wait on the chat service.
-func publishLiveEnded(room *Room, pool *db.Pool, rt realtime.Publisher, log *slog.Logger) {
+// wait on the chat service. The same event also fans out to the host's
+// Svix app (G2 part 2) — EmitBestEffort no-ops on a nil/disabled
+// client, so this stays safe when webhooks are unconfigured.
+func publishLiveEnded(room *Room, pool *db.Pool, rt realtime.Publisher, wh *webhooks.Client, log *slog.Logger) {
+	webhooks.EmitBestEffort(context.Background(), wh, room.HostID.String(), realtime.EventLiveEnded,
+		livePayload(room), "live-ended:"+room.ID.String(), log)
 	if rt == nil || !rt.Enabled() {
 		return
 	}
@@ -223,7 +228,7 @@ func publishLiveEnded(room *Room, pool *db.Pool, rt realtime.Publisher, log *slo
 //   - unsigned / mis-signed / expired / body-tampered posts: 401.
 //     Never decode-then-trust: verification runs before the JSON
 //     parse affects any state.
-func WebhookHandler(svc *Service, pool *db.Pool, rt realtime.Publisher, log *slog.Logger) http.HandlerFunc {
+func WebhookHandler(svc *Service, pool *db.Pool, rt realtime.Publisher, wh *webhooks.Client, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if svc == nil || !svc.Enabled() {
 			middleware.WriteStatusError(w, r, http.StatusServiceUnavailable, "live is not enabled on this deployment")
@@ -274,7 +279,7 @@ func WebhookHandler(svc *Service, pool *db.Pool, rt realtime.Publisher, log *slo
 			return
 		}
 		if flipped {
-			publishLiveEnded(room, pool, rt, log)
+			publishLiveEnded(room, pool, rt, wh, log)
 		}
 		log.Info("live: room_finished reconciled", "room_id", room.ID.String(),
 			"flipped", flipped, "request_id", middleware.FromContext(r.Context()))

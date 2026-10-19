@@ -1858,9 +1858,10 @@ orchestration joins chat/presence).
     sig, flip, idempotent retry, 410 on post-webhook mint, ignored events,
     foreign rooms). Go build+vet+full suite green; 3 new webhook unit tests.
     **G1 COMPLETE — Phase G: G2 (Svix) next.**
-- [ ] G2: Svix webhooks — Svix server in compose (pinned) + Go webhook
+- [x] G2: Svix webhooks — Svix server in compose (pinned) + Go webhook
   dispatcher (platform events → per-app endpoints, signing, retries,
   delivery log), developer-facing webhook docs, OpenAPI + tests + smoke.
+  DONE 2026-10-19 ~08:05 IST (part 1 + part 2 above).
   - [x] G2 part 1 DONE 2026-10-19 ~07:15 IST: compose `svix-server`
     (svix/svix-server:v1.101.0 pinned — Docker Hub tag verified to
     exist, amd64+arm64, 2026-08-26; the GitHub v2.x release tags are SDK
@@ -1887,13 +1888,41 @@ orchestration joins chat/presence).
     Publish eventId shape + required-field guards, attempts mapping,
     404, server-down), compose YAML parses, initdb bash -n, SPDX
     checker green. Full compose boot is CI-gated (no docker on this VM).
-  - [ ] G2 part 2: developer routes (POST/GET/DELETE /v1/webhooks/
-    endpoints, POST /v1/webhooks/events publish, GET /v1/webhooks/
-    deliveries attempt log), platform-event publish hooks
-    (order/shipment/live → user's Svix app), docs/webhooks.md (signing
-    scheme, retry schedule, verification guide), OpenAPI, production.md
-    SVIX_* rows, smoke.sh round-trip (jwt generate → register endpoint
-    → publish → attempt log shows the delivery). Then G2 [x].
+  - [x] G2 part 2 DONE 2026-10-19 ~08:05 IST: developer routes
+    (internal/webhooks/handler.go) — POST/GET/DELETE /v1/webhooks/
+    endpoints, POST /v1/webhooks/events, GET /v1/webhooks/deliveries;
+    callerApp resolves the OIDC subject to the user's own user:<id> app
+    (just-in-time provision; userID seam keeps tests DB-free); Svix
+    errors mapped honestly (401/403→500 webhooks_misconfigured without
+    leaking the token, 404→404, 422→422, transport→502; disabled→503 +
+    Retry-After); secret shown once at creation, never on list; event_id
+    minted when absent (idempotent re-publish returns the original
+    message). Platform-event hooks via webhooks.EmitBestEffort
+    (detached, 15s bound, deterministic event ids for crash-retry
+    dedupe, no-op on nil/disabled client): order.created/
+    order.status_changed → buyer + seller apps (main.go EventHook, works
+    with or without the NATS bus); live:started/live:ended → host's app
+    (RoomsHandler, EndRoomHandler, SFU WebhookHandler, crash-host
+    reconciler); shipment:update → buyer's app inside
+    realtime.PublishShipmentUpdate (the seam the future logistics
+    provider ingress will call — honestly documented as source-gated in
+    docs/webhooks.md since logistics is a fail-closed stub today).
+    New docs/webhooks.md (signing scheme, retry schedule, verification
+    pseudocode, event catalog, endpoint management, failure table);
+    OpenAPI (4 paths + WebhookEndpoint/Create/EventPublish/Message/
+    Attempt schemas, redocly 0 warnings); production.md SVIX_URL +
+    SVIX_API_TOKEN rows; smoke.sh G2 part-2 round-trip (svix-server up →
+    jwt generate → api recreated with SVIX_API_TOKEN → register
+    endpoint on the /healthz canary → publish → poll attempt log to a
+    200 success → delete, idempotent). VERIFIED: gofmt clean,
+    go build+vet green, FULL go test ./... green (11 new handler/emit
+    suites incl. disabled 503s, 201+secret-once, validation matrix,
+    idempotent delete, 202+minted event_id, attempt log, 401→
+    misconfigured with no token leak, EmitBestEffort nil/disabled
+    no-op + live publish, event/URL grammar); SPDX checker green;
+    openapi lint valid; compose/CI YAML parse; bash -n smoke.sh.
+    Full stack boot is CI-gated (no docker/PG on this VM).
+    **G2 COMPLETE — Phase G: G3 (mini-app runtime) next.**
 - [ ] G3: Mini-app runtime — mini-app registry (migration + CRUD), sandboxed
   runtime contract (Telegram model: iframe/WebView bridge, permission
   manifest, JS API surface), directory listing + install flow, Go service,

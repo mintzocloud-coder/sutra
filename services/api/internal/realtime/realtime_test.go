@@ -410,9 +410,15 @@ func TestPublishHelpersDisabledAreNoOps(t *testing.T) {
 	if err := PublishFollowerNew(ctx, pool, follower, author, disabled); err != nil {
 		t.Fatalf("PublishFollowerNew disabled: %v", err)
 	}
-	// Zero buyer id + empty payload: disabled short-circuits before any
-	// field or DB check, so it must still return nil.
-	if err := PublishShipmentUpdate(ctx, pool, pgtype.UUID{}, ShipmentUpdatePayload{}, disabled); err != nil {
+	// Empty payload: field validation fires before any sink check — a
+	// malformed payload is a caller bug regardless of which sinks are
+	// enabled.
+	if err := PublishShipmentUpdate(ctx, pool, pgtype.UUID{}, ShipmentUpdatePayload{}, disabled, nil); err == nil {
+		t.Fatalf("empty shipment payload should fail even when disabled")
+	}
+	// Valid payload, every sink disabled: silent nil, no DB touched.
+	valid := ShipmentUpdatePayload{ShipmentID: "s", OrderID: "o", Status: "x", UpdatedAt: time.Now()}
+	if err := PublishShipmentUpdate(ctx, pool, pgtype.UUID{}, valid, disabled, nil); err != nil {
 		t.Fatalf("PublishShipmentUpdate disabled: %v", err)
 	}
 }
@@ -438,7 +444,7 @@ func TestPublishShipmentUpdateEndToEnd(t *testing.T) {
 		CODCollectedPaise: &collected,
 		UpdatedAt:         now,
 	}
-	if err := PublishShipmentUpdate(ctx, pool, buyer, payload, rt); err != nil {
+	if err := PublishShipmentUpdate(ctx, pool, buyer, payload, rt, nil); err != nil {
 		t.Fatalf("PublishShipmentUpdate: %v", err)
 	}
 	if len(*calls) != 1 {
@@ -464,7 +470,7 @@ func TestPublishShipmentUpdateEndToEnd(t *testing.T) {
 	}
 
 	// Missing identifiers are rejected before any network traffic.
-	if err := PublishShipmentUpdate(ctx, pool, buyer, ShipmentUpdatePayload{Status: "delivered"}, rt); err == nil {
+	if err := PublishShipmentUpdate(ctx, pool, buyer, ShipmentUpdatePayload{Status: "delivered"}, rt, nil); err == nil {
 		t.Fatalf("empty shipment payload should fail")
 	}
 }
