@@ -20,7 +20,7 @@ defmodule SutraChatWeb.InternalEventsController do
   """
   use SutraChatWeb, :controller
 
-  @known_events ~w(post:new follower:new shipment:update)
+  @known_events ~w(post:new follower:new shipment:update live:started live:ended)
   @topic_re ~r/\Auser:[^:]+\z/
 
   # post:new payload: everything a client needs to render the
@@ -32,6 +32,10 @@ defmodule SutraChatWeb.InternalEventsController do
   # must be a string. The chat never needs the numeric field to render;
   # the API guarantees it is an integer ≥ 0 on the wire.
   @shipment_update_required ~w(shipment_id order_id status updated_at)
+  # live:started / live:ended payload (G1): enough to render "you are on
+  # air" / "stream ended" on the host's own devices. ended_at is nil on
+  # live:started (optional key), so it is not in the required list.
+  @live_status_required ~w(room_id room_name title kind host_id started_at)
 
   def create(conn, _params) do
     with :ok <- check_auth(conn),
@@ -134,6 +138,12 @@ defmodule SutraChatWeb.InternalEventsController do
       {:ok, payload}
     end
   end
+
+  defp check_payload("live:started", payload),
+    do: check_required(payload, @live_status_required)
+
+  defp check_payload("live:ended", payload),
+    do: check_required(payload, @live_status_required)
 
   defp check_shipment_money(%{"cod_expected_paise" => paise})
        when is_integer(paise) and paise >= 0,

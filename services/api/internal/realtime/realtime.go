@@ -42,6 +42,14 @@ const (
 	// the chat fans it out on the BUYER's user:<subject> topic. F6's saga
 	// orchestrator is the producer; this package only owns the wire shape.
 	EventShipmentUpdate = "shipment:update"
+	// EventLiveStarted / EventLiveEnded are Wave-4 live events (G1): the
+	// API publishes them when a host opens or ends a live room, and the
+	// chat fans them out on the HOST's user:<subject> topic so the host's
+	// own devices (co-host tablet, moderation console) stay in sync.
+	// Viewers discover rooms via GET /v1/live/rooms/live and mint their
+	// own tokens — follower fan-out is a later refinement, not v1.
+	EventLiveStarted = "live:started"
+	EventLiveEnded   = "live:ended"
 )
 
 // internalPath is the chat service's internal event endpoint. It is fixed
@@ -98,6 +106,53 @@ type ShipmentUpdatePayload struct {
 	CODEExpectedPaise int64     `json:"cod_expected_paise"`
 	CODCollectedPaise *int64    `json:"cod_collected_paise,omitempty"` // nil = not reported yet
 	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+// LiveStatusPayload is the EventLiveStarted / EventLiveEnded payload:
+// everything a host-side client needs to render "you are on air" (or
+// ended) without a follow-up fetch. ended_at is nil for start events.
+type LiveStatusPayload struct {
+	RoomID    string     `json:"room_id"`
+	RoomName  string     `json:"room_name"` // SFU identifier, "sutra:<room_id>"
+	Title     string     `json:"title"`
+	Kind      string     `json:"kind"` // livestream | call
+	HostID    string     `json:"host_id"`
+	StartedAt time.Time  `json:"started_at"`
+	EndedAt   *time.Time `json:"ended_at,omitempty"`
+}
+
+// PublishLiveStatus emits EventLiveStarted / EventLiveEnded on the
+// HOST's user topic after a room opens or closes. It is called after
+// the room row commits, never before, so an event always describes
+// committed state. The dedupe key is (room, event, started-at-second):
+// a retried webhook or a double-tap "end" re-publishes the same key.
+// Errors are best-effort — logged by the caller, never fatal to the
+// API request.
+func PublishLiveStatus(ctx context.Context, pool *db.Pool, hostID pgtype.UUID, event string, roomID, roomName, title, kind string, startedAt time.Time, endedAt *time.Time, rt Publisher) error {
+	if event != EventLiveStarted && event != EventLiveEnded {
+		return fmt.Errorf("realtime: live event must be live:started or live:ended")
+	}
+	if !rt.Enabled() {
+		return nil
+	}
+	subject, err := subjectByID(ctx, pool, hostID)
+	if err != nil {
+		return err
+	}
+	return rt.Publish(ctx, Envelope{
+		Topics: []string{"user:" + subject},
+		Event:  event,
+		Payload: LiveStatusPayload{
+			RoomID:    roomID,
+			RoomName:  roomName,
+			Title:     title,
+			Kind:      kind,
+			HostID:    hostID.String(),
+			StartedAt: startedAt,
+			EndedAt:   endedAt,
+		},
+		DedupeKey: "live:" + roomID + ":" + event + ":" + strconv.FormatInt(startedAt.Unix(), 10),
+	})
 }
 
 // Publisher sends event envelopes to the chat service.
@@ -205,7 +260,8 @@ func (e Envelope) validate() error {
 		}
 	}
 	switch e.Event {
-	case EventPostNew, EventFollowerNew, EventShipmentUpdate:
+	case EventPostNew, EventFollowerNew, EventShipmentUpdate,
+		EventLiveStarted, EventLiveEnded:
 	default:
 		return fmt.Errorf("realtime: unknown event %q", e.Event)
 	}

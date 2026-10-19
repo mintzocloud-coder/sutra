@@ -24,6 +24,7 @@ import (
 	"github.com/mintzocloud-coder/sutra/services/api/internal/engagement"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/events"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/feed"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/live"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/logistics"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/media"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/middleware"
@@ -150,6 +151,27 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedS
 			media.MediaHandler(mediaSvc, log)))
 		v1.Handle("/v1/media/{id}/complete", methodGuard([]string{http.MethodPost},
 			media.CompleteHandler(mediaSvc, log)))
+	}
+
+	// Live media (G1, Wave 4): LiveKit SFU seam — room registry + token
+	// mint. liveSvc == nil (unit tests / disabled deployments) leaves
+	// the routes unregistered. An empty LIVEKIT_API_SECRET refuses boot
+	// fail-closed (see the config seam); a LiveKit server that is down
+	// does NOT refuse boot — minting fails 503 honestly at request
+	// time, and the room registry keeps working.
+	liveSvc := live.NewService(pool, cfg.LiveKitAPIKey, cfg.LiveKitAPISecret,
+		cfg.LiveKitWSURL, cfg.LiveTokenTTLMinutes)
+	if liveSvc.Enabled() {
+		v1.Handle("/v1/live/token", methodGuard([]string{http.MethodPost},
+			live.TokenHandler(liveSvc, pool, log)))
+		v1.Handle("/v1/live/rooms", live.RoomsHandler(liveSvc, pool, rt, log))
+		v1.Handle("/v1/live/rooms/{id}/end", methodGuard([]string{http.MethodPost},
+			live.EndRoomHandler(liveSvc, pool, rt, log)))
+		log.Info("live media enabled", "ws_url", cfg.LiveKitWSURL,
+			"token_ttl_minutes", cfg.LiveTokenTTLMinutes)
+	} else {
+		log.Warn("live media disabled — LIVEKIT_API_SECRET is not set; " +
+			"/v1/live/* routes are unregistered")
 	}
 
 	// Recommendations v1 (E5): the like store feeds the home-feed
@@ -508,6 +530,14 @@ func main() {
 	}
 	if rtPub.Enabled() {
 		log.Info("realtime events enabled", "chat", cfg.ChatInternalURL)
+	}
+
+	// Live media seam (G1): a LiveKit API key without its secret is a
+	// misconfiguration — refuse to boot rather than mint tokens nobody
+	// can verify. An empty key+secret pair simply disables the seam.
+	if cfg.LiveKitAPIKey != "" && cfg.LiveKitAPISecret == "" {
+		log.Error("LIVEKIT_API_KEY is set but LIVEKIT_API_SECRET is empty — refusing to start")
+		os.Exit(1)
 	}
 
 	// AI core (E1): proxy /v1/ai/* to the Python AI service. Empty token

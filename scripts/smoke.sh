@@ -305,6 +305,72 @@ pass "api /v1/me 200 with hydra-issued JWT (subject 'sutra-smoke', RS256 verifie
   || fail "/v1/me without token did not 401 — bypass still on?"
 pass "api /v1/me 401 without token (bypass confirmed off)"
 
+# --- Live media round-trip (G1) -------------------------------------------
+# LiveKit's dev keypair is baked into docker-compose.yml defaults, so the
+# Go live seam is enabled in smoke. Exercises: room open, host token
+# mint (canPublish), viewer token mint (subscribe-only, no publish),
+# on-air listing, room end (410 on post-end mint). The SFU itself is NOT
+# exercised — media bytes never touch the API; the webhook ingress that
+# reconciles crashed hosts against SFU truth lands in G1 part 2.
+echo "smoke: live room round-trip (G1)"
+room_json="$(curl -sf -H "Authorization: Bearer $access_token" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"smoke live","kind":"livestream"}' \
+  "$API_URL/v1/live/rooms")" || fail "POST /v1/live/rooms did not return 201"
+room_id="$(printf '%s' "$room_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+room_name="$(printf '%s' "$room_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["livekit_room_name"])')"
+[ "$room_name" = "sutra:$room_id" ] \
+  || fail "livekit_room_name '$room_name' != sutra:<room_id> — wire name must derive from the row id"
+pass "live room opened (id $room_id, wire name $room_name)"
+
+mint_token() { # role -> token JSON
+  curl -sf -H "Authorization: Bearer $access_token" \
+    -H "Content-Type: application/json" \
+    -d "{\"room_id\":\"$room_id\",\"role\":\"$1\"}" \
+    "$API_URL/v1/live/token"
+}
+host_tok="$(mint_token host | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')"
+[ "$(printf '%s' "$host_tok" | tr '.' '\n' | wc -l)" = "3" ] \
+  || fail "host token is not a 3-part JWT"
+host_grants="$(printf '%s' "$host_tok" | python3 -c '
+import json,sys,base64
+body = sys.stdin.read().strip().split(".")[1]
+body += "=" * (-len(body) % 4)
+c = json.loads(base64.urlsafe_b64decode(body))
+print(json.dumps(c["video"]))')"
+echo "$host_grants" | python3 -c 'import json,sys; v=json.load(sys.stdin); assert v["roomJoin"] and v["canPublish"], v' \
+  || fail "host token missing roomJoin/canPublish: $host_grants"
+[ "$(echo "$host_grants" | python3 -c 'import json,sys; print(json.load(sys.stdin)["room"])')" = "$room_name" ] \
+  && pass "host token minted (room-scoped to $room_name, canPublish)"
+
+viewer_tok="$(mint_token viewer | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')"
+printf '%s' "$viewer_tok" | python3 -c '
+import json,sys,base64
+body = sys.stdin.read().strip().split(".")[1]
+body += "=" * (-len(body) % 4)
+v = json.loads(base64.urlsafe_b64decode(body))["video"]
+assert v["roomJoin"] and v["canSubscribe"] and not v["canPublish"], v' \
+  || fail "viewer token grants are wrong (must be subscribe-only, no publish)"
+pass "viewer token minted (subscribe-only, no canPublish)"
+
+[ "$(curl -sf -H "Authorization: Bearer $access_token" "$API_URL/v1/live/rooms" \
+  | python3 -c 'import json,sys; print(sum(1 for r in json.load(sys.stdin) if r["status"]=="live"))')" -ge 1 ] \
+  || fail "GET /v1/live/rooms did not list the smoke room"
+pass "on-air listing shows the smoke room"
+
+[ "$(curl -sf -X POST -H "Authorization: Bearer $access_token" \
+  "$API_URL/v1/live/rooms/$room_id/end" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')" = "ended" ] \
+  || fail "POST /v1/live/rooms/{id}/end did not flip status to ended"
+pass "live room ended"
+
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $access_token" \
+  -H "Content-Type: application/json" \
+  -d "{\"room_id\":\"$room_id\",\"role\":\"viewer\"}" \
+  "$API_URL/v1/live/token")" = "410" ] \
+  || fail "token mint for an ended room did not 410"
+pass "token mint for ended room 410s"
+
 # --- AI core round-trip (E1) -------------------------------------------------
 # The Python AI service boots behind its fail-closed service token; the Go
 # API proxies /v1/ai/* to it with the same token plus the verified JWT

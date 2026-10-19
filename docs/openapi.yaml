@@ -1297,6 +1297,296 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /v1/live/token:
+    post:
+      tags: [live]
+      summary: Mint a LiveKit participant token
+      description: |
+        Issues a room-scoped, short-lived LiveKit participant JWT for
+        the given room (G1, Wave 4). The token's `video` grant is scoped
+        to the single room `sutra:<room_id>` — there are no admin or
+        wide grants. `role=host` requires the caller to be the room's
+        host (403 `not_room_host` otherwise) and grants media publish;
+        `role=viewer` is open to any authenticated user and grants
+        subscribe + data channel only. Minting for an ended room is
+        410 `live_room_ended`. Tokens expire after
+        `LIVEKIT_TOKEN_TTL_MINUTES` (default 120); clients re-mint on
+        expiry — there is no refresh grant.
+      operationId: mintLiveToken
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [room_id, role]
+              properties:
+                room_id:
+                  type: string
+                  format: uuid
+                  description: The live_rooms row id.
+                role:
+                  type: string
+                  enum: [host, viewer]
+                name:
+                  type: string
+                  description: Display hint for the SFU participant list.
+      responses:
+        '200':
+          description: Token minted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LiveToken'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Bad JSON body or room_id is not a UUID.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: role=host but the caller is not the room's host (not_room_host).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '404':
+          description: No live room with that id (`live_room_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '410':
+          description: The room has ended (`live_room_ended`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '422':
+          description: Bad title/kind/role values.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: Live is disabled on this deployment (`live_unavailable`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+
+  /v1/live/rooms:
+    post:
+      tags: [live]
+      summary: Open a live room
+      description: |
+        Creates a live_rooms row with the caller as host (status=live)
+        and publishes `live:started` on the host's `user:<subject>`
+        topic (best-effort; see docs/realtime-events.md). Clients then
+        mint their tokens via POST /v1/live/token.
+      operationId: createLiveRoom
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                kind:
+                  type: string
+                  enum: [livestream, call]
+                  default: livestream
+      responses:
+        '201':
+          description: Room opened.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LiveRoom'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Bad JSON body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: Bad title or kind.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: Live is disabled on this deployment (`live_unavailable`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+    get:
+      tags: [live]
+      summary: List rooms on air
+      description: |
+        Newest-first shelf of `status=live` rooms. Pagination is
+        `?limit=` (default 50, max 100) — the on-air feed is a shelf,
+        not a scroll.
+      operationId: listLiveRooms
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: Rooms on air.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LiveRoom'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: Live is disabled on this deployment (`live_unavailable`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+
+  /v1/live/rooms/{id}/end:
+    post:
+      tags: [live]
+      summary: End a live room
+      description: |
+        Flips the room to `status=ended` (idempotent — ending an ended
+        room succeeds) and publishes `live:ended` on the host's
+        `user:<subject>` topic (best-effort). Only the host may end
+        their room. The LiveKit webhook ingress (G1 part 2) reconciles
+        against SFU truth for crashed hosts.
+      operationId: endLiveRoom
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/LiveRoomId'
+      responses:
+        '200':
+          description: Room ended.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LiveRoom'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Room id is not a UUID.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: The caller is not the room's host (`not_room_host`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '404':
+          description: No live room with that id (`live_room_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: Live is disabled on this deployment (`live_unavailable`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+
   /v1/feed/home:
     get:
       tags: [feed]
@@ -2916,6 +3206,15 @@ components:
         type: string
         format: uuid
         example: 9c1f7a4d-2e6b-4a3f-8c5d-e7f9a1b2c3d4
+    LiveRoomId:
+      name: id
+      in: path
+      required: true
+      description: Live room UUID.
+      schema:
+        type: string
+        format: uuid
+        example: 5a8c1f2d-9b3e-4f6a-8c2d-1e5f7a9b3c4d
     PageLimit:
       name: limit
       in: query
@@ -3012,6 +3311,72 @@ components:
         loudly logged as insecure — never enable in production).
 
   schemas:
+    LiveRoom:
+      type: object
+      required: [id, host_id, title, kind, status, viewer_cap, created_at, livekit_room_name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        host_id:
+          type: string
+          format: uuid
+          description: The user id that opened the room.
+        title:
+          type: string
+          maxLength: 120
+        kind:
+          type: string
+          enum: [livestream, call]
+        status:
+          type: string
+          enum: [live, ended]
+        viewer_cap:
+          type: integer
+          description: Soft cap the client uses to show "room full" before joining.
+        created_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+          nullable: true
+        livekit_room_name:
+          type: string
+          description: |
+            The SFU-side room identifier clients join: "sutra:<room_id>".
+            Derived from the room id, never from the free-text title.
+          example: "sutra:5a8c1f2d-9b3e-4f6a-8c2d-1e5f7a9b3c4d"
+    LiveToken:
+      type: object
+      required: [token, ws_url, room_id, room_name, identity, role, expires_at, ttl_seconds]
+      properties:
+        token:
+          type: string
+          description: LiveKit participant JWT (HS256, signed with LIVEKIT_API_SECRET).
+        ws_url:
+          type: string
+          description: Client-reachable LiveKit websocket URL.
+          example: ws://localhost:7880
+        room_id:
+          type: string
+          format: uuid
+          description: The live_rooms row id.
+        room_name:
+          type: string
+          description: The SFU room to join.
+        identity:
+          type: string
+          description: The JWT sub — the caller's OIDC subject.
+        role:
+          type: string
+          enum: [host, viewer]
+        expires_at:
+          type: string
+          format: date-time
+        ttl_seconds:
+          type: integer
+          description: Seconds until the token expires (re-mint on expiry).
     User:
       type: object
       required: [id, subject, display_name, created_at, updated_at]

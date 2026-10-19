@@ -58,6 +58,27 @@ services:
     ports: ["4222:4222", "8222:8222"]
     volumes: [nats_data:/data]
 
+  # Live media (G1, Wave 4): LiveKit SFU (OSS, Apache-2.0) — the ONE
+  # blessed readymade in the stack. Pinned image. The Go API mints
+  # room-scoped participant JWTs against the keypair below; clients
+  # connect to ws://localhost:7880 (LIVEKIT_WS_URL).
+  #
+  # LIVEKIT_API_KEY / LIVEKIT_API_SECRET default to a DEV pair — every
+  # production deploy MUST override them (docs/production.md) and treat
+  # the pair like any other secret. 7880 = HTTP+WS signalling, 7881 =
+  # RTC/TCP, 7882 = RTC/UDP, 5349 = TURN/UDP (enabled for symmetric-NAT
+  # callers; TURN runs on the same host in dev). No healthcheck: the
+  # API's live seam degrades honestly (503) when the SFU is unreachable
+  # — the meilisearch precedent applies.
+  livekit:
+    image: livekit/livekit-server:v1.8.4
+    ports: ["7880:7880", "7881:7881", "7882:7882/udp", "5349:5349/udp"]
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:-sutra-dev-livekey}: ${LIVEKIT_API_SECRET:-sutra-dev-live-secret-change-me-in-production}"
+      LIVEKIT_TURN_ENABLED: "true"
+      LIVEKIT_TURN_UDP_PORT: "5349"
+    volumes: [livekit_data:/var/lib/livekit]
+
   seaweedfs:
     image: chrislusf/seaweedfs:3.92
     command: "server -dir=/data -volume.max=10 -master.volumeSizeLimitMB=1024 -ip=seaweedfs"
@@ -298,6 +319,19 @@ services:
       LOGISTICS_API_KEY: ${LOGISTICS_API_KEY:-}
       LOGISTICS_SECRET: ${LOGISTICS_SECRET:-}
       LOGISTICS_ENV: ${LOGISTICS_ENV:-}
+      # Live media (G1, Wave 4): LiveKit SFU seam. The api service passes
+      # the keypair through to the Go live seam (internal/live), which
+      # mints room-scoped participant JWTs. DEV DEFAULTS below must match
+      # the livekit service's LIVEKIT_KEYS default so `docker compose up`
+      # works on a laptop; production overrides both sides together
+      # (docs/production.md). Empty secret = /v1/live/* unregistered.
+      # ws://localhost:7880 (not the compose service name): this URL is
+      # handed to END-USER devices in the token response, and the port is
+      # published 7880:7880, so the laptop loopback is the right default.
+      LIVEKIT_WS_URL: "ws://localhost:7880"
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-sutra-dev-livekey}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-sutra-dev-live-secret-change-me-in-production}
+      LIVEKIT_TOKEN_TTL_MINUTES: ${LIVEKIT_TOKEN_TTL_MINUTES:-120}
     depends_on:
       postgres:
         condition: service_healthy
@@ -374,5 +408,6 @@ volumes:
   weeddata:
   meili_data:
   nats_data:
+  livekit_data:
   ollama-data:
   whisper-models:

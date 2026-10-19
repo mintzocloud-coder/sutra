@@ -183,5 +183,8 @@ refuse to boot (`internal/realtime.NewPublisher` error → `os.Exit(1)`).
 2. On `post:new`: render the notification from the payload; do NOT refetch
    unless you need fields outside the payload.
 3. On `follower:new`: refresh the follower count / list.
-4. Never trust events as the source of truth — timelines and profile
+4. On `live:started`: the host's own device should show "you are on air"
+   state; `live:ended` tears it down. Host-side clients subscribe to
+   these on their own `user:<subject>` topic (G1, Wave 4).
+5. Never trust events as the source of truth — timelines and profile
    endpoints are. Events are hints; fetches are facts.

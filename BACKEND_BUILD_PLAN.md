@@ -1829,6 +1829,18 @@ orchestration joins chat/presence).
   token minting (POST /v1/live/token, room-scoped, expiring), Elixir live
   orchestration (room lifecycle events → user:<id> topics), docs/live.md,
   OpenAPI + smoke (token mint + webhook round-trip).
+  - [x] G1 part 1 (2026-10-19): compose `livekit` (livekit/livekit-server:v1.8.4,
+    TURN on), config seam (LIVEKIT_*; key-without-secret refuses boot), migration
+    0014 live_rooms registry, Go internal/live (stdlib HS256 token mint,
+    room-scoped grants; /v1/live/token, /v1/live/rooms, /v1/live/rooms/{id}/end),
+    realtime live:started/live:ended events on the host's user topic,
+    Elixir internal-events controller accepts both events, docs/live.md,
+    OpenAPI paths + schemas, smoke.sh token-mint round-trip (host/viewer/410),
+    production.md LIVEKIT_* rows. Go build+vet+unit tests green; Elixir syntax
+    valid (CI is the compile gate).
+  - [ ] G1 part 2: LiveKit webhook ingress (POST /internal/livekit/webhook —
+    room_finished → flip room to ended + publish live:ended, crash-host
+    reconciliation), smoke webhook round-trip. Then G1 complete.
 - [ ] G2: Svix webhooks — Svix server in compose (pinned) + Go webhook
   dispatcher (platform events → per-app endpoints, signing, retries,
   delivery log), developer-facing webhook docs, OpenAPI + tests + smoke.
@@ -2146,3 +2158,15 @@ Then report to founder: production-ready backend live on main.
   the test did its job); (2) the runtime VM was replaced mid-run,
   wiping local PG16, so integration suites skip locally and CI is
   the gate. Pushed.
+
+- 2026-10-19 ~06:05 IST — G1 part 1: LiveKit live media core landed. Compose
+  `livekit` (v1.8.4 pinned, TURN enabled); LIVEKIT_* config seam with
+  key-without-secret fail-closed boot check; migration 0014 live_rooms;
+  Go internal/live (stdlib HS256 mint, room-scoped grants — host publish,
+  viewer subscribe-only; TTL 120m default); routes /v1/live/token,
+  /v1/live/rooms, /v1/live/rooms/{id}/end; live:started/live:ended
+  realtime events on the host's user topic; Elixir controller accepts
+  both; docs/live.md; OpenAPI; smoke.sh round-trip; production.md rows.
+  Verified: go build/vet clean, live+realtime unit tests green,
+  migration discovery green, openapi YAML parses, Elixir syntax valid
+  (CI = compile gate). Part 2 (webhook ingress) next run. Pushed.

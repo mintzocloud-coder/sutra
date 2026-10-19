@@ -51,6 +51,13 @@ type Config struct {
 	SeaweedMasterAddr  string // master for dir/assign, host:port; e.g. seaweedfs:9333
 	MediaPublicBaseURL string // client-reachable volume base URL for
 	// direct PUTs/downloads, e.g. http://localhost:8080 in dev
+	// Live media (G1, Wave 4): LiveKit SFU seam. Empty LiveKitAPISecret
+	// disables the whole /v1/live/* surface (dev default); a key with a
+	// bad/empty secret refuses to boot fail-closed in main.go.
+	LiveKitWSURL        string // client-reachable LiveKit WS URL, e.g. ws://localhost:7880
+	LiveKitAPIKey       string // LiveKit API key (iss claim of minted tokens)
+	LiveKitAPISecret    string // LiveKit API secret (HS256 signing key); never commit
+	LiveTokenTTLMinutes int    // participant token lifetime; <=0 = 120
 	// Transcode worker (D4b): background HLS pipeline draining
 	// media:transcode.
 	TranscodeGroup         string
@@ -187,6 +194,15 @@ func Load() Config {
 		}(),
 		SeaweedMasterAddr:  getEnv("SEAWEEDFS_MASTER_ADDR", "seaweedfs:9333"),
 		MediaPublicBaseURL: getEnv("MEDIA_PUBLIC_BASE_URL", "http://seaweedfs:8080"),
+		// Live media (G1, Wave 4): LiveKit SFU seam. Empty secret = the
+		// seam is disabled; the API never mints half-configured tokens.
+		LiveKitWSURL:     getEnv("LIVEKIT_WS_URL", "ws://localhost:7880"),
+		LiveKitAPIKey:    getEnv("LIVEKIT_API_KEY", ""),
+		LiveKitAPISecret: getEnv("LIVEKIT_API_SECRET", ""),
+		LiveTokenTTLMinutes: func() int {
+			n, _ := strconv.Atoi(getEnv("LIVEKIT_TOKEN_TTL_MINUTES", "120"))
+			return n
+		}(),
 		// Transcode worker (D4b): background video pipeline.
 		TranscodeGroup: func() string { return getEnv("TRANSCODE_GROUP", "transcode-workers") }(),
 		TranscodeConsumer: func() string {
