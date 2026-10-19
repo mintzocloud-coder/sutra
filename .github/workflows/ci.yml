@@ -31,6 +31,11 @@ jobs:
         run: npx --yes @redocly/cli@latest lint docs/openapi.yaml
       - name: OpenAPI coverage gate (single source of truth)
         run: python3 scripts/check_openapi_coverage.py
+      - name: SDK stub generation check (spec is machine-consumable)
+        # Gates G4 part 2: proves docs/openapi.yaml can serve as the single
+        # source of truth for client SDKs — a TypeScript stub generates from
+        # the spec and a real consumer compiles against it.
+        run: bash scripts/check_sdk_generation.sh
 
   compose:
     name: docker-compose validates

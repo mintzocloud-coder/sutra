@@ -2007,8 +2007,27 @@ orchestration joins chat/presence).
     → exit 1 naming the missing path + its main.go registration site;
     restored byte-identical; ci.yml YAML parses; SPDX header check
     green. No Go/Python code changed, so build/vet/test untouched.
-    Part 2 next: SDK stub generation check in CI, Docusaurus skeleton,
-    developer onboarding guide, docs/dev-platform.md.
+  - [x] G4 part 2a DONE 2026-10-19 ~09:45 IST: SDK stub generation check
+    in CI. New `scripts/check_sdk_generation.sh` (bash, SPDX header,
+    chmod +x) — generates a TypeScript client stub from
+    docs/openapi.yaml via `openapi-typescript@7` and compiles a real
+    consumer against it with `tsc@5 --strict` (moduleResolution bundler):
+    (1) surface assertions (`/v1/me`, `/v1/ai/chat`,
+    `/v1/webhooks/endpoints`, `/v1/mini-apps`, User/WebhookEndpoint/
+    MiniApp schemas), (2) path-parity assert (spec 50 paths == stub 50
+    path keys — generation silently dropping routes fails the build),
+    (3) the consumer (typed `GET /v1/me` response + `WebhookEndpoint.url`)
+    must compile clean, so consumer-facing shape drift breaks CI. CI
+    `openapi` job gains the "SDK stub generation check" step. New
+    `docs/dev-platform.md` (honest: SSOT gates + SDK check documented
+    as shipped; Docusaurus skeleton + developer onboarding guide
+    marked as landing in part 2b, no vapor promises). VERIFIED: the
+    full script run locally (openapi-typescript 7.13.0 → 226KB stub,
+    50/50 paths, consumer TSC-OK); ci.yml YAML parses; SPDX checker
+    green. Full CI execution is CI-gated (no docker on this VM).
+    Part 2b next: Docusaurus docs site skeleton (MIT), developer
+    onboarding guide (app keys, webhooks, mini-app submission), then
+    mark G4 [x].
 
 ## Phase H — Wave 5: Business AI + Ads + Subscriptions
 
@@ -2045,6 +2064,14 @@ All boxes ticked, CI green, `scripts/smoke.sh` passes, docs complete.
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-19 ~09:45 IST: G4 part 2a done — SDK stub generation check in
+  CI: new scripts/check_sdk_generation.sh (openapi-typescript@7 stub +
+  tsc@5 --strict consumer compile; surface assertions + 50/50 path
+  parity), CI `openapi` job step, new docs/dev-platform.md (SSOT gates +
+  SDK check as shipped; Docusaurus skeleton + onboarding guide honestly
+  marked as part 2b). Verified locally (stub 226KB, 50 paths, consumer
+  TSC-OK), YAML + SPDX green. G4 stays open for part 2b.
 
 - 2026-10-19 ~07:15 IST: G2 part 1 done — Svix server in compose
   (svix/svix-server:v1.101.0, Docker-Hub-verified pin) + Go stdlib-only
