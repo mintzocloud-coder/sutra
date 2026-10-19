@@ -283,7 +283,7 @@ echo "smoke: creating hydra oauth2 client 'sutra-smoke'"
 SMOKE_HYDRA_CLIENT_SECRET="${SMOKE_HYDRA_CLIENT_SECRET:-$(openssl rand -hex 24)}"
 # The jwt-bearer grant type is what makes Hydra mint JWT (not opaque)
 # access tokens. Tolerate "already exists" for SMOKE_KEEP_UP=1 re-runs.
-if ! docker compose run --rm hydra hydra create client \
+if ! docker compose run --rm hydra create client \
     --endpoint http://hydra:4445 \
     --id sutra-smoke \
     --secret "$SMOKE_HYDRA_CLIENT_SECRET" \
@@ -657,7 +657,7 @@ wait_for 120 "ai /healthz (stub model, H1)" curl -sf http://localhost:8000/healt
 biz_client="sutra-smoke-h-$(date +%s)"
 echo "smoke: creating hydra oauth2 client '$biz_client'"
 SMOKE_HYDRA_CLIENT_H_SECRET="$(openssl rand -hex 32)"
-if ! docker compose run --rm hydra hydra create client \
+if ! docker compose run --rm hydra create client \
     --endpoint http://hydra:4445 \
     --id "$biz_client" \
     --secret "$SMOKE_HYDRA_CLIENT_H_SECRET" \
@@ -741,7 +741,7 @@ pass "H1: fabricated price (₹999) blocked — safe fallback streamed, nothing 
 # before any guard, graph, or model call.
 biz2_client="sutra-smoke-h2-$(date +%s)"
 SMOKE_HYDRA_CLIENT_H2_SECRET="$(openssl rand -hex 32)"
-docker compose run --rm hydra hydra create client \
+docker compose run --rm hydra create client \
   --endpoint http://hydra:4445 \
   --id "$biz2_client" \
   --secret "$SMOKE_HYDRA_CLIENT_H2_SECRET" \
@@ -813,7 +813,7 @@ wait_for 120 "ai /healthz (agui rpm=1)" curl -sf http://localhost:8000/healthz
 agui_client="sutra-smoke-g-$(date +%s)"
 echo "smoke: creating hydra oauth2 client '$agui_client'"
 SMOKE_HYDRA_CLIENT_G_SECRET="${SMOKE_HYDRA_CLIENT_G_SECRET:-$(openssl rand -hex 16)}"
-if ! docker compose run --rm hydra hydra create client \
+if ! docker compose run --rm hydra create client \
     --endpoint http://hydra:4445 \
     --id "$agui_client" \
     --secret "$SMOKE_HYDRA_CLIENT_G_SECRET" \
@@ -876,7 +876,7 @@ echo "smoke: social follow round-trip (D2)"
 
 echo "smoke: creating hydra oauth2 client 'sutra-smoke-b'"
 SMOKE_HYDRA_CLIENT_B_SECRET="${SMOKE_HYDRA_CLIENT_B_SECRET:-$(openssl rand -hex 24)}"
-if ! docker compose run --rm hydra hydra create client \
+if ! docker compose run --rm hydra create client \
     --endpoint http://hydra:4445 \
     --id sutra-smoke-b \
     --secret "$SMOKE_HYDRA_CLIENT_B_SECRET" \
@@ -1407,7 +1407,7 @@ wait_for 90 "api /healthz (velocity caps on)" curl -sf "$API_URL/healthz"
 vel_client="sutra-smoke-v-$(date +%s)"
 echo "smoke: creating hydra oauth2 client '$vel_client'"
 SMOKE_HYDRA_CLIENT_V_SECRET="${SMOKE_HYDRA_CLIENT_V_SECRET:-$(openssl rand -hex 16)}"
-if ! docker compose run --rm hydra hydra create client \
+if ! docker compose run --rm hydra create client \
     --endpoint http://hydra:4445 \
     --id "$vel_client" \
     --secret "$SMOKE_HYDRA_CLIENT_V_SECRET" \
@@ -1486,7 +1486,7 @@ echo "smoke: commerce catalog round-trip (F1b)"
 com_client="sutra-smoke-c-$(date +%s)"
 echo "smoke: creating hydra oauth2 client '$com_client'"
 SMOKE_HYDRA_CLIENT_C_SECRET=${SMOKE_HYDRA_CLIENT_C_SECRET:-$(openssl rand -hex 16)}
-if ! docker compose run --rm hydra hydra create client \
+if ! docker compose run --rm hydra create client \
     --endpoint http://hydra:4445 \
     --id "$com_client" \
     --secret "$SMOKE_HYDRA_CLIENT_C_SECRET" \
@@ -1875,7 +1875,7 @@ wait_for 90 "api /healthz (search enabled)" curl -sf "$API_URL/healthz"
 search_client="sutra-smoke-s-$(date +%s)"
 echo "smoke: creating hydra oauth2 client '$search_client'"
 SMOKE_HYDRA_CLIENT_S_SECRET="$(openssl rand -hex 16)"
-if ! docker compose run --rm hydra hydra create client \
+if ! docker compose run --rm hydra create client \
     --endpoint http://hydra:4445 \
     --id "$search_client" \
     --secret "$SMOKE_HYDRA_CLIENT_S_SECRET" \
@@ -2112,7 +2112,7 @@ mdev_secret="$(openssl rand -hex 24)"
 muser_secret="$(openssl rand -hex 24)"
 for pair in "$mdev_client $mdev_secret" "$muser_client $muser_secret"; do
   set -- $pair
-  if ! docker compose run --rm hydra hydra create client \
+  if ! docker compose run --rm hydra create client \
       --endpoint http://hydra:4445 \
       --id "$1" \
       --secret "$2" \

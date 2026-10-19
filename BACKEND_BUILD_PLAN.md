@@ -2160,8 +2160,19 @@ with documented contracts until then.
       json.dumps SSE output confirmed. Full smoke execution is CI-gated
       (no docker daemon/compose plugin on this VM — precedent from
       G4 part 2a).
-    - [ ] H1 part 2b: CI-green confirmation of the new H1 smoke section
-      (check the smoke job on the part-2a push; if it fails, fix forward).
+    - [x] H1 part 2b DONE 2026-10-19 ~12:55 IST: CI-red triage.
+      Checked the smoke job on the H1 part-2a push (run 39206206216):
+      all jobs green EXCEPT the smoke job, which died at
+      "smoke FAIL: timed out waiting for kratos /health/alive". Triage
+      #5 (kratos serve boot fix) resolved the kratos boot; triage #6
+      then failed later with `Error: unknown command "hydra" for "hydra"`
+      at "hydra oauth2 client creation". ROOT CAUSE: smoke.sh ran
+      `docker compose run --rm hydra hydra create client` — the oryd
+      image's ENTRYPOINT is already `hydra`, so the extra token made
+      argv `hydra hydra create client`. FIXED all 9 occurrences in
+      scripts/smoke.sh to `docker compose run --rm hydra create client`;
+      `bash -n` green. Smoke CI re-runs on this push — confirm green
+      next run; if still red, continue triage there.
 - [ ] H2: Business integrations — WhatsApp Cloud API direct adapter
   (fail-closed stub; no BSP), Tally on-premise bridge design + stub,
   Zoho Books default adapter (fail-closed stub), docs/integrations.md
