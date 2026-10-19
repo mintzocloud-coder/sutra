@@ -2083,10 +2083,18 @@ memberships). GATED like payments: real WhatsApp/Tally/Zoho credentials
 and Cashfree production keys are post-investors — adapters fail closed
 with documented contracts until then.
 
-- [ ] H1: Business AI — Wave-2 stack reuse (LangGraph + AG-UI 1.0) for
+- [x] H1: Business AI — Wave-2 stack reuse (LangGraph + AG-UI 1.0) for
   business copilots (catalog Q&A, order insights), "never invent
   attributes" guardrail in prompts + eval, DPDP consent/purpose-limitation
   notes (duties live May 2027), docs/business-ai.md, tests + smoke.
+  H1 part 1 + parts 2a–2z all logged below. **H1 COMPLETE 2026-10-20
+  ~02:20 IST: CI-green CONFIRMED — run 39317941108 (the 2z push,
+  beb7a4be) finished with ALL 7 jobs green, including the Full-stack
+  smoke test (the first fully-green CI run in the project's history).
+  The smoke passed end-to-end: G3 mini-app section (triage #30's fix
+  held) and the H1 business section (grounded ₹1,299 SSE, fabricated-₹999
+  fallback, non-seller 403, 429 + Retry-After) all green.
+  H2 STAYS OPEN: next run starts H2 (business integrations).
   - [x] H1 part 1 DONE 2026-10-19 ~11:15 IST: business copilot core
     (Python, no Go changes — /v1/ai/* proxies the whole prefix).
     `POST /business` (Go serves as `/v1/ai/business`): LangGraph
@@ -2129,7 +2137,10 @@ with documented contracts until then.
     (no Go changes). H1 STAYS OPEN: part 2 = smoke.sh H1 round-trip
     (stub model: grounded question → true price in SSE; non-seller
     403; 429 paths) + CI-green confirmation.
-  - [ ] H1 part 2: smoke.sh H1 round-trip + CI-green confirmation.
+  - [x] H1 part 2: smoke.sh H1 round-trip + CI-green confirmation.
+    CLOSED 2026-10-20 ~02:20 IST — run 39317941108: all 7 jobs green,
+    Full-stack smoke test passed end-to-end (first fully-green CI run).
+    The 2a–2z triage cycle is done; every fix proven on the real stack.
     - [x] H1 part 2a DONE 2026-10-19 ~11:40 IST: smoke.sh H1 section.
       New "Business AI copilot round-trip (H1)" section in scripts/smoke.sh
       (placed after the E2 personal-AI section, before E6; CI's smoke job
@@ -2586,6 +2597,32 @@ with documented contracts until then.
   (fail-closed stub; no BSP), Tally on-premise bridge design + stub,
   Zoho Books default adapter (fail-closed stub), docs/integrations.md
   with post-investors onboarding checklists.
+  - [x] H2 part 1 DONE 2026-10-20 ~02:20 IST: `internal/integrations`
+    Go seam (house fail-closed pattern from payments/logistics):
+    WhatsAppProvider (SendText/SendTemplate, direct Meta Cloud API,
+    no BSP) + REAL `VerifyWebhookSignature` (X-Hub-Signature-256
+    HMAC-SHA256, pure crypto, fails closed on unset secret —
+    unit-tested against a known vector); TallyBridge (PostVoucher:
+    sales/journal, integer paise, ReferenceNo dedupe, bridge-agent
+    design); ZohoBooksProvider (CreateContact/CreateInvoice,
+    INR-only). Each: `New*` constructors take only "stub"/"" until
+    onboarding (real names refuse to boot), stubs return the same
+    typed `*ErrIntegrationDisabled` on every method. Config: 11 new
+    envs (WHATSAPP_PROVIDER/PHONE_NUMBER_ID/ACCESS_TOKEN/
+    WEBHOOK_VERIFY_TOKEN, TALLY_PROVIDER/BRIDGE_URL/BRIDGE_SECRET,
+    ZOHO_PROVIDER/CLIENT_ID/CLIENT_SECRET/REFRESH_TOKEN/ORG_ID);
+    main.go constructs all three at boot (fail-fast like payments;
+    WARN-loud stubs; set-but-ignored credential WARNs).
+    docs/integrations.md: design notes + the three post-investors
+    onboarding checklists (Meta app/phone/template approval + buyer
+    opt-in; bridge-agent install; Zoho self-client OAuth).
+    VERIFIED: gofmt/go build/go vet clean; 8/8 new tests green;
+    fail-closed proven LIVE — WHATSAPP_PROVIDER=bogus,
+    TALLY_PROVIDER=bridge, ZOHO_PROVIDER=books each exit 1 with the
+    typed error before the DB connect; SPDX checker green. One
+    self-inflicted gofmt nit fixed pre-push. H2 STAYS OPEN: part 2 =
+    send routes + /v1/webhooks/whatsapp inbound + per-seller Tally
+    wiring + smoke.
 - [ ] H3: Ads platform — custom Go GSP auction core (bid → rank → price),
   Promovolve (Apache-2.0) for creative serving, advertiser API
   (campaigns, budgets, targeting), reporting, docs/ads.md, OpenAPI +
@@ -2601,6 +2638,24 @@ All boxes ticked, CI green, `scripts/smoke.sh` passes, docs complete.
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-20 ~02:20 IST: **H1 COMPLETE — CI-green confirmed.** Run
+  39317941108 (the 2z push, beb7a4be) finished with ALL 7 jobs green,
+  including the Full-stack smoke test — the first fully-green CI run
+  in the project's history. The smoke passed end-to-end: triage #30's
+  MINIAPP_LAUNCH_SECRET compose fix held through the G3 mini-app
+  section, and the H1 business section passed (grounded ₹1,299 SSE,
+  fabricated-₹999 fallback, non-seller 403, 429 + Retry-After). This
+  closes the 30-triage cycle (2a–2z): every fix is now proven on the
+  real stack.
+- 2026-10-20 ~02:20 IST: H2 part 1 done — `internal/integrations` Go
+  seam (WhatsApp direct / Tally bridge / Zoho Books fail-closed stubs,
+  real HMAC webhook-signature verifier, config envs, boot fail-fast),
+  docs/integrations.md with the three post-investors checklists.
+  gofmt/build/vet clean, 8/8 tests green, fail-closed proven live
+  (bad provider names exit 1 before the DB connect). H2 STAYS OPEN:
+  part 2 = send routes + /v1/webhooks/whatsapp inbound + per-seller
+  Tally wiring + smoke.
 
 - 2026-10-20 ~01:15 IST: H1 part 2y done — CI-RED TRIAGE #29 (ROOT CAUSE
   FOUND, smoke.sh assertion bug — service code untouched). Run

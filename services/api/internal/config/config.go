@@ -129,6 +129,25 @@ type Config struct {
 	LogisticsAPIKey   string // LOGISTICS_API_KEY; unset = no live creds
 	LogisticsSecret   string // LOGISTICS_SECRET; never logged, never committed
 	LogisticsEnv      string // "sandbox" | "prod"; "" = unset
+	// Integrations (H2): business-integrations seams — WhatsApp Cloud
+	// API direct (no BSP), Tally on-premise bridge, Zoho Books. Each
+	// provider name is "stub" until the post-investors onboarding for
+	// that integration (see internal/integrations, docs/integrations.md);
+	// any other value makes the API refuse to boot (fail-closed).
+	// Credentials are loaded, never logged, never in repo; the stubs
+	// ignore them (and warn loudly if they are set).
+	WhatsAppProvider      string // "stub" until Meta onboarding
+	WhatsAppPhoneNumberID string // WHATSAPP_PHONE_NUMBER_ID; unset = no live creds
+	WhatsAppAccessToken   string // WHATSAPP_ACCESS_TOKEN; never logged, never committed
+	WhatsAppWebhookSecret string // WHATSAPP_WEBHOOK_VERIFY_TOKEN (Meta app secret); never logged
+	TallyProvider         string // "stub" until a merchant bridge agent is deployed
+	TallyBridgeURL        string // TALLY_BRIDGE_URL; the bridge agent's base URL
+	TallySharedSecret     string // TALLY_BRIDGE_SECRET; never logged, never committed
+	ZohoProvider          string // "stub" until Zoho OAuth onboarding
+	ZohoClientID          string // ZOHO_CLIENT_ID; unset = no live creds
+	ZohoClientSecret      string // ZOHO_CLIENT_SECRET; never logged, never committed
+	ZohoRefreshToken      string // ZOHO_REFRESH_TOKEN; never logged, never committed
+	ZohoOrgID             string // ZOHO_ORG_ID (INR organization)
 }
 
 func getEnv(key, fallback string) string {
@@ -294,5 +313,20 @@ func Load() Config {
 		LogisticsAPIKey:   getEnv("LOGISTICS_API_KEY", ""),
 		LogisticsSecret:   getEnv("LOGISTICS_SECRET", ""),
 		LogisticsEnv:      getEnv("LOGISTICS_ENV", ""),
+		// Integrations (H2): business-integration seams, all fail-closed
+		// stubs until the post-investors onboardings. Credentials are
+		// loaded, never logged, never in repo; stubs ignore them.
+		WhatsAppProvider:      getEnv("WHATSAPP_PROVIDER", "stub"),
+		WhatsAppPhoneNumberID: getEnv("WHATSAPP_PHONE_NUMBER_ID", ""),
+		WhatsAppAccessToken:   getEnv("WHATSAPP_ACCESS_TOKEN", ""),
+		WhatsAppWebhookSecret: getEnv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", ""),
+		TallyProvider:         getEnv("TALLY_PROVIDER", "stub"),
+		TallyBridgeURL:        getEnv("TALLY_BRIDGE_URL", ""),
+		TallySharedSecret:     getEnv("TALLY_BRIDGE_SECRET", ""),
+		ZohoProvider:          getEnv("ZOHO_PROVIDER", "stub"),
+		ZohoClientID:          getEnv("ZOHO_CLIENT_ID", ""),
+		ZohoClientSecret:      getEnv("ZOHO_CLIENT_SECRET", ""),
+		ZohoRefreshToken:      getEnv("ZOHO_REFRESH_TOKEN", ""),
+		ZohoOrgID:             getEnv("ZOHO_ORG_ID", ""),
 	}
 }

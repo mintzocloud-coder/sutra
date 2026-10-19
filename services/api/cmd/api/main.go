@@ -24,6 +24,7 @@ import (
 	"github.com/mintzocloud-coder/sutra/services/api/internal/engagement"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/events"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/feed"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/integrations"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/live"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/logistics"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/media"
@@ -540,6 +541,54 @@ func main() {
 	log.Warn("logistics: running with the fail-closed stub — shipment booking is DISABLED until a logistics partner is onboarded post-investors (see docs/logistics.md)")
 	if cfg.LogisticsAPIKey != "" || cfg.LogisticsSecret != "" {
 		log.Warn("logistics: LOGISTICS_* credentials are set but no real provider is wired — they are IGNORED; no shipments can be booked")
+	}
+
+	// Business-integrations seams (H2): fail fast on an unknown provider
+	// name for each of WhatsApp, Tally, and Zoho Books, so a
+	// misconfigured integration refuses to boot instead of silently
+	// delivering nothing. Until the post-investors onboardings complete,
+	// all three are the fail-closed stub (see internal/integrations):
+	// every operation is an explicit typed error — no WhatsApp message
+	// can be sent, no Tally voucher posted, no Zoho invoice created.
+	// The constructed providers are discarded for now and consumed by
+	// the H2 business-notification/accounting wiring landing in part 2.
+	// Real keys MUST come from the WHATSAPP_*/TALLY_*/ZOHO_*
+	// environment; they are never committed and never logged.
+	if _, err := integrations.NewWhatsApp(cfg.WhatsAppProvider, integrations.WhatsAppConfig{
+		PhoneNumberID:       cfg.WhatsAppPhoneNumberID,
+		AccessToken:         cfg.WhatsAppAccessToken,
+		WebhookVerifySecret: cfg.WhatsAppWebhookSecret,
+	}); err != nil {
+		log.Error("invalid WhatsApp config — refusing to start", "err", err)
+		os.Exit(1)
+	}
+	log.Warn("integrations: WhatsApp running with the fail-closed stub — order updates are DISABLED until the post-investors Meta Cloud API onboarding (see docs/integrations.md)")
+	if cfg.WhatsAppAccessToken != "" || cfg.WhatsAppPhoneNumberID != "" {
+		log.Warn("integrations: WHATSAPP_* credentials are set but no real provider is wired — they are IGNORED; no messages can be sent")
+	}
+	if _, err := integrations.NewTally(cfg.TallyProvider, integrations.TallyConfig{
+		BridgeURL:    cfg.TallyBridgeURL,
+		SharedSecret: cfg.TallySharedSecret,
+	}); err != nil {
+		log.Error("invalid Tally config — refusing to start", "err", err)
+		os.Exit(1)
+	}
+	log.Warn("integrations: Tally bridge running with the fail-closed stub — accounting vouchers are DISABLED until a merchant bridge agent is deployed post-investors (see docs/integrations.md)")
+	if cfg.TallyBridgeURL != "" {
+		log.Warn("integrations: TALLY_BRIDGE_URL is set but no real bridge is wired — it is IGNORED; no vouchers can be posted")
+	}
+	if _, err := integrations.NewZoho(cfg.ZohoProvider, integrations.ZohoConfig{
+		ClientID:     cfg.ZohoClientID,
+		ClientSecret: cfg.ZohoClientSecret,
+		RefreshToken: cfg.ZohoRefreshToken,
+		OrgID:        cfg.ZohoOrgID,
+	}); err != nil {
+		log.Error("invalid Zoho config — refusing to start", "err", err)
+		os.Exit(1)
+	}
+	log.Warn("integrations: Zoho Books running with the fail-closed stub — invoice sync is DISABLED until the post-investors Zoho OAuth onboarding (see docs/integrations.md)")
+	if cfg.ZohoClientID != "" || cfg.ZohoRefreshToken != "" {
+		log.Warn("integrations: ZOHO_* credentials are set but no real provider is wired — they are IGNORED; no invoices can be created")
 	}
 
 	// Database: connect (fail fast if unreachable) then apply pending
