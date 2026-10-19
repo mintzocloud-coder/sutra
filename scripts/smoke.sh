@@ -567,7 +567,43 @@ pass "svix-server up (management API answering, 8071)"
 # management-token auth is the real contract under test.
 SVIX_API_TOKEN="$SVIX_TOKEN" docker compose up -d --no-deps api
 wait_for 90 "api /healthz (webhooks enabled)" curl -sf "$API_URL/healthz"
-python3 - "$API_URL" <<'PYEOF' || fail "webhooks round-trip"
+# Triage #16 (2026-10-19): the 2j run proved the host-side probe is NOT
+# sufficient — it passed, yet the Go api's first Svix call still failed
+# at TCP connect (502 webhooks_upstream "webhook gateway is
+# unreachable") ~2s later. The host reaches svix-server through the
+# published port; the Go client reaches it through the compose-internal
+# name (http://svix-server:8071) — a different network path that can
+# fail independently (fresh-container DNS/NAT races, or the svix
+# listener flapping after the probe). Gate on the EXACT path the Go
+# client uses: wget from INSIDE the api container (alpine ships wget;
+# the HEALTHCHECK already relies on it).
+wait_for 90 "svix-server reachable from inside the api container" \
+  docker compose exec -T api wget -q -O /dev/null \
+  --header="Authorization: Bearer $SVIX_TOKEN" \
+  http://svix-server:8071/api/v1/app
+pass "svix-server reachable from the api container (Go client's path)"
+# Triage #16: if the round-trip still fails, dump the evidence the next
+# triage needs — container state, the svix-server log tail, and both
+# network paths re-probed — instead of the bare 502.
+dump_webhooks_diag() {
+  echo "smoke: webhooks round-trip failed — diagnostics:" >&2
+  docker compose ps svix-server api >&2 || true
+  echo "--- svix-server log tail:" >&2
+  docker compose logs --tail=80 svix-server >&2 || true
+  echo "--- host re-probe (localhost:8071):" >&2
+  curl -s -o /dev/null -w 'host probe http_code=%{http_code}\n' \
+    -H "Authorization: Bearer $SVIX_TOKEN" \
+    http://localhost:8071/api/v1/app >&2 || true
+  echo "--- container-path re-probe (api -> svix-server:8071):" >&2
+  if docker compose exec -T api wget -q -O /dev/null \
+    --header="Authorization: Bearer $SVIX_TOKEN" \
+    http://svix-server:8071/api/v1/app >&2; then
+    echo "container-path probe: OK" >&2
+  else
+    echo "container-path probe: FAIL" >&2
+  fi
+}
+python3 - "$API_URL" <<'PYEOF' || { dump_webhooks_diag; fail "webhooks round-trip"; }
 import json, sys, time, urllib.request, urllib.error
 api = sys.argv[1]
 HDRS = {"Authorization": "Bearer smoke-bypass", "Content-Type": "application/json"}

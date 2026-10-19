@@ -2255,6 +2255,33 @@ Then report to founder: production-ready backend live on main.
 
 ## Log
 
+- 2026-10-19 ~17:45 IST: H1 part 2k done — CI-RED TRIAGE #16. Run
+  39246655308 (the 2j push) finished 6/7 green; smoke RED again at
+  "smoke FAIL: webhooks round-trip" — SAME 502 `webhooks_upstream`
+  "webhook gateway is unreachable" as the 2i run, but this time the
+  triage-#15 host-side readiness probe PASSED first ("svix-server up
+  (management API answering, 8071)" at 11:44:58.89Z) and the Go call
+  still failed at 11:45:01.43Z. KEY FINDING: the host probe is NOT
+  sufficient. The host reaches svix-server through the PUBLISHED port
+  (localhost:8071); the Go client reaches it through the
+  compose-internal name (http://svix-server:8071) — a different network
+  path that can fail independently (fresh-container DNS/NAT race, or
+  the svix listener flapping after the probe; the traceback shows the
+  failure was FAST, ~1.5s, so ECONNREFUSED not a DNS timeout). The
+  failing assert is the FIRST python call (POST /v1/webhooks/endpoints
+  → Go EnsureApp → GET /api/v1/app/<uid>), i.e. the first Svix call
+  from the freshly recreated api container. FIX (scripts/smoke.sh G2
+  section only, no Go changes): (1) after the api recreate + /healthz,
+  gate on the EXACT path the Go client uses —
+  `docker compose exec -T api wget ... http://svix-server:8071/api/v1/app`
+  with the bearer token inside wait_for 90 (alpine ships wget; the
+  api HEALTHCHECK already relies on it); (2) on round-trip failure,
+  `dump_webhooks_diag` prints `docker compose ps`, the svix-server log
+  tail, and re-probes BOTH paths, so the next failure is
+  self-diagnosing instead of a bare 502. VERIFIED: bash -n green.
+  H1 part 2 STAYS OPEN: CI-green confirmation of the smoke job on this
+  push — next run checks it.
+
 - 2026-10-19 ~17:15 IST: H1 part 2j done — CI-RED TRIAGE #15. Run
   39243256144 (the 2i push) finished 6/7 green; smoke RED again at
   "smoke FAIL: webhooks round-trip" — new symptom: 502
