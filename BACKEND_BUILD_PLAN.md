@@ -1927,6 +1927,33 @@ orchestration joins chat/presence).
   runtime contract (Telegram model: iframe/WebView bridge, permission
   manifest, JS API surface), directory listing + install flow, Go service,
   docs/mini-apps.md, OpenAPI + tests + smoke.
+  - [x] G3 part 1 DONE 2026-10-19 ~08:35 IST: registry core. Migration
+    `0015_mini_apps.sql` — `mini_apps` (developer_id, name, immutable
+    first-come slug [a-z0-9-]{3,40} UNIQUE, icon/entry http(s) URLs,
+    manifest jsonb, version, status draft/published/suspended/archived +
+    set_updated_at trigger; partial index for the published-only
+    directory feed) + `mini_app_installs` (composite PK, cascade on
+    archive). New `internal/miniapp`: BridgePermissions allowlist (10
+    capabilities), manifest validation (subset of allowlist, dupes
+    rejected, metadata keys preserved), status transition matrix
+    (draft->published, published->suspended, suspended->published,
+    *->archived — terminal, no un-archive), idempotent install
+    (published-only) / uninstall, cursor-paged directory
+    (created_at,id keyset, opaque base64url). HTTP surface on main.go:
+    POST+GET /v1/mini-apps, GET/PATCH/DELETE /v1/mini-apps/{id},
+    POST {id}/publish, POST {id}/suspend, POST+DELETE {id}/install,
+    GET /v1/me/mini-apps — all behind RequireAuth, methodGuard 405s,
+    full error-envelope mapping (slug_taken 409, not_owner 403,
+    invalid_manifest, invalid_status_transition, install_not_allowed
+    422, archived→404). VERIFIED: go build+vet clean; full
+    `go test ./...` green — 3 pure unit suites (validation matrix,
+    transition matrix, cursor round-trip incl. malformed shapes) + 2
+    integration suites on real PG16 (full lifecycle: slug race,
+    non-owner 403s, draft/suspended not installable, install
+    idempotency, shelf with entry_url+manifest, suspend/resume,
+    archive-terminal; directory: 3 published newest-first across 2
+    pages + draft leak check). Next: G3 part 2 (runtime contract +
+    docs/mini-apps.md + OpenAPI + smoke round-trip).
 - [ ] G4: Dev platform — OpenAPI promoted to single source of truth
   (SDK stub generation check in CI), Docusaurus docs site skeleton (MIT),
   developer onboarding guide (app keys, webhooks, mini-app submission),
@@ -2261,3 +2288,5 @@ Then report to founder: production-ready backend live on main.
   (CI = compile gate). Part 2 (webhook ingress) next run. Pushed.
 
 - 2026-10-19 ~06:35 IST: G1 part 2 done (see G1 task note) — webhook ingress + crash-host sweeper; new internal/live/{webhook,reconcile}.go, config + main.go wiring, docs/live.md + production.md + compose env, smoke.sh webhook round-trip. Verified: gofmt/build/vet clean, full go test green (3 new webhook tests), bash -n on smoke.sh, compose YAML parse below. CI-gated for the live run. **G1 COMPLETE; Phase G continues with G2 (Svix webhooks).**
+
+- 2026-10-19 ~08:40 IST: G3 part 1 done (see G3 task note) — mini-app registry: migration 0015, internal/miniapp (service + handlers + cursor), main.go route wiring. Verified: go build+vet clean, full go test ./... green incl. 2 integration suites on real PG16 (lifecycle + directory pagination). Part 2 (sandboxed runtime contract, docs/mini-apps.md, OpenAPI, smoke round-trip) next run. Pushed.

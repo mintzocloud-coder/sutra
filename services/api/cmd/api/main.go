@@ -28,6 +28,7 @@ import (
 	"github.com/mintzocloud-coder/sutra/services/api/internal/logistics"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/media"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/middleware"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/miniapp"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/oidc"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/orders"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/otp"
@@ -214,6 +215,21 @@ func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *
 		log.Info("developer webhook routes registered",
 			"routes", "/v1/webhooks/endpoints,/v1/webhooks/events,/v1/webhooks/deliveries")
 	}
+
+	// Mini-app registry (G3 part 1): developer registration of sandboxed
+	// mini-apps, the public published-only directory, status transitions,
+	// and the per-user installed shelf. The {id}/{action} route carries
+	// publish/suspend/install actions; AppMux dispatches on the action
+	// path value (empty action = the bare item route).
+	miniappSvc := miniapp.NewService(pool)
+	v1.Handle("/v1/mini-apps", methodGuard([]string{http.MethodPost, http.MethodGet},
+		miniapp.AppsMux(pool, miniappSvc, log)))
+	v1.Handle("/v1/mini-apps/{id}", methodGuard([]string{http.MethodGet, http.MethodPatch, http.MethodDelete},
+		miniapp.AppMux(pool, miniappSvc, log)))
+	v1.Handle("/v1/mini-apps/{id}/{action}", methodGuard([]string{http.MethodPost, http.MethodDelete},
+		miniapp.AppMux(pool, miniappSvc, log)))
+	v1.Handle("/v1/me/mini-apps", methodGuard([]string{http.MethodGet},
+		miniapp.MyInstallsHandler(pool, miniappSvc, log)))
 
 	// Recommendations v1 (E5): the like store feeds the home-feed
 	// ranker. Created ahead of the feed block so the /v1/feed/home
