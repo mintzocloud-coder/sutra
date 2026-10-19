@@ -1989,6 +1989,26 @@ orchestration joins chat/presence).
   (SDK stub generation check in CI), Docusaurus docs site skeleton (MIT),
   developer onboarding guide (app keys, webhooks, mini-app submission),
   docs/dev-platform.md. Then Phase G complete.
+  - [x] G4 part 1 DONE 2026-10-19 ~09:20 IST: spec-as-SSOT coverage gate.
+    New `scripts/check_openapi_coverage.py` (stdlib-only, SPDX header) —
+    parses route registrations out of `services/api/cmd/api/main.go`
+    (methodGuard methods where declared; path-level for internally
+    dispatched handlers), expands `/v1/mini-apps/{id}/{action}` by
+    PARSING the AppMux `case action == ...` dispatch in
+    internal/miniapp/handler.go (cannot rot), asserts: every code route
+    is in docs/openapi.yaml (path + method level), every spec path is
+    served by the code (no stale docs), `/internal/livekit/webhook`
+    is NOT in the public spec (and still registered), the `/v1/ai`
+    reverse-proxy prefix is documented via concrete sub-paths. CI
+    `openapi` job now runs the gate alongside the redocly lint — a
+    drifting spec fails the build. VERIFIED: gate passes on the real
+    tree (50 spec paths, 46 expanded code routes, 9 dispatched
+    path-level); negative test (deleted /v1/feed/home from a copy)
+    → exit 1 naming the missing path + its main.go registration site;
+    restored byte-identical; ci.yml YAML parses; SPDX header check
+    green. No Go/Python code changed, so build/vet/test untouched.
+    Part 2 next: SDK stub generation check in CI, Docusaurus skeleton,
+    developer onboarding guide, docs/dev-platform.md.
 
 ## Phase H — Wave 5: Business AI + Ads + Subscriptions
 
@@ -2323,3 +2343,5 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-19 ~08:40 IST: G3 part 1 done (see G3 task note) — mini-app registry: migration 0015, internal/miniapp (service + handlers + cursor), main.go route wiring. Verified: go build+vet clean, full go test ./... green incl. 2 integration suites on real PG16 (lifecycle + directory pagination). Part 2 (sandboxed runtime contract, docs/mini-apps.md, OpenAPI, smoke round-trip) next run. Pushed.
 
 - 2026-10-19 ~09:00 IST: G3 part 2 done (see G3 task note) — sandboxed runtime contract: internal/miniapp/bridge.go (closed JS bridge API surface, MethodAllowed gating, HMAC-SHA256 5-min launch token, Service.Launch gate), POST /v1/mini-apps/{id}/launch (403 launch_not_allowed, 503 launch_unavailable fail-closed; MINIAPP_LAUNCH_SECRET env + loud boot WARN), docs/mini-apps.md (trust model, launch flow, init data, JS API table, security rules, dev checklist), OpenAPI mini-apps tag + 7 paths + 7 schemas (redocly valid), smoke.sh G3 part-2 round-trip incl. offline HMAC verification + fail-closed 503 proof. Verified: gofmt/build/vet green, miniapp tests green (bridge matrix, token tamper/expiry/malformed, launch-gate integration), bash -n smoke.sh, SPDX headers green. CI gates the live stack run. **G3 COMPLETE; Phase G continues with G4 (dev platform).**
+
+- 2026-10-19 ~09:20 IST: G4 part 1 done (see G4 task note) — OpenAPI single-source-of-truth coverage gate: new scripts/check_openapi_coverage.py (stdlib-only) + CI openapi job runs it with the redocly lint. Gate proven non-vacuous via a negative drift test (exit 1, names the missing path + registration site). Spec needed no fixes — 50 paths already faithful. Part 2 (SDK stub gen check in CI, Docusaurus skeleton, onboarding guide, docs/dev-platform.md) next run. Pushed.
