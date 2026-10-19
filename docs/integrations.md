@@ -127,3 +127,20 @@ Note: the webhook lives at `/internal/*` (public by necessity — Meta
 calls it), not under `/v1/*`, which is behind RequireAuth. The OpenAPI
 coverage gate tracks it as an internal route, same as
 `/internal/livekit/webhook`.
+
+## Routes (H2 part 2b — shipped)
+
+- `POST /v1/integrations/tally/vouchers` (behind RequireAuth,
+  seller-scoped): posts a `sales`/`journal` voucher to the seller's own
+  on-premise bridge agent. Amounts are integer paise (positive = debit,
+  negative = credit); the voucher grammar is validated up front —
+  calendar-valid YYYYMMDD, non-empty `reference_no`, 1–100 ledger lines,
+  non-zero per-line amounts capped at ₹10 crore, no duplicate ledgers,
+  and the lines must balance to zero. Invalid grammar → 400
+  `invalid_request`; no seller account → 403 `not_a_seller`. Per-seller
+  wiring: the bridge is resolved from the `seller_tally_bridges` registry
+  (migration 0016) — one row per seller, `seller_id` PK, FK-cascade on
+  seller delete, bridge secrets deliberately NOT stored. No registered
+  bridge → 503 `tally_not_registered`; registered but only the stub
+  wired → 503 `tally_unavailable`; Retry-After on both. Post-investors
+  the real per-seller bridge returns 202 with the bridge job id.

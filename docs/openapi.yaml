@@ -3580,6 +3580,78 @@ paths:
           headers:
             Retry-After:
               $ref: '#/components/headers/RetryAfter'
+  /v1/integrations/tally/vouchers:
+    post:
+      tags: [integrations]
+      summary: Post a Tally voucher (seller-scoped, per-seller bridge)
+      description: |
+        Posts a sales or journal voucher to the seller's own on-premise
+        Tally bridge agent. The bridge is resolved PER SELLER from the
+        `seller_tally_bridges` registry (migration 0016) — never from a
+        global config — so one seller's agent can never see another
+        seller's vouchers. Amounts are integer paise (positive = debit,
+        negative = credit) and the lines must balance to zero; `date`
+        is a calendar-valid YYYYMMDD.
+
+        Until the post-investors bridge-agent deployment, every post
+        fails closed: no bridge registered → 503 `tally_not_registered`;
+        registered but no real provider wired → 503 `tally_unavailable`.
+        Retry-After is present on both — the API never implies a voucher
+        was posted.
+      operationId: postTallyVoucher
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TallyVoucherRequest'
+      responses:
+        '202':
+          description: Voucher accepted by the seller's bridge agent (bridge job id).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TallyVoucherResult'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Bad voucher grammar — bad kind/date, empty reference_no, empty/unbalanced/duplicate lines, over-cap amounts (`invalid_request`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Caller owns no seller account (`not_a_seller`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: The seller's bridge agent failed to accept the voucher (`tally_upstream`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: No bridge registered for this seller (`tally_not_registered`) or Tally posting is not wired on this deployment (`tally_unavailable`); Retry-After present.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
   /v1/mini-apps:
     post:
       tags: [mini-apps]
@@ -4562,6 +4634,56 @@ components:
                       maxLength: 1000
       description: |
         Exactly one of `text` or `template` is required.
+    TallyVoucherResult:
+      type: object
+      required: [job_id]
+      properties:
+        job_id:
+          type: string
+          description: Bridge-agent job id (posting into Tally Prime is the agent's asynchronous job).
+          example: job-42
+    TallyVoucherRequest:
+      type: object
+      required: [kind, date, reference_no, lines]
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum: [sales, journal]
+          description: Tally voucher type.
+          example: sales
+        date:
+          type: string
+          pattern: ^[0-9]{8}$
+          description: Voucher date, calendar-valid YYYYMMDD (Tally's XML date format).
+          example: '20261020'
+        reference_no:
+          type: string
+          maxLength: 128
+          description: Our order id — the dedupe key at the bridge agent.
+          example: ORD-2026-1042
+        narration:
+          type: string
+          maxLength: 1000
+        lines:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: object
+            required: [ledger_name, amount_paise]
+            additionalProperties: false
+            properties:
+              ledger_name:
+                type: string
+                maxLength: 128
+                example: Cash
+              amount_paise:
+                type: integer
+                description: Integer paise; positive = debit, negative = credit, non-zero, capped at ₹10 crore per line.
+                example: 129900
+      description: |
+        Ledger lines must balance: debits and credits net to zero.
     WebhookMessage:
       type: object
       required: [id, event_type]

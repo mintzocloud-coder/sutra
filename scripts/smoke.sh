@@ -921,6 +921,122 @@ pass "H1: per-user business rate limit 429 ai_rate_limited + Retry-After (JSON, 
 docker compose up -d --no-deps ai
 wait_for 120 "ai /healthz (defaults restored, post-H1)" curl -sf http://localhost:8000/healthz
 
+# --- Business integrations fail-closed proof (H2) ---------------------------
+# WhatsApp and Tally are post-investors seams: every call must fail
+# CLOSED with an honest 503 + Retry-After (never imply delivery), and
+# the webhook handshake must refuse without a configured verify token.
+# Reuses the H1 identities: $token_h owns a seller store, $token_h2 owns
+# nothing (non-seller).
+echo "smoke: business integrations fail-closed (H2)"
+
+# WhatsApp send: the stub fails closed → 503 whatsapp_unavailable +
+# Retry-After, never a fake 202.
+wa_body="$(mktemp)"; wa_hdr="$(mktemp)"
+wa_code="$(curl -s -o "$wa_body" -D "$wa_hdr" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_h" -H 'Content-Type: application/json' \
+  -d '{"to":"+919876543210","text":"your order has shipped"}' \
+  "$API_URL/v1/integrations/whatsapp/send")"
+[ "$wa_code" = "503" ] || { rm -f "$wa_body" "$wa_hdr"; fail "H2: WhatsApp send did not fail closed 503 (got $wa_code)"; }
+[ "$(python3 -c 'import json; print(json.load(open("'"$wa_body"'"))["error"]["code"])')" = "whatsapp_unavailable" ] \
+  || { rm -f "$wa_body" "$wa_hdr"; fail "H2: WhatsApp send envelope code is not whatsapp_unavailable"; }
+grep -qi '^Retry-After: [1-9]' "$wa_hdr" \
+  || { rm -f "$wa_body" "$wa_hdr"; fail "H2: WhatsApp send 503 missing Retry-After header"; }
+rm -f "$wa_body" "$wa_hdr"
+pass "H2: WhatsApp send fails closed — 503 whatsapp_unavailable + Retry-After"
+
+# WhatsApp send: no token → 401; non-seller → 403 not_a_seller.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+  -d '{"to":"+919876543210","text":"x"}' "$API_URL/v1/integrations/whatsapp/send")" = "401" ] \
+  || fail "H2: unauthenticated WhatsApp send did not return 401"
+wa_ns_body="$(mktemp)"
+wa_ns_code="$(curl -s -o "$wa_ns_body" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_h2" -H 'Content-Type: application/json' \
+  -d '{"to":"+919876543210","text":"x"}' "$API_URL/v1/integrations/whatsapp/send")"
+[ "$wa_ns_code" = "403" ] || { rm -f "$wa_ns_body"; fail "H2: non-seller WhatsApp send did not return 403 (got $wa_ns_code)"; }
+[ "$(python3 -c 'import json; print(json.load(open("'"$wa_ns_body"'"))["error"]["code"])')" = "not_a_seller" ] \
+  || { rm -f "$wa_ns_body"; fail "H2: non-seller WhatsApp envelope code is not not_a_seller"; }
+rm -f "$wa_ns_body"
+pass "H2: WhatsApp send — 401 without token, 403 not_a_seller for non-seller"
+
+# Webhook hub-challenge: the verify token is unset in the default stack
+# (compose passthrough expands to empty), so the handshake must fail
+# closed 401 rather than echo.
+[ "$(curl -s -o /dev/null -w '%{http_code}' \
+  "$API_URL/internal/whatsapp/webhook?hub.mode=subscribe&hub.verify_token=anything&hub.challenge=abc")" = "401" ] \
+  || fail "H2: webhook handshake with unset secret did not fail closed 401"
+
+# Webhook hub-challenge: recreate the api with the verify token — the
+# handshake must echo the challenge verbatim; a wrong token → 403.
+echo "smoke: recreating api with WHATSAPP_WEBHOOK_VERIFY_TOKEN"
+WHATSAPP_WEBHOOK_VERIFY_TOKEN=smoke-hook-secret docker compose up -d --no-deps api
+wait_for 120 "api /healthz (webhook secret set)" curl -sf "$API_URL/healthz"
+challenge="$(curl -sf "$API_URL/internal/whatsapp/webhook?hub.mode=subscribe&hub.verify_token=smoke-hook-secret&hub.challenge=ch123")" \
+  || fail "H2: webhook handshake failed with the correct verify token"
+[ "$challenge" = "ch123" ] || fail "H2: webhook handshake did not echo the challenge verbatim"
+[ "$(curl -s -o /dev/null -w '%{http_code}' \
+  "$API_URL/internal/whatsapp/webhook?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=ch123")" = "403" ] \
+  || fail "H2: webhook handshake with the wrong token did not return 403"
+pass "H2: webhook handshake — 401 fail-closed unset, 200 verbatim echo with token, 403 wrong token"
+
+# Webhook POST: the signature check is real HMAC — a forged signature
+# must be refused 401 before any body is parsed.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'X-Hub-Signature-256: sha256=deadbeef' \
+  -H 'Content-Type: application/json' -d '{"object":"whatsapp_business_account"}' \
+  "$API_URL/internal/whatsapp/webhook")" = "401" ] \
+  || fail "H2: webhook POST with forged signature did not return 401"
+pass "H2: webhook POST with forged X-Hub-Signature-256 → 401"
+
+# Restore the default (secretless) api configuration for the rest of the
+# run — the secretless recreate re-proves the fail-closed contract.
+docker compose up -d --no-deps api
+wait_for 120 "api /healthz (webhook secret unset, restored)" curl -sf "$API_URL/healthz"
+[ "$(curl -s -o /dev/null -w '%{http_code}' \
+  "$API_URL/internal/whatsapp/webhook?hub.mode=subscribe&hub.verify_token=anything&hub.challenge=abc")" = "401" ] \
+  || fail "H2: webhook handshake after secretless restore did not fail closed 401"
+pass "H2: secretless restore — handshake fails closed 401 again"
+
+# Tally voucher: the seller has no bridge registered in
+# seller_tally_bridges → 503 tally_not_registered + Retry-After.
+tally_body="$(mktemp)"; tally_hdr="$(mktemp)"
+tally_code="$(curl -s -o "$tally_body" -D "$tally_hdr" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_h" -H 'Content-Type: application/json' \
+  -d '{"kind":"sales","date":"20261020","reference_no":"SMOKE-TALLY-1","lines":[{"ledger_name":"Cash","amount_paise":129900},{"ledger_name":"Sales","amount_paise":-129900}]}' \
+  "$API_URL/v1/integrations/tally/vouchers")"
+[ "$tally_code" = "503" ] || { rm -f "$tally_body" "$tally_hdr"; fail "H2: Tally voucher did not fail closed 503 (got $tally_code)"; }
+[ "$(python3 -c 'import json; print(json.load(open("'"$tally_body"'"))["error"]["code"])')" = "tally_not_registered" ] \
+  || { rm -f "$tally_body" "$tally_hdr"; fail "H2: Tally voucher envelope code is not tally_not_registered"; }
+grep -qi '^Retry-After: [1-9]' "$tally_hdr" \
+  || { rm -f "$tally_body" "$tally_hdr"; fail "H2: Tally voucher 503 missing Retry-After header"; }
+rm -f "$tally_body" "$tally_hdr"
+pass "H2: Tally voucher fails closed — 503 tally_not_registered + Retry-After"
+
+# Tally voucher: no token → 401; non-seller → 403 not_a_seller;
+# unbalanced voucher → 400 invalid_request (grammar validated before any
+# bridge call).
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+  -d '{"kind":"sales","date":"20261020","reference_no":"R","lines":[{"ledger_name":"Cash","amount_paise":100},{"ledger_name":"Sales","amount_paise":-100}]}' \
+  "$API_URL/v1/integrations/tally/vouchers")" = "401" ] \
+  || fail "H2: unauthenticated Tally voucher did not return 401"
+tally_ns_body="$(mktemp)"
+tally_ns_code="$(curl -s -o "$tally_ns_body" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_h2" -H 'Content-Type: application/json' \
+  -d '{"kind":"sales","date":"20261020","reference_no":"R","lines":[{"ledger_name":"Cash","amount_paise":100},{"ledger_name":"Sales","amount_paise":-100}]}' \
+  "$API_URL/v1/integrations/tally/vouchers")"
+[ "$tally_ns_code" = "403" ] || { rm -f "$tally_ns_body"; fail "H2: non-seller Tally voucher did not return 403 (got $tally_ns_code)"; }
+[ "$(python3 -c 'import json; print(json.load(open("'"$tally_ns_body"'"))["error"]["code"])')" = "not_a_seller" ] \
+  || { rm -f "$tally_ns_body"; fail "H2: non-seller Tally envelope code is not not_a_seller"; }
+rm -f "$tally_ns_body"
+tally_bad_body="$(mktemp)"
+tally_bad_code="$(curl -s -o "$tally_bad_body" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_h" -H 'Content-Type: application/json' \
+  -d '{"kind":"sales","date":"20261020","reference_no":"R","lines":[{"ledger_name":"Cash","amount_paise":100},{"ledger_name":"Sales","amount_paise":-99}]}' \
+  "$API_URL/v1/integrations/tally/vouchers")"
+[ "$tally_bad_code" = "400" ] || { rm -f "$tally_bad_body"; fail "H2: unbalanced Tally voucher did not return 400 (got $tally_bad_code)"; }
+[ "$(python3 -c 'import json; print(json.load(open("'"$tally_bad_body"'"))["error"]["code"])')" = "invalid_request" ] \
+  || { rm -f "$tally_bad_body"; fail "H2: unbalanced Tally envelope code is not invalid_request"; }
+rm -f "$tally_bad_body"
+pass "H2: Tally voucher — 401 without token, 403 not_a_seller, 400 invalid_request on unbalanced lines"
+
 # --- AG-UI rate-limit guard (E6) -------------------------------------------
 # The /ag-ui/run echo endpoint costs no model tokens, but before E6 it was
 # the one AI endpoint with no per-user limit — an unbounded SSE stream is

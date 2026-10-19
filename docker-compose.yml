@@ -293,6 +293,14 @@ services:
       # registration post-incorporation. Any other value makes the API
       # refuse to boot (fail-closed) — see internal/otp + docs/identity.md.
       OTP_PROVIDER: "stub"
+      # Business integrations (H2, Wave 5): WhatsApp Cloud API webhook
+      # verify token (the Meta app secret for the hub-challenge handshake
+      # and X-Hub-Signature-256 inbound checks). Empty (the default)
+      # DISABLES the handshake fail-closed (401
+      # whatsapp_webhook_unconfigured, loud boot WARN); scripts/smoke.sh
+      # sets it for the round-trip and recreates secretless at the end
+      # to prove the fail-closed contract. Never commit a real secret.
+      WHATSAPP_WEBHOOK_VERIFY_TOKEN: ${WHATSAPP_WEBHOOK_VERIFY_TOKEN:-}
       # Dev-only auth bypass for scripts/smoke.sh (the API logs a loud
       # WARN when this is set; never enable in production).
       AUTH_BYPASS: ${AUTH_BYPASS:-}

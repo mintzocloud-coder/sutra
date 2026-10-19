@@ -67,8 +67,10 @@ func methodGuard(allowed []string, h http.Handler) http.HandlerFunc {
 // keep their original text. whClient may be nil or disabled: the
 // developer webhook routes (G2 part 2) are then unregistered. waProvider
 // may be nil: the send route answers 503; the /internal/whatsapp/webhook
-// is always registered (the HMAC check needs no provider).
-func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, mediaSvc *media.Service, rt realtime.Publisher, aiProxy *aiproxy.Proxy, log *slog.Logger, translator *feed.Translator, searchClient *search.Client, orderBus events.EventBus, whClient *webhooks.Client, waProvider integrations.WhatsAppProvider) http.Handler {
+// is always registered (the HMAC check needs no provider). tallyBridge
+// may be nil: the voucher route answers 503 (the registry lookup runs
+// regardless).
+func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, mediaSvc *media.Service, rt realtime.Publisher, aiProxy *aiproxy.Proxy, log *slog.Logger, translator *feed.Translator, searchClient *search.Client, orderBus events.EventBus, whClient *webhooks.Client, waProvider integrations.WhatsAppProvider, tallyBridge integrations.TallyBridge) http.Handler {
 	auth := middleware.RequireAuth(verifier, log, middleware.AuthOptions{
 		Bypass:        cfg.AuthBypass,
 		BypassSubject: cfg.BypassSubject,
@@ -121,6 +123,17 @@ func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *
 		waHandler.Webhook()))
 	log.Info("whatsapp routes registered",
 		"routes", "/v1/integrations/whatsapp/send,/internal/whatsapp/webhook")
+
+	// Tally voucher route (H2 part 2b): per-seller accounting vouchers
+	// through the on-premise bridge agent. The bridge is resolved per
+	// seller from the seller_tally_bridges registry — never globally —
+	// and the stub fails closed with 503 (never implies a voucher was
+	// posted).
+	tallyHandler := integrations.NewTallyHandler(pool, tallyBridge, log)
+	v1.Handle("/v1/integrations/tally/vouchers", methodGuard([]string{http.MethodPost},
+		tallyHandler.PostVoucher()))
+	log.Info("tally route registered",
+		"route", "/v1/integrations/tally/vouchers")
 	v1.Handle("/v1/me", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			middleware.MethodNotAllowedHandler(http.MethodGet)(w, r)
@@ -567,13 +580,15 @@ func main() {
 	// every operation is an explicit typed error — no WhatsApp message
 	// can be sent, no Tally voucher posted, no Zoho invoice created.
 	// The WhatsApp provider is kept and passed to newHandler: the send
-	// route and the inbound webhook need it. Tally/Zoho stay discarded
-	// for now; their wiring lands in H2 part 2b.
+	// route and the inbound webhook need it. The Tally bridge is kept and
+	// passed too: the voucher route resolves it per seller against the
+	// seller_tally_bridges registry. Zoho stays discarded for now; its
+	// wiring lands later in H2.
 	// Real keys MUST come from the WHATSAPP_*/TALLY_*/ZOHO_*
 	// environment; they are never committed and never logged.
-	// The WhatsApp provider is kept (unlike Tally/Zoho, whose wiring lands
-	// in H2 part 2b): the H2 part 2a send route and the inbound webhook
-	// handler need it.
+	// The WhatsApp provider is kept (the H2 part 2a send route and the
+	// inbound webhook handler need it); the Tally bridge is kept for the
+	// H2 part 2b voucher route (per-seller registry wiring).
 	waProvider, err := integrations.NewWhatsApp(cfg.WhatsAppProvider, integrations.WhatsAppConfig{
 		PhoneNumberID:       cfg.WhatsAppPhoneNumberID,
 		AccessToken:         cfg.WhatsAppAccessToken,
@@ -587,10 +602,18 @@ func main() {
 	if cfg.WhatsAppAccessToken != "" || cfg.WhatsAppPhoneNumberID != "" {
 		log.Warn("integrations: WHATSAPP_* credentials are set but no real provider is wired — they are IGNORED; no messages can be sent")
 	}
-	if _, err := integrations.NewTally(cfg.TallyProvider, integrations.TallyConfig{
+	if cfg.WhatsAppWebhookSecret == "" {
+		log.Warn("integrations: WHATSAPP_WEBHOOK_VERIFY_TOKEN is unset — the /internal/whatsapp/webhook handshake fails closed (401); inbound Meta callbacks are REFUSED")
+	}
+	// The Tally bridge is kept and passed to newHandler: the voucher
+	// route resolves it per seller against the seller_tally_bridges
+	// registry (H2 part 2b). The stub is the only wired provider until
+	// the post-investors bridge-agent deployment.
+	tallyBridge, err := integrations.NewTally(cfg.TallyProvider, integrations.TallyConfig{
 		BridgeURL:    cfg.TallyBridgeURL,
 		SharedSecret: cfg.TallySharedSecret,
-	}); err != nil {
+	})
+	if err != nil {
 		log.Error("invalid Tally config — refusing to start", "err", err)
 		os.Exit(1)
 	}
@@ -755,7 +778,7 @@ func main() {
 
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	defer bgCancel() // stops the live reconciler (G1) on shutdown
-	handler := newHandler(bgCtx, cfg, pool, verifier, feedSvc, mediaSvc, rtPub, aiProxy, log, translator, searchClient, orderBus, whClient, waProvider)
+	handler := newHandler(bgCtx, cfg, pool, verifier, feedSvc, mediaSvc, rtPub, aiProxy, log, translator, searchClient, orderBus, whClient, waProvider, tallyBridge)
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: handler}
 
 	go func() {

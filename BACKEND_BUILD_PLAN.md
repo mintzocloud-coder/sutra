@@ -2654,6 +2654,45 @@ with documented contracts until then.
     H2 STAYS OPEN: part 2b = per-seller Tally wiring + smoke.sh H2
     section (WhatsApp 503/401/challenge asserts + Tally fail-closed
     asserts).
+  - [x] H2 part 2b DONE 2026-10-20 ~03:40 IST: per-seller Tally wiring
+    + smoke.sh H2 section (Go). New `internal/integrations/tally_handler.go`
+    — `POST /v1/integrations/tally/vouchers` (behind RequireAuth,
+    seller-scoped): voucher grammar validated up front (kind
+    sales/journal, calendar-valid YYYYMMDD, non-empty reference_no,
+    1–100 lines, non-zero per-line amounts capped at ₹10cr, no duplicate
+    ledgers, lines MUST balance to zero — Tally rejects unbalanced
+    vouchers, so the API catches it first). Fail-closed ladder, all
+    honest: no seller row → 403 not_a_seller; no bridge registered in
+    the new `seller_tally_bridges` registry → 503 tally_not_registered +
+    Retry-After; registered but only the stub wired → 503
+    tally_unavailable + Retry-After (never implies a voucher posted);
+    bridge error → 502. Migration `0016_tally_bridges.sql`:
+    seller_tally_bridges (seller_id PK → sellers FK cascade, bridge_url
+    https-check, status pending/active/disabled, set_updated_at trigger;
+    bridge SECRETS deliberately not stored — per-job signing is Wave 2).
+    main.go keeps the Tally bridge and passes it through newHandler (6
+    test call sites updated); loud boot WARN added when
+    WHATSAPP_WEBHOOK_VERIFY_TOKEN is unset (the handshake 401s
+    fail-closed); docker-compose.yml gains the
+    WHATSAPP_WEBHOOK_VERIFY_TOKEN passthrough (house 2z pattern).
+    OpenAPI: new path + TallyVoucherRequest/TallyVoucherResult schemas
+    (redocly valid, coverage gate 53 paths OK). docs/integrations.md:
+    Tally route contract section. smoke.sh H2 section (after H1, reusing
+    its seller/non-seller tokens): WhatsApp 503 whatsapp_unavailable +
+    Retry-After, 401/403 matrix, hub-challenge 401-fail-closed-unset →
+    recreate-with-secret 200 verbatim echo → 403 wrong token →
+    secretless-restore 401 again, forged-signature POST → 401; Tally 503
+    tally_not_registered + Retry-After, 401/403 matrix, unbalanced
+    voucher → 400 invalid_request.
+    VERIFIED: gofmt clean, go build+vet clean, full `go test ./...`
+    green (26+ pkgs; 20 new Tally handler tests: no-subject 401,
+    not_a_seller 403, 13-case validation matrix, not_registered/
+    unavailable/nil-bridge 503s + Retry-After, fake-bridge 202);
+    migration 0016 applied clean on a scratch PG16 (table+PK+FK+CHECKs+
+    trigger proven); bash -n smoke.sh green; compose YAML parses;
+    SPDX checker green.
+    H2 STAYS OPEN: Zoho route (CreateContact/CreateInvoice, seller-scoped,
+    fail-closed 503) is the final H2 piece — next run.
 - [ ] H3: Ads platform — custom Go GSP auction core (bid → rank → price),
   Promovolve (Apache-2.0) for creative serving, advertiser API
   (campaigns, budgets, targeting), reporting, docs/ads.md, OpenAPI +
@@ -2670,6 +2709,16 @@ Then report to founder: production-ready backend live on main.
 
 ## Log
 
+- 2026-10-20 ~03:40 IST: H2 part 2b done — per-seller Tally wiring
+  (`POST /v1/integrations/tally/vouchers`, seller-scoped, balance-enforced
+  voucher grammar, fail-closed 503 ladder: not_a_seller → 403,
+  tally_not_registered / tally_unavailable + Retry-After) + migration
+  0016 (seller_tally_bridges registry, secrets not stored) + smoke.sh H2
+  fail-closed section (WhatsApp 503/401/403/challenge 401→200→403/401
+  asserts; Tally 503/401/403/400 asserts). gofmt/build/vet clean, full
+  go test green (20 new tests), migration proven on real PG16, redocly
+  valid, coverage 53 paths OK. H2 stays open: Zoho route is the last
+  piece.
 - 2026-10-20 ~03:05 IST: H2 part 2a done — WhatsApp send route
   (POST /v1/integrations/whatsapp/send, seller-scoped, stub fails closed
   503+Retry-After) + inbound webhook (GET/POST /internal/whatsapp/webhook:
