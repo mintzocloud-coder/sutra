@@ -365,6 +365,12 @@ services:
       LOGISTICS_API_KEY: ${LOGISTICS_API_KEY:-}
       LOGISTICS_SECRET: ${LOGISTICS_SECRET:-}
       LOGISTICS_ENV: ${LOGISTICS_ENV:-}
+      # Mini-app runtime (G3): HMAC key for signed launch tokens.
+      # Empty (the default) DISABLES the launch endpoint fail-closed
+      # (503 launch_unavailable, loud boot WARN). scripts/smoke.sh
+      # sets it for the round-trip and recreates secretless at the end
+      # to prove the fail-closed contract. Never commit a real key.
+      MINIAPP_LAUNCH_SECRET: ${MINIAPP_LAUNCH_SECRET:-}
       # Live media (G1, Wave 4): LiveKit SFU seam. The api service passes
       # the keypair through to the Go live seam (internal/live), which
       # mints room-scoped participant JWTs. DEV DEFAULTS below must match

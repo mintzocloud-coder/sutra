@@ -2551,6 +2551,37 @@ with documented contracts until then.
       calls). No Go/Python/Elixir touched. H1 part 2 STAYS OPEN:
       CI-green confirmation of the smoke job on this push — next run
       checks the F2 matrix passes and H1 closes. Pushed.
+    - [x] H1 part 2z DONE 2026-10-20 ~01:50 IST: CI-red triage #30 —
+      ROOT CAUSE FOUND (docker-compose.yml missing env passthrough;
+      Go/smoke.sh innocent). Run 39313860457 (the 2y push) finished
+      6/7 green; smoke RED at \"smoke FAIL: miniapp: owner draft launch
+      failed\" — the FIRST run ever to reach the G3 section (the 2y
+      fix made the whole F2 matrix PASS, and the H1 business section
+      passed in full: grounded ₹1,299 SSE, fabricated-₹999 fallback,
+      non-seller 403, 429 + Retry-After). ROOT CAUSE: docker
+      compose does NOT forward host env into containers unless the
+      var is referenced in the compose file. smoke.sh recreated the
+      api with `MINIAPP_LAUNCH_SECRET=... docker compose up -d
+      --no-deps api`, but `api.environment` in docker-compose.yml
+      had NO MINIAPP_LAUNCH_SECRET entry — the secret was silently
+      dropped, cfg.MiniappLaunchSecret stayed empty, and
+      launchHandler fails closed (503 launch_unavailable) → curl -sf
+      → \"owner draft launch failed\". (The G3 section was authored
+      2026-10-19 with bash -n verification only; the full stack run
+      is CI-gated, so this lay latent until the smoke first reached
+      G3.) FIX: `MINIAPP_LAUNCH_SECRET: ${MINIAPP_LAUNCH_SECRET:-}`
+      added to api.environment (house pattern, same as
+      SEARCH_MASTER_KEY/SVIX_API_TOKEN). The section's two recreates
+      now behave as designed: the env-prefix recreate passes the
+      secret through (launch 200 + offline HMAC verify), the
+      secretless recreate expands to empty so the 503
+      launch_unavailable fail-closed proof still holds (proven by
+      interpolation simulation). VERIFIED: compose YAML parses,
+      new var present, bash -n smoke.sh green (untouched),
+      scripts/check-headers.sh green. No Go/Python/Elixir touched.
+      H1 part 2 STAYS OPEN: CI-green confirmation of the smoke job
+      on this push — next run checks the G3 mini-app section goes
+      green and H1 closes. Pushed.
 - [ ] H2: Business integrations — WhatsApp Cloud API direct adapter
   (fail-closed stub; no BSP), Tally on-premise bridge design + stub,
   Zoho Books default adapter (fail-closed stub), docs/integrations.md
@@ -3256,3 +3287,5 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-19 ~22:45 IST: H1 part 2s done (see H1 task note): run 39288363493 (2r push) finished 6/7 green, smoke RED at F3 — "created → confirmed failed" (PATCH /v1/orders/{id}/status 422'd: actorRole checked buyer before seller, so a self-purchasing merchant's single identity resolved to roleBuyer and the seller-only confirm edge died). REAL API BUG: actorRole now prefers roleSeller for both-roles callers (every buyer edge is also a seller edge, so no buyer move is stranded); new TestActorRoleBothRolesPrefersSeller + TestOrderSelfPurchaseLifecycle; OpenAPI status-route description updated. Verified: gofmt/build/vet green, pure tests green, YAML 51 paths OK. H1 part 2 STAYS OPEN pending CI-green confirmation.
 
 - 2026-10-20 ~00:30 IST: H1 part 2w done — CI-RED TRIAGE #27 (see H1 part-2 note): run 39301650049 (2u push) finished 6/7 green; smoke RED at F3 "created → confirmed" with the new 2u DIAG printing the real evidence for the first time: HTTP 405 + `Allow: GET`. Per 2u's invariant that meant the request hit the GET-only /v1/orders/{id} detail route — and inspection of the checkout's smoke.sh showed why: ord_st's curl URL was "$API_URL/v1/orders/$oid", the trailing /status dropped in the 2t ord_st rewrite (the DIAG echo still printed the intended /status path, hiding the mismatch). The Go 1.22 mux, methodGuard, actorRole (2s) and OrderStatusHandler were all correct; the 2u route-lock test stands. Same typo fixed in 3 more status PATCHes (confirmed→delivered 422, unknown-status 422, missing-body 400). VERIFIED: bash -n green; no Go/Python/Elixir touched. H1 part 2 STAYS OPEN: CI-green confirmation on this push; next run checks the F3 state machine goes green for the first time and H1 closes. Pushed.
+
+- 2026-10-20 ~01:50 IST: H1 part 2z done — CI-RED TRIAGE #30 (see H1 part-2 note): run 39313860457 (2y push) finished 6/7 green; smoke RED at "miniapp: owner draft launch failed" — the FIRST run ever to reach the G3 section (2y's fix made the whole F2 matrix PASS; the H1 business section passed in full: grounded ₹1,299 SSE, fabricated-₹999 fallback, non-seller 403, 429 + Retry-After). ROOT CAUSE: docker compose forwards host env into containers ONLY when the var is referenced in the compose file — smoke.sh's `MINIAPP_LAUNCH_SECRET=... docker compose up -d --no-deps api` recreate silently dropped the secret (no entry in api.environment), cfg.MiniappLaunchSecret stayed empty, and launchHandler fails closed (503 launch_unavailable) → curl -sf → fail. Latent since G3 part 2 was authored 2026-10-19 with bash -n verification only (full stack is CI-gated). FIX: `MINIAPP_LAUNCH_SECRET: ${MINIAPP_LAUNCH_SECRET:-}` added to api.environment (house pattern, same as SEARCH_MASTER_KEY/SVIX_API_TOKEN); interpolation simulation proves the env-prefix recreate passes the secret through while the secretless recreate expands to empty, so the 503 fail-closed proof still holds. VERIFIED: compose YAML parses, bash -n smoke.sh green (untouched), scripts/check-headers.sh green. No Go/Python/Elixir touched. H1 part 2 STAYS OPEN: CI-green confirmation on this push — next run checks the G3 mini-app section goes green and H1 closes.
