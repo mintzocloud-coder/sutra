@@ -2255,6 +2255,32 @@ Then report to founder: production-ready backend live on main.
 
 ## Log
 
+- 2026-10-19 ~16:00 IST: H1 part 2g done — CI-RED TRIAGE ATTEMPT #12.
+  Run 39232533313 (the 2f push) finished 6/7 green; smoke RED at
+  "smoke FAIL: api boot log missing the fail-closed payments WARN" —
+  the FIRST time the F4/F5 boot-log checks ever executed in CI (all
+  earlier smoke runs died at the kratos wait). ROOT CAUSE: the check
+  itself, not the seam. PROVEN: the exact built binary emits
+  `payments: running with the fail-closed stub` to stdout at boot
+  (main.go:517, before the HTTP server starts — and /v1/me returned
+  200 in CI, so main() provably passed that line), and the smoke.sh
+  grep pattern matches it byte-for-byte. The fragile pipeline
+  `docker compose logs api 2>/dev/null | grep -q ...` under
+  `set -o pipefail` conflates docker's exit code with grep's match —
+  a nonzero `docker compose logs` exit masquerades as a missing WARN.
+  FIX: scripts/smoke.sh now captures `docker compose logs
+  --no-log-prefix api` to a temp file FIRST (docker's exit checked
+  explicitly: "could not read the api boot log"), asserts non-empty,
+  then greps the file; on a miss it dumps the log tail for
+  diagnostics (triage-#5 pattern). Same treatment for the F5
+  logistics check (shares the captured file). Assertion unchanged —
+  the WARN must be present. VERIFIED: bash -n clean; the new logic
+  simulated against the real binary boot log (F4/F5 present + absent
+  checks all PASS); negative path prints the tail + fails 1. No Go/
+  Python/Elixir changes — build/vet/test suites untouched. H1 part 2
+  STAYS OPEN: CI-green confirmation of the smoke job on this push —
+  next run checks it. Pushed.
+
 - 2026-10-19 ~15:05 IST: H1 part 2f done — CI-RED TRIAGE ATTEMPT #11.
   Run 39227822952 (the 2e push) finished 6/7 green; smoke RED at the G2
   section's first step — "smoke FAIL: webhooks round-trip": POST
@@ -2666,3 +2692,11 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-19 ~13:35 IST: H1 part 2c done — CI-red triage #8 (see H1 part-2 note): smoke job on run 39214445220 failed at "hydra oauth2 client creation" with `smoke FAIL: hydra returned an opaque token, not a JWT`. Root cause: client created without any access-token strategy (the old smoke.sh comment described the Hydra v1 flag; v2 uses client field `access_token_strategy`, values `jwt`/`opaque`). Fix: scripts/smoke.sh creates 'sutra-smoke' via the Admin REST API (POST localhost:4445/clients, `access_token_strategy: "jwt"`), DELETE + re-POST on "already exists". Verified: bash -n green, request JSON validated, JWT claims match the Go JWKS verifier (iss/aud/sub). Full smoke run CI-gated. Pushed.
 
 - 2026-10-19 ~14:00 IST: H1 part 2d done — CI-red triage #9 (see H1 part-2 note): run 39221569036 (the 2c push) finished 6/7 green, smoke RED again. Root cause found while that run was still in flight: triage #8 had fixed only the 'sutra-smoke' client; seven more OAuth2 clients were still created via the version-fragile `hydra create client` CLI with no strategy → Hydra v2 mints opaque tokens (the 2c finding), and every section using them runs with AUTH_BYPASS off (H1 x2, E6 agui, D2 sutra-smoke-b, D6 velocity, F1 commerce, F2 search, G3 x2). Fix: shared `create_jwt_client()` in scripts/smoke.sh (Admin REST API + access_token_strategy=jwt, DELETE+recreate on conflict); all 8 CLI blocks replaced. Verified: bash -n green, helper's 3 paths stub-tested, POST body JSON-validated. H1 part 2 STAYS OPEN: CI-green confirmation of the smoke job on this push — next run checks it. Pushed.
+
+- 2026-10-19 ~15:18 IST: run note (no implementation) — H1 part 2 STAYS
+  OPEN: CI run 39232533313 on the 2f push started 09:46 UTC, ~1 minute
+  before this run's check; smoke job needs ~25-40 min, verdict not
+  available within this run's window. 3/7 jobs green so far (SPDX,
+  OpenAPI, Python AI); Go, Elixir, compose, smoke in progress. No code
+  changes; no push (a log-only push would trigger a redundant CI run).
+  Next run: confirm the smoke job is green on this push.

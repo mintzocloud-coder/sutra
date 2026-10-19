@@ -256,10 +256,19 @@ pass "api /v1/me 200 (bypass identity '$subject', auto-provisioned)"
 # Compose pins PAYMENTS_PROVIDER=stub with empty CASHFREE_*, so the api must
 # boot with the loud "fail-closed stub" WARN — and must NOT log the
 # set-but-ignored WARN (the creds are unset here). Assert on the boot log.
-docker compose logs api 2>/dev/null | grep -q "payments: running with the fail-closed stub" \
-  || fail "api boot log missing the fail-closed payments WARN"
+# The log is captured to a file FIRST: with `set -o pipefail`, a nonzero
+# `docker compose logs` exit would otherwise masquerade as a missing WARN
+# (smoke red 2026-10-19: the binary provably emits the WARN — it is logged
+# before the HTTP server starts, and /v1/me returned 200 — so the failure
+# was in log retrieval, not the seam).
+api_boot_log="$(mktemp)"
+docker compose logs --no-log-prefix api >"$api_boot_log" 2>/dev/null \
+  || fail "could not read the api boot log (docker compose logs api failed)"
+[ -s "$api_boot_log" ] || fail "api boot log is empty"
+grep -q "payments: running with the fail-closed stub" "$api_boot_log" \
+  || { echo "smoke: api boot log tail (payments WARN not found):" >&2; tail -30 "$api_boot_log" >&2; fail "api boot log missing the fail-closed payments WARN"; }
 pass "api boot log carries the fail-closed payments WARN"
-docker compose logs api 2>/dev/null | grep -q "payments: CASHFREE_" \
+grep -q "payments: CASHFREE_" "$api_boot_log" \
   && fail "api boot log claims CASHFREE_* set-but-ignored (creds are unset in smoke)"
 pass "api boot log has no set-but-ignored CASHFREE_* WARN"
 
@@ -267,13 +276,14 @@ pass "api boot log has no set-but-ignored CASHFREE_* WARN"
 # Compose pins LOGISTICS_PROVIDER=stub with empty LOGISTICS_API_KEY /
 # LOGISTICS_SECRET, so the api must boot with the loud "fail-closed stub"
 # WARN — and must NOT log the set-but-ignored WARN (the creds are unset
-# here). Assert on the boot log.
-docker compose logs api 2>/dev/null | grep -q "logistics: running with the fail-closed stub" \
-  || fail "api boot log missing the fail-closed logistics WARN"
+# here). Assert on the boot log (same captured file as the F4 check above).
+grep -q "logistics: running with the fail-closed stub" "$api_boot_log" \
+  || { echo "smoke: api boot log tail (logistics WARN not found):" >&2; tail -30 "$api_boot_log" >&2; fail "api boot log missing the fail-closed logistics WARN"; }
 pass "api boot log carries the fail-closed logistics WARN"
-docker compose logs api 2>/dev/null | grep -q "LOGISTICS_\* credentials are set" \
+grep -q "LOGISTICS_\* credentials are set" "$api_boot_log" \
   && fail "api boot log claims LOGISTICS_* set-but-ignored (creds are unset in smoke)"
 pass "api boot log has no set-but-ignored LOGISTICS_* WARN"
+rm -f "$api_boot_log"
 
 # --- Real-issuer identity loop (D1) -----------------------------------------
 # The checks above ran with AUTH_BYPASS=1, which skips JWT verification
