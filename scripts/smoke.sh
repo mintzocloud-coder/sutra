@@ -1809,9 +1809,32 @@ curl -sf -X PATCH -H "Authorization: Bearer $token_c" -H 'Content-Type: applicat
 pass "price snapshot immutable after seller reprice to 159900"
 
 # State machine: confirmed → (illegal delivered) → shipped → delivered.
-ord_st() { curl -sf -X PATCH -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
-  -d "{\"status\":\"$2\"}" "$API_URL/v1/orders/$1" \
-  | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])'; }
+# ord_st PATCHes the status and prints the new status on stdout. On any
+# non-200 it dumps the HTTP status + response body to stderr before
+# failing (triage pattern: a blind `curl -sf | json.load` hides the real
+# error — the created→confirmed step must never fail without evidence).
+ord_st() {
+  local oid="$1" to="$2" st_body st_http
+  st_body="$(mktemp)"
+  # `|| true`: a curl transport failure must reach the diag branch below,
+  # not trip `set -e` inside the function.
+  st_http="$(curl -s -o "$st_body" -w '%{http_code}' -X PATCH \
+    -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+    -d "{\"status\":\"$to\"}" "$API_URL/v1/orders/$oid")" || true
+  if [ "$st_http" != "200" ]; then
+    echo "smoke DIAG: PATCH /v1/orders/$oid/status -> $to: HTTP $st_http" >&2
+    cat "$st_body" >&2
+    rm -f "$st_body"
+    return 1
+  fi
+  # `if !` keeps `set -e` from aborting the function before cleanup.
+  if ! python3 -c 'import json; print(json.load(open("'"$st_body"'"))["status"])'; then
+    rm -f "$st_body"
+    return 1
+  fi
+  rm -f "$st_body"
+  return 0
+}
 [ "$(ord_st "$ord_id" confirmed)" = "confirmed" ] || fail "created → confirmed failed"
 com_code="$(curl -s -o "$com_body" -w '%{http_code}' -X PATCH \
   -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \

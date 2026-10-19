@@ -2419,6 +2419,32 @@ with documented contracts until then.
       runs in CI); YAML parses, 51 paths intact. H1 part 2 STAYS
       OPEN: CI-green confirmation of the smoke job on this push —
       next run checks the F3 state-machine section + H1 close.
+    - [x] H1 part 2t DONE 2026-10-19 ~23:15 IST: CI-red triage #25
+      (smoke.sh diagnostics only — NO service-code change this run).
+      Run 39292527736 (the 2s push) finished 6/7 green; smoke RED at
+      F3 — "created → confirmed failed" AGAIN, the same step the 2s
+      actorRole fix was supposed to resolve. KEY REASSESSMENT: the 2s
+      fix addressed a REAL bug (its regression tests fail on the old
+      code by construction, and the go-api CI job is green), but the
+      smoke's actual HTTP error was NEVER observed — the old
+      `curl -sf | python3 json.load` blind pipeline turns EVERY
+      4xx/5xx into the same empty-body JSONDecodeError, so the 2r
+      run's "422" was an assumption, not evidence. This run verified
+      exhaustively that the fixed code path is correct: actorRole
+      prefers roleSeller, transitionWith joins sellers.user_id
+      correctly, the transitions table admits created→confirmed for
+      roleSeller, the handler calls Transition with the CallerUUID
+      user id, the Dockerfile builds from the checked-out source, and
+      the CI checkout SHA (ea22de3d) contains the fix — yet the smoke
+      still fails, so the smoke's error is something else entirely.
+      FIX (diagnostic): ord_st now captures the HTTP status + body
+      (mktemp, -w '%{http_code}', diag dump to stderr on non-200,
+      `|| true` + `if !` guards for set -e/pipefail); the success
+      contract (stdout = new status) is unchanged. Simulated: 200 →
+      prints status; 422 → DIAG + body + rc 1; transport fail →
+      DIAG 000 + rc 1; bash -n green. H1 part 2 STAYS OPEN: the next
+      CI smoke run will print the REAL error; next run triages #26
+      from that evidence. Pushed.
 - [ ] H2: Business integrations — WhatsApp Cloud API direct adapter
   (fail-closed stub; no BSP), Tally on-premise bridge design + stub,
   Zoho Books default adapter (fail-closed stub), docs/integrations.md
@@ -3074,5 +3100,8 @@ Then report to founder: production-ready backend live on main.
   this push — next run checks the E5 cleanup + H1 business section go green.
 
 - 2026-10-19 ~22:35 IST: H1 part 2r done (see H1 task note): run 39281576810 (2q push) finished 6/7 green, smoke RED at F3 — "cart over-stock add did not return 409 (got 500)". REAL API BUG: cart AddItem validated only the request qty vs maxLineQty (999); smoke's add-2-then-999 made the upsert try quantity=1001, tripping the cart_items_qty_sane DB CHECK (0010_carts.sql) → raw pgx error → unmapped 500 before the stock guard could fire 409 insufficient_stock. Fix: AddItem pre-checks the accumulated line total in-tx (ErrInvalidQuantity → 422), DB CHECK now a last resort; smoke over-stock step now adds 9 onto the 2-unit line (11 > 10 available) so the intended 409 path is asserted; new TestCartAddAccumulatedCap covers the cap path. Verified: gofmt/build/vet (whole module) green, SPDX green, bash -n green, cart integration suite green on local PG16 incl. new test. Pushed 6599e951; CI-green confirmation lands with the next run's CI check.
+
+
+- 2026-10-19 ~23:15 IST: H1 part 2t done — CI-RED TRIAGE #25 (see H1 part-2 note): run 39292527736 (2s push) finished 6/7 green; smoke RED at F3 "created → confirmed" AGAIN despite the 2s actorRole fix being in the built image (checkout SHA ea22de3d verified). Reassessment: the 2s fix repaired a REAL bug (regression tests fail on old code; go-api CI green) but the smoke's actual HTTP error was never observed — the old `curl -sf | json.load` blind pipeline maps every 4xx/5xx to the same JSONDecodeError, so the 2r "422" was an assumption. Exhaustive code-path review (actorRole, transitionWith, transitions table, handler, CallerUUID, Dockerfile, checkout SHA) found the fixed path correct, so the smoke's error is something else. Fix: ord_st is now self-diagnosing (captures HTTP status + body, dumps on non-200; set -e/pipefail-safe; bash -n green, simulated 200/422/transport-fail). Next CI smoke run prints the real error; triage #26 works from that evidence. Pushed.
 
 - 2026-10-19 ~22:45 IST: H1 part 2s done (see H1 task note): run 39288363493 (2r push) finished 6/7 green, smoke RED at F3 — "created → confirmed failed" (PATCH /v1/orders/{id}/status 422'd: actorRole checked buyer before seller, so a self-purchasing merchant's single identity resolved to roleBuyer and the seller-only confirm edge died). REAL API BUG: actorRole now prefers roleSeller for both-roles callers (every buyer edge is also a seller edge, so no buyer move is stranded); new TestActorRoleBothRolesPrefersSeller + TestOrderSelfPurchaseLifecycle; OpenAPI status-route description updated. Verified: gofmt/build/vet green, pure tests green, YAML 51 paths OK. H1 part 2 STAYS OPEN pending CI-green confirmation.
