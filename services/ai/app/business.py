@@ -53,6 +53,14 @@ from .config import Settings
 
 log = logging.getLogger("sutra-ai-business")
 
+# stream_turn/_validate raise the bare name BusinessError below; it must
+# resolve to THE class the HTTP layer catches
+# (main.py: except business_mod.biz_mod.BusinessError). Defined here as an
+# alias so there is exactly one error class — a bare undefined name would
+# surface as a NameError that FastAPI turns into a 500 (this exact bug
+# made the H1 smoke rate-limit check 500 instead of 429ing).
+BusinessError = biz_mod.BusinessError
+
 
 class BusinessState(TypedDict, total=False):
     """State for one business-copilot turn."""

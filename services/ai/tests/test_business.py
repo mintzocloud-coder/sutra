@@ -19,6 +19,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import bizdata as biz_mod
+from app import budget as budget_mod
 from app import business as business_mod
 from app import model as model_mod
 from app import prompts as prompts_mod
@@ -399,3 +400,45 @@ def test_service_stream_turn_not_a_seller():
         service.stream_turn("random-user", None,
                             [{"role": "user", "content": "hi"}])
     assert exc.value.code == "not_a_seller"
+
+
+# --- regression: the raised error class must be the one main.py catches ----
+
+def _biz_service(pool):
+    prompt = prompts_mod.load_system_prompt("business_v1")
+    return business_mod.BusinessService(
+        pool=pool, settings=_biz_settings(), prompt=prompt,
+        model=model_mod.StubClient(), biz_graph=None)
+
+
+def test_stream_turn_rate_limit_raises_catchable_429(monkeypatch):
+    # Regression (CI triage #21): stream_turn raised the bare name
+    # BusinessError, which was never defined in app/business.py — a
+    # NameError that FastAPI turned into a 500, so the H1 smoke
+    # rate-limit check saw 500 instead of the 429 ai_rate_limited it
+    # asserts. The raised class must be bizdata.BusinessError, the one
+    # main.py's `except business_mod.biz_mod.BusinessError` catches.
+    def _limited(pool, subject, rpm):
+        raise budget_mod.GuardRejection(
+            code="ai_rate_limited", message="business AI rate limit exceeded",
+            retry_after=42)
+
+    monkeypatch.setattr(budget_mod, "check_rate_limit", _limited)
+    service = _biz_service(_FakePool())
+    with pytest.raises(biz_mod.BusinessError) as exc:
+        service.stream_turn("seller-subject", None,
+                            [{"role": "user", "content": "biz rate ping"}])
+    assert exc.value.status_code == 429
+    assert exc.value.code == "ai_rate_limited"
+    assert exc.value.retry_after == 42
+
+
+def test_stream_turn_validation_errors_are_catchable_422():
+    # Same NameError class of bug lived in _validate's error paths
+    # (empty messages, >100 messages, too-long input): they must raise
+    # the catchable BusinessError, not NameError.
+    service = _biz_service(_FakePool())
+    with pytest.raises(biz_mod.BusinessError) as exc:
+        service.stream_turn("seller-subject", None, [])
+    assert exc.value.status_code == 422
+    assert exc.value.code == "invalid_message"

@@ -2311,6 +2311,34 @@ with documented contracts until then.
       confirmation of the smoke job on this push — next run checks
       the E2 section passes and H1 (then the H1 business section)
       follows.
+    - [x] H1 part 2p DONE 2026-10-19 ~20:25 IST: CI-red triage #21 —
+      ROOT CAUSE FOUND (real fix, ai-service side). Run 39267526741
+      (the 2o push) finished 6/7 green; smoke RED at "smoke FAIL: H1:
+      business rate limit never triggered a 429 (last got 500)" — the
+      H1 business section, reached for the first time (E2 + the rest
+      of H1 all PASSED on this run: grounded true price, fabricated-
+      price fallback, non-seller 403). ROOT CAUSE: app/business.py
+      raised the BARE name `BusinessError` (line 377's 429 guard
+      rejection, plus all four _validate 422 paths) but NEVER
+      defined/imported it — bizdata.py defines the class, business.py
+      only did `from . import bizdata as biz_mod`. First execution of
+      line 377 → NameError → FastAPI 500 → Go proxy forwarded 500.
+      The 403 path worked because resolve_seller raises bizdata's own
+      class (caught by main.py's
+      `except business_mod.biz_mod.BusinessError`); the 429/422 paths
+      were never exercised by unit tests OR smoke before this run.
+      FIX: `BusinessError = biz_mod.BusinessError` alias right after
+      business.py's imports — one error class, main.py's except
+      catches it, 429 ai_rate_limited + Retry-After now flows. Two
+      regression tests added (proven to FAIL on the unfixed code via
+      alias-toggle: 429 guard path + 422 validation path both raise
+      the catchable class). An AST sweep of all app/*.py confirms this
+      was the only undefined-raised-name bug (only builtin
+      NotImplementedError elsewhere). VERIFIED: 79 passed/1 skipped
+      (pre-existing skip) in the persistent venv, py_compile clean,
+      bash -n clean. No Go/Elixir/smoke.sh touched. H1 part 2 STAYS
+      OPEN: CI-green confirmation of the smoke job on this push —
+      next run checks the H1 business section goes green.
 - [ ] H2: Business integrations — WhatsApp Cloud API direct adapter
   (fail-closed stub; no BSP), Tally on-premise bridge design + stub,
   Zoho Books default adapter (fail-closed stub), docs/integrations.md
