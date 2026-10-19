@@ -67,7 +67,12 @@ var ErrWebhooksDisabled = errors.New("webhooks: dispatcher disabled (SVIX_API_TO
 type APIError struct {
 	Status int    // HTTP status
 	Code   string // svix "code" field when present, else the status text
-	Detail string // svix "detail" field when present
+	// Detail is Svix's "detail" field when present. Svix 422s carry
+	// detail as an ARRAY of {loc,msg,type} items (not a string), so it
+	// is captured verbatim (JSON) — a string-only parse silently drops
+	// the real reason (triaged the hard way: three CI rounds stared at
+	// the generic fallback before the array shape was found).
+	Detail string
 }
 
 func (e *APIError) Error() string {
@@ -229,14 +234,19 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		apiErr := &APIError{Status: resp.StatusCode, Code: http.StatusText(resp.StatusCode)}
 		var wire struct {
-			Code   string `json:"code"`
-			Detail string `json:"detail"`
+			Code   string          `json:"code"`
+			Detail json.RawMessage `json:"detail"`
 		}
 		if json.Unmarshal(raw, &wire) == nil {
 			if wire.Code != "" {
 				apiErr.Code = wire.Code
 			}
-			apiErr.Detail = wire.Detail
+			// Svix's detail is a string on auth errors but an ARRAY
+			// of {loc,msg,type} on 422s — keep it verbatim either
+			// way so callers see the real reason.
+			if d := strings.TrimSpace(string(wire.Detail)); d != "" && d != "null" {
+				apiErr.Detail = d
+			}
 		}
 		return apiErr
 	}
@@ -282,6 +292,50 @@ func (c *Client) EnsureApp(ctx context.Context, uid, name string) (string, error
 		return "", errors.New("webhooks: svix returned an empty app id")
 	}
 	return created.ID, nil
+}
+
+// EnsureEventType registers an event type name in Svix's org-wide
+// catalog when it does not exist yet, and is a no-op when it does.
+//
+// WHY THIS EXISTS: the real Svix server refuses to create an
+// endpoint whose filterTypes reference unregistered event types
+// (422 "The following event types don't exist: ..." —
+// validate_event_types in svix-server's endpoint crud, which the stub
+// servers in the tests never enforced). The developer contract is
+// just-in-time: registering an endpoint with
+// filter_types:["my.custom.event"] works in one call, the same way
+// the handler auto-provisions the caller's Svix app (EnsureApp).
+// Message publishing never needed this — only endpoint filters do.
+func (c *Client) EnsureEventType(ctx context.Context, name, description string) error {
+	if err := c.disabled(); err != nil {
+		return err
+	}
+	if name == "" {
+		return errors.New("webhooks: event type name required")
+	}
+	path := "/api/v1/event-type/" + url.PathEscape(name)
+	var got struct {
+		Name string `json:"name"`
+	}
+	if err := c.do(ctx, http.MethodGet, path, nil, &got); err == nil {
+		return nil
+	} else {
+		var apiErr *APIError
+		if !errors.As(err, &apiErr) || !apiErr.NotFound() {
+			return err
+		}
+	}
+	body := map[string]string{"name": name, "description": description}
+	var created struct {
+		Name string `json:"name"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/api/v1/event-type", body, &created); err != nil {
+		return err
+	}
+	if created.Name == "" {
+		return errors.New("webhooks: svix returned an empty event type name")
+	}
+	return nil
 }
 
 // CreateEndpoint registers a delivery target on the user's Svix app.

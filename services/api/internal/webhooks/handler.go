@@ -228,6 +228,17 @@ func (h *Handler) createEndpoint(w http.ResponseWriter, r *http.Request) {
 		h.svixError(w, r, "ensure app", err)
 		return
 	}
+	// Just-in-time event-type registration: Svix rejects endpoint
+	// filters that name unregistered event types (422), so ensure
+	// each filter type exists before the endpoint create — same
+	// philosophy as the app ensure above.
+	for _, ft := range in.FilterTypes {
+		if err := h.client.EnsureEventType(ctx, ft,
+			"auto-registered by the Sutra webhooks API"); err != nil {
+			h.svixError(w, r, "ensure event type", err)
+			return
+		}
+	}
 	ep, err := h.client.CreateEndpoint(ctx, appUID, EndpointIn{
 		URL:         in.URL,
 		Description: in.Description,

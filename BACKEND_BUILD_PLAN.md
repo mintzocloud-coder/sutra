@@ -2255,6 +2255,39 @@ Then report to founder: production-ready backend live on main.
 
 ## Log
 
+- 2026-10-19 ~16:25 IST: H1 part 2h done — CI-RED TRIAGE ATTEMPT #13.
+  Run 39240863067 (the 2g push) finished 6/7 green; smoke RED again
+  at "smoke FAIL: webhooks round-trip" — POST /v1/webhooks/endpoints
+  → 422 `webhooks_invalid`, the SAME symptom triage #11 "fixed".
+  ROOT CAUSE (verified against the svix-webhooks source, main):
+  triage #11 fixed only the FIRST 422 (the `user:<id>` app-uid colon
+  — real, but the 2f run died at F4/F5 before ever reaching the
+  webhooks section, so the fix was never CI-validated). The 2g run
+  is the first CI run to reach the Svix section with a valid app UID
+  — and Svix's endpoint create runs `validate_event_types(db,
+  event_types, org_id)` (server/svix-server/src/v1/endpoints/endpoint/
+  crud.rs:127-129): endpoint filterTypes MUST name already-registered
+  event types, else 422 "The following event types don't exist:
+  smoke.ping". The stub servers in the unit tests never enforced
+  this (same class of miss as #11). CONTRIBUTING CAUSE: Svix 422s
+  carry `detail` as an ARRAY of {loc,msg,type}, not a string — the Go
+  client parsed it as a string, silently dropping the real reason
+  (three triage rounds stared at the generic fallback message).
+  FIX (Go, internal/webhooks): new `Client.EnsureEventType`
+  (GET /api/v1/event-type/{name} → 404 → POST {name, description};
+  mirrors EnsureApp's just-in-time philosophy); `createEndpoint` now
+  ensures every filter type before the endpoint create; `APIError`
+  captures Svix's `detail` verbatim (string OR array) so future 422s
+  surface the real message via the existing "svix: <detail>" path.
+  docs/webhooks.md documents the just-in-time event-type
+  registration. VERIFIED: gofmt clean, `go build`+`go vet` clean,
+  full `go test ./...` green — 4 new tests (ensure no-op/creates-on-
+  404/surfaces-errors, array-detail kept, handler just-in-time
+  registers only the missing type, event-type failure → 502
+  webhooks_upstream with no endpoint created). No Python/Elixir
+  changes. H1 part 2 STAYS OPEN: CI-green confirmation of the smoke
+  job on this push — next run checks it. Pushed.
+
 - 2026-10-19 ~16:00 IST: H1 part 2g done — CI-RED TRIAGE ATTEMPT #12.
   Run 39232533313 (the 2f push) finished 6/7 green; smoke RED at
   "smoke FAIL: api boot log missing the fail-closed payments WARN" —

@@ -84,6 +84,9 @@ func TestDisabledNoop(t *testing.T) {
 	if _, err := c.ListAttempts(ctx, "user_1", "msg_1"); !errors.Is(err, ErrWebhooksDisabled) {
 		t.Fatalf("ListAttempts: %v", err)
 	}
+	if err := c.EnsureEventType(ctx, "order.created", "d"); !errors.Is(err, ErrWebhooksDisabled) {
+		t.Fatalf("EnsureEventType: %v", err)
+	}
 }
 
 func TestFailClosedBadURL(t *testing.T) {
@@ -158,6 +161,88 @@ func TestEnsureAppSurfacesOtherErrors(t *testing.T) {
 	}
 	if apiErr.Code != "authentication_failed" || !strings.Contains(apiErr.Detail, "bad token") {
 		t.Fatalf("code/detail = %q/%q", apiErr.Code, apiErr.Detail)
+	}
+}
+
+func TestEnsureEventTypeNoopWhenExists(t *testing.T) {
+	s := newStub(t)
+	s.respond["GET /api/v1/event-type/order.created"] = func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]string{"name": "order.created"})
+	}
+	posted := false
+	s.respond["POST /api/v1/event-type"] = func(w http.ResponseWriter, r *http.Request) {
+		posted = true
+		w.WriteHeader(201)
+	}
+	c := clientFor(t, s)
+	if err := c.EnsureEventType(context.Background(), "order.created", "d"); err != nil {
+		t.Fatalf("EnsureEventType: %v", err)
+	}
+	if posted {
+		t.Error("POST must not fire when the event type already exists")
+	}
+}
+
+func TestEnsureEventTypeCreatesOn404(t *testing.T) {
+	s := newStub(t)
+	s.respond["GET /api/v1/event-type/smoke.ping"] = func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+	}
+	var gotBody map[string]string
+	s.respond["POST /api/v1/event-type"] = func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		writeJSON(w, 201, map[string]string{"name": "smoke.ping"})
+	}
+	c := clientFor(t, s)
+	if err := c.EnsureEventType(context.Background(), "smoke.ping", "the smoke canary"); err != nil {
+		t.Fatalf("EnsureEventType: %v", err)
+	}
+	if gotBody["name"] != "smoke.ping" || gotBody["description"] != "the smoke canary" {
+		t.Fatalf("create body = %v", gotBody)
+	}
+	if err := c.EnsureEventType(context.Background(), "", "d"); err == nil {
+		t.Fatal("expected error for empty name")
+	}
+}
+
+func TestEnsureEventTypeSurfacesOtherErrors(t *testing.T) {
+	s := newStub(t)
+	s.respond["GET /api/v1/event-type/boom.type"] = func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+	}
+	c := clientFor(t, s)
+	err := c.EnsureEventType(context.Background(), "boom.type", "d")
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != 500 {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestAPIErrorDetailArrayKept(t *testing.T) {
+	// Svix 422s carry detail as an ARRAY of {loc,msg,type} — the shape
+	// that used to be silently dropped, hiding the real reason.
+	s := newStub(t)
+	s.respond["POST /api/v1/event-type"] = func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 422, map[string]any{
+			"code": "validation_error",
+			"detail": []map[string]any{{
+				"loc":  []string{"body", "eventTypes"},
+				"msg":  "The following event types don't exist: smoke.ping",
+				"type": "value_error",
+			}},
+		})
+	}
+	c := clientFor(t, s)
+	s.respond["GET /api/v1/event-type/smoke.ping"] = func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+	}
+	err := c.EnsureEventType(context.Background(), "smoke.ping", "d")
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || !apiErr.Validation() {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(apiErr.Detail, "don't exist") {
+		t.Fatalf("detail lost the svix message: %q", apiErr.Detail)
 	}
 }
 

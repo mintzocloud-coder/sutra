@@ -65,6 +65,10 @@ returns it again and the Sutra API never stores a copy. Save it now; to
 rotate, delete the endpoint and create a new one.
 
 - `filter_types` is optional; omit it to receive every event type.
+  Event types named in `filter_types` are registered just-in-time —
+  no separate registration step needed (the API creates any missing
+  event type before the endpoint, the same way it provisions your
+  Svix app).
 - `GET /v1/webhooks/endpoints` lists your endpoints (secrets never shown).
 - `DELETE /v1/webhooks/endpoints/{id}` removes one (idempotent — deleting
   a gone endpoint is still 204).

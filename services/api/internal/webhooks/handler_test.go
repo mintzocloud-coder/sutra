@@ -83,6 +83,28 @@ func armApp(s *stubSvix) {
 	}
 }
 
+// armEventTypes scripts the just-in-time event-type registration the
+// handler performs for every filter type: the named types already
+// exist (GET 200), and any other name is created on demand (POST
+// 201). It returns a sink recording the created names, in order.
+func armEventTypes(s *stubSvix, existing ...string) *[]string {
+	have := map[string]bool{}
+	for _, n := range existing {
+		have[n] = true
+		s.respond["GET /api/v1/event-type/"+n] = func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, map[string]string{"name": n})
+		}
+	}
+	created := []string{}
+	s.respond["POST /api/v1/event-type"] = func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		created = append(created, body["name"])
+		writeJSON(w, http.StatusCreated, map[string]string{"name": body["name"]})
+	}
+	return &created
+}
+
 func TestEndpointsDisabled(t *testing.T) {
 	c, err := NewClient("", "", testLog()) // no token -> disabled
 	if err != nil {
@@ -111,6 +133,7 @@ func TestEndpointsDisabled(t *testing.T) {
 func TestCreateEndpoint(t *testing.T) {
 	s := newStub(t)
 	armApp(s)
+	armEventTypes(s, "order.created") // filter type already registered
 	var gotBody []byte
 	s.respond["POST /api/v1/app/user_test-user-id/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
 		gotBody, _ = io.ReadAll(r.Body)
@@ -145,9 +168,58 @@ func TestCreateEndpoint(t *testing.T) {
 	}
 }
 
+func TestCreateEndpointRegistersMissingEventTypes(t *testing.T) {
+	s := newStub(t)
+	armApp(s)
+	// "brand.new" is NOT pre-registered: GET 404s (stub default), so
+	// the handler must POST it before creating the endpoint.
+	created := armEventTypes(s, "order.created")
+	s.respond["POST /api/v1/app/user_test-user-id/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"id": "ep_2", "url": "https://example.com/wh", "secret": "whsec_x",
+		})
+	}
+	h := fullMux(t, handlerFor(t, clientFor(t, s)))
+
+	rec := doReq(t, h, "POST", "/v1/webhooks/endpoints",
+		`{"url":"https://example.com/wh","filter_types":["order.created","brand.new"]}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("got %d (%s), want 201", rec.Code, rec.Body.String())
+	}
+	// Only the missing type was registered; the existing one was a
+	// GET-hit no-op.
+	if len(*created) != 1 || (*created)[0] != "brand.new" {
+		t.Errorf("registered = %v, want [brand.new]", *created)
+	}
+}
+
+func TestCreateEndpointEventTypeFailureSurfaces(t *testing.T) {
+	s := newStub(t)
+	armApp(s)
+	// The event-type catalog is down: GET 404 then POST 500.
+	s.respond["POST /api/v1/event-type"] = func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+	s.respond["POST /api/v1/app/user_test-user-id/endpoint"] = func(w http.ResponseWriter, r *http.Request) {
+		t.Error("endpoint must not be created when event-type registration fails")
+		w.WriteHeader(http.StatusCreated)
+	}
+	h := fullMux(t, handlerFor(t, clientFor(t, s)))
+
+	rec := doReq(t, h, "POST", "/v1/webhooks/endpoints",
+		`{"url":"https://example.com/wh","filter_types":["boom.type"]}`)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("got %d (%s), want 502", rec.Code, rec.Body.String())
+	}
+	if got := envelopeCode(t, rec); got != "webhooks_upstream" {
+		t.Errorf("envelope code %q, want webhooks_upstream", got)
+	}
+}
+
 func TestCreateEndpointRouteValidation(t *testing.T) {
 	s := newStub(t)
 	armApp(s)
+	armEventTypes(s) // validation rejects before any Svix call here
 	h := fullMux(t, handlerFor(t, clientFor(t, s)))
 
 	for _, tc := range []struct {
