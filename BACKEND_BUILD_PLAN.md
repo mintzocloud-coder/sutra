@@ -2702,9 +2702,29 @@ with documented contracts until then.
   billing wiring (70/30 split), docs/subscriptions.md, OpenAPI + tests +
   smoke. Then Phase H complete — ALL WAVES DONE.
 
+## Phase I — E2E encryption (Wave 2 scope completion)
+
+E2E was designated Wave 2 scope but Wave 2 shipped the AI core instead; the
+design doc was held as issue #17 for contributors. This phase implements it
+properly — Signal-grade, never half-done. (Closes #17 on completion; the
+contributor design input gets incorporated, implementation supersedes.)
+
+- [ ] I1: Device key management — X25519 identity key + signed prekey +
+  one-time prekeys per device; device registration API; server stores PUBLIC
+  keys only (private keys never leave the device); docs/e2e.md key-lifecycle
+  section; Go + Elixir + tests.
+- [ ] I2: X3DH handshake + Double Ratchet sessions per 1:1 conversation;
+  session establishment over the existing chat channel; forward secrecy +
+  post-compromise healing properties documented and tested; no custom crypto
+  primitives (use audited constructions only).
+- [ ] I3: E2E message envelope — ciphertext payload over `message:new`
+  (server persists ciphertext only, never plaintext); per-conversation E2E
+  flag in the API; client guidance docs; smoke coverage; NEVER claim E2E on
+  conversations where it is not enabled. Then Phase I complete.
+
 ## Done when
 
-All boxes ticked, CI green, `scripts/smoke.sh` passes, docs complete.
+All boxes ticked (A through I), CI green, `scripts/smoke.sh` passes, docs complete.
 Then report to founder: production-ready backend live on main.
 
 ## Log
