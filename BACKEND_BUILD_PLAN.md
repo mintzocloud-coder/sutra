@@ -2173,6 +2173,25 @@ with documented contracts until then.
       scripts/smoke.sh to `docker compose run --rm hydra create client`;
       `bash -n` green. Smoke CI re-runs on this push — confirm green
       next run; if still red, continue triage there.
+    - [x] H1 part 2c DONE 2026-10-19 ~13:35 IST: CI-red triage #8.
+      Checked the smoke job on the part-2b push (run 39214445220):
+      6/7 jobs green; smoke still failed at "hydra oauth2 client
+      creation" → `smoke FAIL: hydra returned an opaque token, not a JWT`.
+      ROOT CAUSE: the client was created WITHOUT any access-token
+      strategy, so Hydra v2 minted opaque tokens. The smoke.sh comment
+      ("jwt-bearer <redacted> type makes Hydra mint JWT") described the v1
+      flag; v2's client field is `access_token_strategy` (valid: `jwt` /
+      `opaque` — verified against pkg.go.dev ory/hydra/v2 client struct).
+      FIX: scripts/smoke.sh now creates 'sutra-smoke' via the Admin REST
+      API (POST localhost:4445/clients, `access_token_strategy: "jwt"`)
+      instead of the version-fragile `hydra create client` CLI; on
+      "already exists" (SMOKE_KEEP_UP=1 re-runs) it DELETEs + re-POSTs so
+      a stale opaque client can never survive. VERIFIED: bash -n green,
+      request body JSON-validated, Go API's JWKS verifier (iss/aud/sub
+      checks in internal/oidc) matches Hydra v2 JWT claims (iss
+      http://hydra:4444, aud sutra-api, sub client_id). Full smoke run is
+      CI-gated (no docker daemon on this VM). Smoke CI re-runs on this
+      push — confirm green next run; if still red, continue triage there.
 - [ ] H2: Business integrations — WhatsApp Cloud API direct adapter
   (fail-closed stub; no BSP), Tally on-premise bridge design + stub,
   Zoho Books default adapter (fail-closed stub), docs/integrations.md
@@ -2567,3 +2586,5 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-19 ~09:55 IST: SECURITY (Dhanasvi, research stage): replaced secret-shaped webhook example `whsec_<realistic>` in docs/openapi.yaml:4173 with obvious dummy `whsec_EXAMPLE_DO_NOT_USE`. GitHub secret-scanning alert #1 (stripe_webhook_signing_secret, opened 02:33 UTC on commit 53e8870a) verified via API: still open, never a real credential (value was a generated doc example; real webhook/payment credentials stay post-investors per plan). Doc fix rides this run's normal push; alert still needs dismissal as false_positive via API (main agent).
 
 - 2026-10-19 ~11:40 IST: H1 part 2a done (see H1 task note) — smoke.sh "Business AI copilot round-trip (H1)" section: grounded question streams the true price (₹1,299, json.dumps-escaped grep verified), fabricated ₹999 gets the safe fallback with nothing leaked, non-seller → 403 not_a_seller, AI_BIZ_RPM=1 → 429 ai_rate_limited + Retry-After; ai restored to defaults. Verified: bash -n green, 26/26 test_business.py green (new persistent venv ~/workspace/venvs/sutra-ai), SSE-encoding simulation green. Full smoke run is CI-gated (no docker on this VM). Part 2b = CI-green confirmation of the smoke job on this push. Pushed.
+
+- 2026-10-19 ~13:35 IST: H1 part 2c done — CI-red triage #8 (see H1 part-2 note): smoke job on run 39214445220 failed at "hydra oauth2 client creation" with `smoke FAIL: hydra returned an opaque token, not a JWT`. Root cause: client created without any access-token strategy (the old smoke.sh comment described the Hydra v1 flag; v2 uses client field `access_token_strategy`, values `jwt`/`opaque`). Fix: scripts/smoke.sh creates 'sutra-smoke' via the Admin REST API (POST localhost:4445/clients, `access_token_strategy: "jwt"`), DELETE + re-POST on "already exists". Verified: bash -n green, request JSON validated, JWT claims match the Go JWKS verifier (iss/aud/sub). Full smoke run CI-gated. Pushed.

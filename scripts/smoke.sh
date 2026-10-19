@@ -281,21 +281,30 @@ pass "api boot log has no set-but-ignored LOGISTICS_* WARN"
 # through the A2 JWKS flow reaches GET /v1/me.
 echo "smoke: creating hydra oauth2 client 'sutra-smoke'"
 SMOKE_HYDRA_CLIENT_SECRET="${SMOKE_HYDRA_CLIENT_SECRET:-$(openssl rand -hex 24)}"
-# The jwt-bearer grant type is what makes Hydra mint JWT (not opaque)
-# access tokens. Tolerate "already exists" for SMOKE_KEEP_UP=1 re-runs.
-if ! docker compose run --rm hydra create client \
-    --endpoint http://hydra:4445 \
-    --id sutra-smoke \
-    --secret "$SMOKE_HYDRA_CLIENT_SECRET" \
-    --grant-type client_credentials \
-    --grant-type urn:ietf:params:oauth:grant-type:jwt-bearer \
-    --response-type token \
-    --scope openid \
-    --audience sutra-api \
-    --token-endpoint-auth-method client_secret_basic \
-    >/tmp/sutra-hydra-client.out 2>&1; then
+# The per-client access_token_strategy "jwt" is what makes Hydra v2 mint JWT
+# (not opaque) access tokens. The Admin REST API is used instead of
+# `hydra create client`: the CLI's strategy flag name changed across Hydra
+# versions, while the JSON field is stable per the swagger model. Tolerate
+# "already exists" for SMOKE_KEEP_UP=1 re-runs (recreated so a stale opaque
+# client can never survive a re-run).
+client_body=$(cat <<EOF
+{"client_id":"sutra-smoke","client_secret":"$SMOKE_HYDRA_CLIENT_SECRET",\
+"grant_types":["client_credentials","urn:ietf:params:oauth:grant-type:jwt-bearer"],\
+"response_types":["token"],"scope":"openid","audience":["sutra-api"],\
+"token_endpoint_auth_method":"client_secret_basic","access_token_strategy":"jwt"}
+EOF
+)
+create_client() {
+  curl -sf -X POST http://localhost:4445/clients \
+    -H 'Content-Type: application/json' \
+    -d "$client_body" >/tmp/sutra-hydra-client.out 2>&1
+}
+if ! create_client; then
   if grep -qiE "already exists|conflict" /tmp/sutra-hydra-client.out; then
-    echo "smoke: hydra client 'sutra-smoke' already exists — reusing"
+    echo "smoke: hydra client 'sutra-smoke' already exists — recreating with jwt strategy"
+    curl -sf -X DELETE "http://localhost:4445/clients/sutra-smoke" >/dev/null \
+      && create_client \
+      || { cat /tmp/sutra-hydra-client.out >&2; fail "hydra oauth2 client re-creation failed"; }
   else
     cat /tmp/sutra-hydra-client.out >&2
     fail "hydra oauth2 client creation failed"
