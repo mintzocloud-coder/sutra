@@ -41,7 +41,7 @@ Post-investors onboarding checklist:
    (scoped to `whatsapp_business_messaging` + `whatsapp_business_management`).
 3. Set `WHATSAPP_PROVIDER=cloud-api`, `WHATSAPP_PHONE_NUMBER_ID`,
    `WHATSAPP_ACCESS_TOKEN` from the secret store (never in repo).
-4. Register the webhook URL (`/v1/webhooks/whatsapp`, H2 part 2) with the
+4. Register the webhook URL (`/internal/whatsapp/webhook`, H2 part 2) with the
    verify token; set `WHATSAPP_WEBHOOK_VERIFY_TOKEN` (the Meta app secret).
 5. Get the marketing/utility templates approved in the WhatsApp Manager;
    free-form text works only inside the 24h customer-service window.
@@ -96,8 +96,34 @@ Post-investors onboarding checklist:
 
 - No send routes on the API yet — the H2 part-2 wiring consumes these
   seams for order notifications (WhatsApp), accounting export (Tally /
-  Zoho), plus `/v1/webhooks/whatsapp` inbound and the per-seller Tally
+  Zoho), plus `/internal/whatsapp/webhook` inbound and the per-seller Tally
   bridge registration. The stubs being wired at boot is deliberate:
   provider-name typos already fail fast today.
 - E2E encryption stays Wave 2; gated items stay gated (identity
   fail-closed, real payments post-incorporation).
+
+## Routes (H2 part 2a — shipped)
+
+- `POST /v1/integrations/whatsapp/send` (behind RequireAuth, seller-scoped):
+  exactly one of `text` (≤4096 chars) or `template` (name/language allowlist,
+  body/header/button components) to one E.164 recipient. Unknown fields are
+  rejected; invalid grammar → 400/422; a caller with no seller account →
+  403 `not_a_seller`. Until the post-investors Meta onboarding the stub
+  fails closed: 503 `whatsapp_unavailable` + Retry-After on every send —
+  the API never implies a message went out. Post-investors the real
+  provider returns 202 with the Meta `wamid.*` message id.
+- `GET /internal/whatsapp/webhook` — Meta's subscription handshake:
+  `hub.mode=subscribe` + the exact `hub.verify_token` (from
+  `WHATSAPP_WEBHOOK_VERIFY_TOKEN`) echoes `hub.challenge` verbatim. Fails
+  closed (401) when the verify token is unset — no secret, no handshake.
+- `POST /internal/whatsapp/webhook` — the signed event callback. The
+  `X-Hub-Signature-256` HMAC is verified over the raw body with the real
+  `VerifyWebhookSignature` before anything else; missing/bad signature →
+  401, foreign `object` → 400. Wave 1 acknowledges (200) and logs the
+  event kinds (messages vs statuses) — the 200 never implies storage;
+  inbound message processing is Wave 2.
+
+Note: the webhook lives at `/internal/*` (public by necessity — Meta
+calls it), not under `/v1/*`, which is behind RequireAuth. The OpenAPI
+coverage gate tracks it as an internal route, same as
+`/internal/livekit/webhook`.

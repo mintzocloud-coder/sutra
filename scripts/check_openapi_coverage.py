@@ -38,7 +38,7 @@ MINIAPP_HANDLER = os.path.join(REPO, "services/api/internal/miniapp/handler.go")
 SPEC = os.path.join(REPO, "docs/openapi.yaml")
 
 # Registered but deliberately undocumented: not part of the public API.
-INTERNAL_ROUTES = {"/internal/livekit/webhook"}
+INTERNAL_ROUTES = {"/internal/livekit/webhook", "/internal/whatsapp/webhook"}
 # Reverse-proxy prefixes: the spec documents concrete sub-paths instead.
 PROXY_PREFIXES = {"/v1/ai"}
 # Mux catch-alls that are not API routes.

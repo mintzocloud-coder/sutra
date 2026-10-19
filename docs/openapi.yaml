@@ -3507,6 +3507,79 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
 
+  /v1/integrations/whatsapp/send:
+    post:
+      tags: [integrations]
+      summary: Send a WhatsApp message (seller-scoped)
+      description: |
+        Sends a text or approved-template WhatsApp message to one E.164
+        recipient via the Meta Cloud API (direct, no BSP). Seller-scoped:
+        the caller must own a seller account (`not_a_seller` otherwise).
+        Exactly one of `text` or `template` is required.
+
+        Until the post-investors Meta onboarding completes, the seam is a
+        fail-closed stub and every send answers 503 `whatsapp_unavailable`
+        with Retry-After — the API never implies a message went out.
+      operationId: sendWhatsApp
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WhatsAppSendRequest'
+      responses:
+        '202':
+          description: Message accepted by the gateway.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WhatsAppSendResult'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Bad grammar — neither/both of text/template, unknown fields, template violations (`invalid_request`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Caller owns no seller account (`not_a_seller`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '422':
+          description: Bad recipient phone (`invalid_phone`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: The WhatsApp gateway failed to accept the message (`whatsapp_upstream`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: WhatsApp is not wired on this deployment (`whatsapp_unavailable`); Retry-After present.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
   /v1/mini-apps:
     post:
       tags: [mini-apps]
@@ -4437,6 +4510,58 @@ components:
             Idempotency key. Omit and the API mints one; re-publishing the
             same event_id returns the original message.
           example: evt_2026_10_19_001
+    WhatsAppSendResult:
+      type: object
+      required: [message_id]
+      properties:
+        message_id:
+          type: string
+          description: Provider message id (wamid.* on the Meta Cloud API).
+          example: wamid.HBgN...
+    WhatsAppSendRequest:
+      type: object
+      required: [to]
+      additionalProperties: false
+      properties:
+        to:
+          type: string
+          description: E.164 recipient (+<8-15 digits>).
+          example: +919876543210
+        text:
+          type: string
+          maxLength: 4096
+          description: Free-form text (Meta permits it inside the 24h service window).
+          example: Your order #123 has shipped.
+        template:
+          type: object
+          required: [name, language]
+          additionalProperties: false
+          properties:
+            name:
+              type: string
+              maxLength: 512
+              example: order_update
+            language:
+              type: string
+              enum: [en, hi, gu, ta, te, bn, kn, ml, mr]
+              example: hi
+            components:
+              type: array
+              items:
+                type: object
+                required: [type]
+                additionalProperties: false
+                properties:
+                  type:
+                    type: string
+                    enum: [body, header, button]
+                  parameters:
+                    type: array
+                    items:
+                      type: string
+                      maxLength: 1000
+      description: |
+        Exactly one of `text` or `template` is required.
     WebhookMessage:
       type: object
       required: [id, event_type]

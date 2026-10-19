@@ -2598,8 +2598,7 @@ with documented contracts until then.
   Zoho Books default adapter (fail-closed stub), docs/integrations.md
   with post-investors onboarding checklists.
   - [x] H2 part 1 DONE 2026-10-20 ~02:20 IST: `internal/integrations`
-    Go seam (house fail-closed pattern from payments/logistics):
-    WhatsAppProvider (SendText/SendTemplate, direct Meta Cloud API,
+    Go seam (house fail-closed pattern from payments/logistics):    WhatsAppProvider (SendText/SendTemplate, direct Meta Cloud API,
     no BSP) + REAL `VerifyWebhookSignature` (X-Hub-Signature-256
     HMAC-SHA256, pure crypto, fails closed on unset secret —
     unit-tested against a known vector); TallyBridge (PostVoucher:
@@ -2620,9 +2619,41 @@ with documented contracts until then.
     fail-closed proven LIVE — WHATSAPP_PROVIDER=bogus,
     TALLY_PROVIDER=bridge, ZOHO_PROVIDER=books each exit 1 with the
     typed error before the DB connect; SPDX checker green. One
-    self-inflicted gofmt nit fixed pre-push. H2 STAYS OPEN: part 2 =
-    send routes + /v1/webhooks/whatsapp inbound + per-seller Tally
-    wiring + smoke.
+    self-inflicted gofmt nit fixed pre-push. H2 STAYS OPEN: part 2a =
+    send routes + /internal/whatsapp/webhook inbound (this run);
+    part 2b = per-seller Tally wiring + smoke.
+  - [x] H2 part 2a DONE 2026-10-20 ~03:05 IST: WhatsApp send route +
+    inbound webhook (Go). New `internal/integrations/whatsapp_handler.go`
+    — `POST /v1/integrations/whatsapp/send` (behind RequireAuth,
+    seller-scoped via the users→sellers seam: 403 not_a_seller without a
+    seller account): exactly one of text (≤4096 runes) or template
+    (name/language allowlist, body/header/button components) to one E.164
+    recipient, strict unknown-field rejection, 400/422 grammar codes,
+    stub → 503 whatsapp_unavailable + Retry-After (never implies a
+    message went out), provider error → 502, real provider → 202 with
+    message id. `GET/POST /internal/whatsapp/webhook` (public, like the
+    livekit webhook — Meta can't present a JWT): GET answers the
+    hub-challenge handshake against WHATSAPP_WEBHOOK_VERIFY_TOKEN (fail
+    closed 401 when unset); POST verifies X-Hub-Signature-256 with the
+    REAL VerifyWebhookSignature from part 1 before touching state
+    (401 on mismatch, 400 on bad JSON/foreign object), then acknowledges
+    200 and logs event kinds — inbound message processing is Wave 2,
+    documented. main.go keeps the WhatsApp provider (no longer discarded)
+    and passes it through newHandler (Tally/Zoho still discarded —
+    part 2b); 5 newHandler test call sites updated. OpenAPI gains the
+    send path + WhatsApp schemas (redocly valid); the coverage gate's
+    INTERNAL_ROUTES now includes /internal/whatsapp/webhook (52 spec
+    paths OK). docs/integrations.md: route contract section + the
+    /v1→/internal correction.
+    VERIFIED: gofmt clean, go build+vet clean, full `go test ./...`
+    green (26 packages; 12 new handler tests: no-subject 401,
+    not_a_seller 403, stub/nil-provider 503+Retry-After, 12-case
+    validation matrix, fake-provider 202 text+template, hub-challenge
+    5-case matrix incl. unset-secret fail-closed, inbound 6-case sig
+    matrix + valid-sig bad-JSON/foreign-object).
+    H2 STAYS OPEN: part 2b = per-seller Tally wiring + smoke.sh H2
+    section (WhatsApp 503/401/challenge asserts + Tally fail-closed
+    asserts).
 - [ ] H3: Ads platform — custom Go GSP auction core (bid → rank → price),
   Promovolve (Apache-2.0) for creative serving, advertiser API
   (campaigns, budgets, targeting), reporting, docs/ads.md, OpenAPI +
@@ -2639,6 +2670,13 @@ Then report to founder: production-ready backend live on main.
 
 ## Log
 
+- 2026-10-20 ~03:05 IST: H2 part 2a done — WhatsApp send route
+  (POST /v1/integrations/whatsapp/send, seller-scoped, stub fails closed
+  503+Retry-After) + inbound webhook (GET/POST /internal/whatsapp/webhook:
+  hub-challenge handshake + real HMAC-SHA256 signature verification).
+  gofmt/build/vet clean, full go test green (26 pkgs, 12 new tests),
+  redocly valid, coverage gate 52 paths OK. H2 stays open: part 2b =
+  per-seller Tally wiring + smoke.sh H2 section.
 - 2026-10-20 ~02:20 IST: **H1 COMPLETE — CI-green confirmed.** Run
   39317941108 (the 2z push, beb7a4be) finished with ALL 7 jobs green,
   including the Full-stack smoke test — the first fully-green CI run

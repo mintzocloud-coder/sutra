@@ -65,8 +65,10 @@ func methodGuard(allowed []string, h http.Handler) http.HandlerFunc {
 // be nil: the /v1/ai/* proxy routes are then unregistered. translator
 // may be nil or disabled: ?translate= is then a no-op and feed items
 // keep their original text. whClient may be nil or disabled: the
-// developer webhook routes (G2 part 2) are then unregistered.
-func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, mediaSvc *media.Service, rt realtime.Publisher, aiProxy *aiproxy.Proxy, log *slog.Logger, translator *feed.Translator, searchClient *search.Client, orderBus events.EventBus, whClient *webhooks.Client) http.Handler {
+// developer webhook routes (G2 part 2) are then unregistered. waProvider
+// may be nil: the send route answers 503; the /internal/whatsapp/webhook
+// is always registered (the HMAC check needs no provider).
+func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, mediaSvc *media.Service, rt realtime.Publisher, aiProxy *aiproxy.Proxy, log *slog.Logger, translator *feed.Translator, searchClient *search.Client, orderBus events.EventBus, whClient *webhooks.Client, waProvider integrations.WhatsAppProvider) http.Handler {
 	auth := middleware.RequireAuth(verifier, log, middleware.AuthOptions{
 		Bypass:        cfg.AuthBypass,
 		BypassSubject: cfg.BypassSubject,
@@ -105,6 +107,20 @@ func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *
 	// /v1/* paths in the envelope too.
 	v1 := http.NewServeMux()
 	meHandler := users.MeHandler(pool, log)
+
+	// WhatsApp send route (H2 part 2a): seller-scoped order updates via
+	// the Meta Cloud API. Registered whenever the integrations seam is
+	// wired (the stub fails closed with 503 — it never sends).
+	waHandler := integrations.NewWhatsAppHandler(pool, waProvider, cfg.WhatsAppWebhookSecret, log)
+	v1.Handle("/v1/integrations/whatsapp/send", methodGuard([]string{http.MethodPost},
+		waHandler.Send()))
+	// WhatsApp inbound webhook (H2 part 2a): Meta's hub-challenge GET +
+	// the signed callback POST. Public by necessity (Meta calls it), like
+	// /internal/livekit/webhook; the HMAC check is the auth.
+	mux.Handle("/internal/whatsapp/webhook", methodGuard([]string{http.MethodGet, http.MethodPost},
+		waHandler.Webhook()))
+	log.Info("whatsapp routes registered",
+		"routes", "/v1/integrations/whatsapp/send,/internal/whatsapp/webhook")
 	v1.Handle("/v1/me", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			middleware.MethodNotAllowedHandler(http.MethodGet)(w, r)
@@ -550,15 +566,20 @@ func main() {
 	// all three are the fail-closed stub (see internal/integrations):
 	// every operation is an explicit typed error — no WhatsApp message
 	// can be sent, no Tally voucher posted, no Zoho invoice created.
-	// The constructed providers are discarded for now and consumed by
-	// the H2 business-notification/accounting wiring landing in part 2.
+	// The WhatsApp provider is kept and passed to newHandler: the send
+	// route and the inbound webhook need it. Tally/Zoho stay discarded
+	// for now; their wiring lands in H2 part 2b.
 	// Real keys MUST come from the WHATSAPP_*/TALLY_*/ZOHO_*
 	// environment; they are never committed and never logged.
-	if _, err := integrations.NewWhatsApp(cfg.WhatsAppProvider, integrations.WhatsAppConfig{
+	// The WhatsApp provider is kept (unlike Tally/Zoho, whose wiring lands
+	// in H2 part 2b): the H2 part 2a send route and the inbound webhook
+	// handler need it.
+	waProvider, err := integrations.NewWhatsApp(cfg.WhatsAppProvider, integrations.WhatsAppConfig{
 		PhoneNumberID:       cfg.WhatsAppPhoneNumberID,
 		AccessToken:         cfg.WhatsAppAccessToken,
 		WebhookVerifySecret: cfg.WhatsAppWebhookSecret,
-	}); err != nil {
+	})
+	if err != nil {
 		log.Error("invalid WhatsApp config — refusing to start", "err", err)
 		os.Exit(1)
 	}
@@ -734,7 +755,7 @@ func main() {
 
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	defer bgCancel() // stops the live reconciler (G1) on shutdown
-	handler := newHandler(bgCtx, cfg, pool, verifier, feedSvc, mediaSvc, rtPub, aiProxy, log, translator, searchClient, orderBus, whClient)
+	handler := newHandler(bgCtx, cfg, pool, verifier, feedSvc, mediaSvc, rtPub, aiProxy, log, translator, searchClient, orderBus, whClient, waProvider)
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: handler}
 
 	go func() {
