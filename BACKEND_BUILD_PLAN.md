@@ -2121,6 +2121,39 @@ with documented contracts until then.
     (no Go changes). H1 STAYS OPEN: part 2 = smoke.sh H1 round-trip
     (stub model: grounded question → true price in SSE; non-seller
     403; 429 paths) + CI-green confirmation.
+  - [ ] H1 part 2: smoke.sh H1 round-trip + CI-green confirmation.
+    - [x] H1 part 2a DONE 2026-10-19 ~11:40 IST: smoke.sh H1 section.
+      New "Business AI copilot round-trip (H1)" section in scripts/smoke.sh
+      (placed after the E2 personal-AI section, before E6; CI's smoke job
+      runs the whole script): (1) fresh Hydra identity registers a seller,
+      lists product "Smoke Business Kurta" (mens-fashion seed category),
+      adds variant SMOKE-H-RED-M price_paise=129900 mrp_paise=199900
+      attributes color=red/size=M (variants default active — verified in
+      Go AddVariant: status=="" -> "active"), inventory +7, product
+      activated — the grounding block's single source of truth;
+      (2) grounded question "is the red kurta price ₹1,299?" → asserts
+      RUN_STARTED + TEXT_MESSAGE_START + the TRUE price in the SSE
+      (grep on the json.dumps-escaped form \u20b91,299 — verified by
+      simulation against real _event() output) + RUN_FINISHED, and that
+      the fallback did NOT fire; (3) fabricated question "…price ₹999?"
+      → asserts the safe fallback streamed ("couldn't verify that
+      detail"), the wrong price (\u20b9999) ABSENT from the stream,
+      RUN_FINISHED present; (4) fresh non-seller Hydra identity → 403 +
+      envelope not_a_seller (eager, before any data access); (5)
+      AI_BIZ_RPM=1 → loop-until-429 (minute-rollover-safe, E2 pattern)
+      asserts 429 + Retry-After + ai_rate_limited envelope (JSON, never
+      truncated SSE); ai restored to defaults afterwards. House patterns
+      followed (per-run openssl hydra secrets, mktemp bodies,
+      set -euo pipefail — two `grep -q && fail` negative asserts caught
+      and rewritten as `if` blocks). VERIFIED: bash -n green; new pytest
+      venv (~/workspace/venvs/sutra-ai, persistent) → 26/26
+      test_business.py green (the exact stub-echo→guard→fallback
+      behaviors the smoke asserts); grep-pattern simulation against real
+      json.dumps SSE output confirmed. Full smoke execution is CI-gated
+      (no docker daemon/compose plugin on this VM — precedent from
+      G4 part 2a).
+    - [ ] H1 part 2b: CI-green confirmation of the new H1 smoke section
+      (check the smoke job on the part-2a push; if it fails, fix forward).
 - [ ] H2: Business integrations — WhatsApp Cloud API direct adapter
   (fail-closed stub; no BSP), Tally on-premise bridge design + stub,
   Zoho Books default adapter (fail-closed stub), docs/integrations.md
@@ -2472,3 +2505,5 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-19 ~09:20 IST: G4 part 1 done (see G4 task note) — OpenAPI single-source-of-truth coverage gate: new scripts/check_openapi_coverage.py (stdlib-only) + CI openapi job runs it with the redocly lint. Gate proven non-vacuous via a negative drift test (exit 1, names the missing path + registration site). Spec needed no fixes — 50 paths already faithful. Part 2 (SDK stub gen check in CI, Docusaurus skeleton, onboarding guide, docs/dev-platform.md) next run. Pushed.
 
 - 2026-10-19 ~09:55 IST: SECURITY (Dhanasvi, research stage): replaced secret-shaped webhook example `whsec_<realistic>` in docs/openapi.yaml:4173 with obvious dummy `whsec_EXAMPLE_DO_NOT_USE`. GitHub secret-scanning alert #1 (stripe_webhook_signing_secret, opened 02:33 UTC on commit 53e8870a) verified via API: still open, never a real credential (value was a generated doc example; real webhook/payment credentials stay post-investors per plan). Doc fix rides this run's normal push; alert still needs dismissal as false_positive via API (main agent).
+
+- 2026-10-19 ~11:40 IST: H1 part 2a done (see H1 task note) — smoke.sh "Business AI copilot round-trip (H1)" section: grounded question streams the true price (₹1,299, json.dumps-escaped grep verified), fabricated ₹999 gets the safe fallback with nothing leaked, non-seller → 403 not_a_seller, AI_BIZ_RPM=1 → 429 ai_rate_limited + Retry-After; ai restored to defaults. Verified: bash -n green, 26/26 test_business.py green (new persistent venv ~/workspace/venvs/sutra-ai), SSE-encoding simulation green. Full smoke run is CI-gated (no docker on this VM). Part 2b = CI-green confirmation of the smoke job on this push. Pushed.

@@ -628,6 +628,167 @@ wait_for 120 "ai /healthz (defaults restored)" curl -sf http://localhost:8000/he
 # on — the more production-faithful state. Nothing later in this script
 # needs the bypass (chat keeps its own for the websocket round-trip).
 
+# --- Business AI copilot round-trip (H1) ---------------------------------------
+# POST /v1/ai/business (proxied to the ai service's /business) answers
+# catalog Q&A + order insights for the caller's OWN store, with the "never
+# invent attributes" guardrail verified end to end over the wire. The stub
+# model stands in for sarvam-30B (CI has no GPU/model to pull); it ECHOES
+# the user's question, which proves the guard in both directions:
+#   - a question asserting the TRUE price (₹1,299) streams it back unchanged
+#     (the guard found it in the injected grounding block);
+#   - a question asserting a WRONG price (₹999) gets the safe fallback —
+#     the fabrication never reaches the client.
+# Non-sellers are refused with 403 not_a_seller before anything runs, and
+# the per-user rpm guard rejects with a JSON 429 (never a truncated SSE).
+# NOTE: SSE payloads are json.dumps-encoded, so ₹ appears as \u20b9.
+echo "smoke: business AI copilot round-trip (H1)"
+AI_MODEL_STUB=1 docker compose up -d --no-deps ai
+wait_for 120 "ai /healthz (stub model, H1)" curl -sf http://localhost:8000/healthz
+
+biz_client="sutra-smoke-h-$(date +%s)"
+echo "smoke: creating hydra oauth2 client '$biz_client'"
+SMOKE_HYDRA_CLIENT_H_SECRET="$(openssl rand -hex 32)"
+if ! docker compose run --rm hydra hydra create client \
+    --endpoint http://hydra:4445 \
+    --id "$biz_client" \
+    --secret "$SMOKE_HYDRA_CLIENT_H_SECRET" \
+    --grant-type client_credentials \
+    --grant-type urn:ietf:params:oauth:grant-type:jwt-bearer \
+    --response-type token \
+    --scope openid \
+    --audience sutra-api \
+    --token-endpoint-auth-method client_secret_basic \
+    >/tmp/sutra-hydra-client-h.out 2>&1; then
+  cat /tmp/sutra-hydra-client-h.out >&2
+  fail "hydra oauth2 client '$biz_client' creation failed"
+else
+  pass "hydra oauth2 client '$biz_client' created"
+fi
+
+token_h_json="$(curl -sf -u "$biz_client:$SMOKE_HYDRA_CLIENT_H_SECRET" \
+  --data-urlencode 'grant_type=client_credentials' \
+  --data-urlencode 'audience=sutra-api' \
+  --data-urlencode 'scope=openid' \
+  http://localhost:4444/oauth2/token)" || fail "hydra token request for '$biz_client' failed"
+token_h="$(printf '%s' "$token_h_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
+[ -n "$token_h" ] || fail "hydra token for '$biz_client' was empty"
+
+# Register a seller and seed the grounding facts: one active product, one
+# active priced variant (SKU SMOKE-H-RED-M, price ₹1,299, stock 7) — the
+# single source of truth the guard validates every reply against.
+biz_slug="smoke-store-h-$(date +%s)"
+curl -sf -X POST -H "Authorization: Bearer $token_h" -H 'Content-Type: application/json' \
+  -d "{\"store_name\":\"Smoke Biz Store\",\"store_slug\":\"$biz_slug\"}" \
+  "$API_URL/v1/sellers" >/dev/null || fail "H1: POST /v1/sellers failed"
+prod_h="$(curl -sf -X POST -H "Authorization: Bearer $token_h" -H 'Content-Type: application/json' \
+  -d '{"title":"Smoke Business Kurta","description":"red handloom kurta","category_slug":"mens-fashion"}' \
+  "$API_URL/v1/products")" || fail "H1: POST /v1/products failed"
+prod_h_id="$(printf '%s' "$prod_h" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+var_h="$(curl -sf -X POST -H "Authorization: Bearer $token_h" -H 'Content-Type: application/json' \
+  -d '{"sku":"SMOKE-H-RED-M","price_paise":129900,"mrp_paise":199900,"attributes":{"color":"red","size":"M"}}' \
+  "$API_URL/v1/products/$prod_h_id/variants")" || fail "H1: POST variant failed"
+var_h_id="$(printf '%s' "$var_h" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+curl -sf -X POST -H "Authorization: Bearer $token_h" -H 'Content-Type: application/json' \
+  -d '{"delta":7}' "$API_URL/v1/variants/$var_h_id/inventory/adjust" >/dev/null \
+  || fail "H1: inventory adjust failed"
+curl -sf -X PATCH -H "Authorization: Bearer $token_h" -H 'Content-Type: application/json' \
+  -d '{"status":"active"}' "$API_URL/v1/products/$prod_h_id" >/dev/null \
+  || fail "H1: product activate failed"
+pass "H1: seller + active product (SKU SMOKE-H-RED-M, price ₹1,299, stock 7)"
+
+# Grounded question: the true price is in the grounding block, so the stub
+# echo passes the guard and streams the real price back.
+biz_out="$(curl -sf -N -H "Authorization: Bearer $token_h" -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"is the red kurta price ₹1,299?"}]}' \
+  "$API_URL/v1/ai/business")" || fail "H1: POST /v1/ai/business failed"
+printf '%s' "$biz_out" | grep -q '"type":"RUN_STARTED"' \
+  || fail "H1: business stream missing RUN_STARTED"
+printf '%s' "$biz_out" | grep -q '"type":"TEXT_MESSAGE_START"' \
+  || fail "H1: business stream missing TEXT_MESSAGE_START"
+printf '%s' "$biz_out" | grep -q '\\u20b91,299' \
+  || fail "H1: grounded question did not stream the true price (₹1,299)"
+if printf '%s' "$biz_out" | grep -q "couldn't verify"; then
+  fail "H1: grounded question wrongly triggered the fallback"
+fi
+printf '%s' "$biz_out" | grep -q '"type":"RUN_FINISHED"' \
+  || fail "H1: business stream missing RUN_FINISHED"
+pass "H1: grounded question streams the true price (₹1,299), no fallback"
+
+# Fabricated question: the stub echoes ₹999, the guard must catch it and
+# swap in the safe fallback — the wrong price must never reach the wire.
+biz_bad="$(curl -sf -N -H "Authorization: Bearer $token_h" -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"is the red kurta price ₹999?"}]}' \
+  "$API_URL/v1/ai/business")" || fail "H1: fabricated-price call failed"
+printf '%s' "$biz_bad" | grep -q "couldn't verify that detail" \
+  || fail "H1: fabricated price did not get the safe fallback"
+if printf '%s' "$biz_bad" | grep -q '\\u20b9999'; then
+  fail "H1: fabricated price (₹999) leaked into the stream"
+fi
+printf '%s' "$biz_bad" | grep -q '"type":"RUN_FINISHED"' \
+  || fail "H1: fabricated-price stream missing RUN_FINISHED"
+pass "H1: fabricated price (₹999) blocked — safe fallback streamed, nothing leaked"
+
+# Non-seller 403: a fresh Hydra identity with no seller store is refused
+# before any guard, graph, or model call.
+biz2_client="sutra-smoke-h2-$(date +%s)"
+SMOKE_HYDRA_CLIENT_H2_SECRET="$(openssl rand -hex 32)"
+docker compose run --rm hydra hydra create client \
+  --endpoint http://hydra:4445 \
+  --id "$biz2_client" \
+  --secret "$SMOKE_HYDRA_CLIENT_H2_SECRET" \
+  --grant-type client_credentials \
+  --grant-type urn:ietf:params:oauth:grant-type:jwt-bearer \
+  --response-type token \
+  --scope openid \
+  --audience sutra-api \
+  --token-endpoint-auth-method client_secret_basic \
+  >/tmp/sutra-hydra-client-h2.out 2>&1 \
+  || { cat /tmp/sutra-hydra-client-h2.out >&2; fail "hydra oauth2 client '$biz2_client' creation failed"; }
+token_h2="$(curl -sf -u "$biz2_client:$SMOKE_HYDRA_CLIENT_H2_SECRET" \
+  --data-urlencode 'grant_type=client_credentials' \
+  --data-urlencode 'audience=sutra-api' \
+  --data-urlencode 'scope=openid' \
+  http://localhost:4444/oauth2/token | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')" \
+  || fail "hydra token request for '$biz2_client' failed"
+[ -n "$token_h2" ] || fail "hydra token for '$biz2_client' was empty"
+biz_body="$(mktemp)"
+biz_code="$(curl -s -o "$biz_body" -w '%{http_code}' -N \
+  -H "Authorization: Bearer $token_h2" -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"what is my catalog?"}]}' \
+  "$API_URL/v1/ai/business")"
+[ "$biz_code" = "403" ] || { rm -f "$biz_body"; fail "H1: non-seller did not get 403 (got $biz_code)"; }
+[ "$(python3 -c 'import json; print(json.load(open("'"$biz_body"'"))["error"]["code"])')" = "not_a_seller" ] \
+  || { rm -f "$biz_body"; fail "H1: non-seller envelope code is not not_a_seller"; }
+rm -f "$biz_body"
+pass "H1: non-seller → 403 not_a_seller (eager, before any data access)"
+
+# Per-user rate-limit 429 path (AI_BIZ_RPM=1; loop until a 429 to survive a
+# minute-boundary rollover, same pattern as the E2 chat guard).
+echo "smoke: recreating ai with AI_BIZ_RPM=1"
+AI_MODEL_STUB=1 AI_BIZ_RPM=1 docker compose up -d --no-deps ai
+wait_for 120 "ai /healthz (biz rpm=1)" curl -sf http://localhost:8000/healthz
+biz429_body="$(mktemp)"
+biz429_hdr="$(mktemp)"
+biz429_code="200"
+for _ in 1 2 3 4; do
+  biz429_code="$(curl -s -o "$biz429_body" -D "$biz429_hdr" -w '%{http_code}' -N \
+    -H "Authorization: Bearer $token_h" -H 'Content-Type: application/json' \
+    -d '{"messages":[{"role":"user","content":"biz rate ping"}]}' \
+    "$API_URL/v1/ai/business" || true)"
+  [ "$biz429_code" = "429" ] && break
+done
+[ "$biz429_code" = "429" ] || { rm -f "$biz429_body" "$biz429_hdr"; fail "H1: business rate limit never triggered a 429 (last got $biz429_code)"; }
+grep -qi '^Retry-After: [1-9]' "$biz429_hdr" \
+  || { rm -f "$biz429_body" "$biz429_hdr"; fail "H1: business 429 missing Retry-After header"; }
+[ "$(python3 -c 'import json; print(json.load(open("'"$biz429_body"'"))["error"]["code"])')" = "ai_rate_limited" ] \
+  || { rm -f "$biz429_body" "$biz429_hdr"; fail "H1: business 429 envelope code is not ai_rate_limited"; }
+rm -f "$biz429_body" "$biz429_hdr"
+pass "H1: per-user business rate limit 429 ai_rate_limited + Retry-After (JSON, not truncated SSE)"
+
+# Restore the default ai configuration for the rest of the run.
+docker compose up -d --no-deps ai
+wait_for 120 "ai /healthz (defaults restored, post-H1)" curl -sf http://localhost:8000/healthz
+
 # --- AG-UI rate-limit guard (E6) -------------------------------------------
 # The /ag-ui/run echo endpoint costs no model tokens, but before E6 it was
 # the one AI endpoint with no per-user limit — an unbounded SSE stream is
