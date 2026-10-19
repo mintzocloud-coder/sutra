@@ -58,6 +58,16 @@ type Config struct {
 	LiveKitAPIKey       string // LiveKit API key (iss claim of minted tokens)
 	LiveKitAPISecret    string // LiveKit API secret (HS256 signing key); never commit
 	LiveTokenTTLMinutes int    // participant token lifetime; <=0 = 120
+	// LiveKitAPIURL is the SERVER-side LiveKit HTTP API base (the
+	// reconciler's RoomService calls); e.g. http://livekit:7880 in
+	// compose, http://localhost:7880 on a laptop. Client devices use
+	// LiveKitWSURL, never this.
+	LiveKitAPIURL string
+	// LiveKitReconcileMinutes is the crash-host sweep interval; <=0 = 15.
+	LiveKitReconcileMinutes int
+	// LiveKitReconcileGraceHours is how old a "live" registry row must
+	// be before the sweep checks it against the SFU; <=0 = 6.
+	LiveKitReconcileGraceHours int
 	// Transcode worker (D4b): background HLS pipeline draining
 	// media:transcode.
 	TranscodeGroup         string
@@ -201,6 +211,17 @@ func Load() Config {
 		LiveKitAPISecret: getEnv("LIVEKIT_API_SECRET", ""),
 		LiveTokenTTLMinutes: func() int {
 			n, _ := strconv.Atoi(getEnv("LIVEKIT_TOKEN_TTL_MINUTES", "120"))
+			return n
+		}(),
+		// LiveKit server-side HTTP API base (reconciler). In compose the
+		// API reaches the SFU by service name; on a laptop, localhost.
+		LiveKitAPIURL: getEnv("LIVEKIT_API_URL", "http://localhost:7880"),
+		LiveKitReconcileMinutes: func() int {
+			n, _ := strconv.Atoi(getEnv("LIVEKIT_RECONCILE_MINUTES", "15"))
+			return n
+		}(),
+		LiveKitReconcileGraceHours: func() int {
+			n, _ := strconv.Atoi(getEnv("LIVEKIT_RECONCILE_GRACE_HOURS", "6"))
 			return n
 		}(),
 		// Transcode worker (D4b): background video pipeline.

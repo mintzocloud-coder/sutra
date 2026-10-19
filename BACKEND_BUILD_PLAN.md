@@ -1825,10 +1825,11 @@ of truth, Docusaurus docs site). Everything else custom-built; no
 readymade for core. Elixir keeps the narrow realtime footprint (live
 orchestration joins chat/presence).
 
-- [ ] G1: LiveKit live media — livekit service in compose (pinned), Go
+- [x] G1: LiveKit live media — livekit service in compose (pinned), Go
   token minting (POST /v1/live/token, room-scoped, expiring), Elixir live
-  orchestration (room lifecycle events → user:<id> topics), docs/live.md,
-  OpenAPI + smoke (token mint + webhook round-trip).
+  orchestration (room lifecycle events → user:<id> topics), webhook ingress +
+  crash-host reconciliation, docs/live.md, OpenAPI + smoke (token mint +
+  webhook round-trip).
   - [x] G1 part 1 (2026-10-19): compose `livekit` (livekit/livekit-server:v1.8.4,
     TURN on), config seam (LIVEKIT_*; key-without-secret refuses boot), migration
     0014 live_rooms registry, Go internal/live (stdlib HS256 token mint,
@@ -1838,9 +1839,25 @@ orchestration joins chat/presence).
     OpenAPI paths + schemas, smoke.sh token-mint round-trip (host/viewer/410),
     production.md LIVEKIT_* rows. Go build+vet+unit tests green; Elixir syntax
     valid (CI is the compile gate).
-  - [ ] G1 part 2: LiveKit webhook ingress (POST /internal/livekit/webhook —
-    room_finished → flip room to ended + publish live:ended, crash-host
-    reconciliation), smoke webhook round-trip. Then G1 complete.
+  - [x] G1 part 2 (2026-10-19): LiveKit webhook ingress + crash-host
+    reconciliation. internal/live/webhook.go: POST /internal/livekit/webhook
+    (root mux, outside OIDC RequireAuth) verifies the documented
+    livekit-server token scheme — HS256 sig, iss, nbf/exp, sha256 body bind —
+    before touching state (forged/tampered/expired → 401); room_finished on a
+    sutra:<uuid> room flips the registry to ended idempotently + publishes
+    live:ended best-effort; other events acked+ignored; foreign rooms ignored.
+    internal/live/reconcile.go: crash-host sweeper started from main.go at
+    boot (context-cancelled on shutdown): lists stale live rows older than
+    LIVEKIT_RECONCILE_GRACE_HOURS, checks against SFU RoomService.ListRooms
+    (stdlib HS256 roomList token; no SDK), ends missing rows + live:ended.
+    Fail-closed per pass (SFU unreachable → ends nothing). Config:
+    LIVEKIT_API_URL (default http://localhost:7880; compose http://livekit:7880),
+    LIVEKIT_RECONCILE_MINUTES (15), LIVEKIT_RECONCILE_GRACE_HOURS (6).
+    docs/live.md (reconciliation section), docs/production.md (LIVEKIT_* rows),
+    docker-compose.yml (api env), smoke.sh (webhook round-trip: 401 on forged
+    sig, flip, idempotent retry, 410 on post-webhook mint, ignored events,
+    foreign rooms). Go build+vet+full suite green; 3 new webhook unit tests.
+    **G1 COMPLETE — Phase G: G2 (Svix) next.**
 - [ ] G2: Svix webhooks — Svix server in compose (pinned) + Go webhook
   dispatcher (platform events → per-app endpoints, signing, retries,
   delivery log), developer-facing webhook docs, OpenAPI + tests + smoke.
@@ -2170,3 +2187,5 @@ Then report to founder: production-ready backend live on main.
   Verified: go build/vet clean, live+realtime unit tests green,
   migration discovery green, openapi YAML parses, Elixir syntax valid
   (CI = compile gate). Part 2 (webhook ingress) next run. Pushed.
+
+- 2026-10-19 ~06:35 IST: G1 part 2 done (see G1 task note) — webhook ingress + crash-host sweeper; new internal/live/{webhook,reconcile}.go, config + main.go wiring, docs/live.md + production.md + compose env, smoke.sh webhook round-trip. Verified: gofmt/build/vet clean, full go test green (3 new webhook tests), bash -n on smoke.sh, compose YAML parse below. CI-gated for the live run. **G1 COMPLETE; Phase G continues with G2 (Svix webhooks).**

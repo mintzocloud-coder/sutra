@@ -332,6 +332,13 @@ services:
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-sutra-dev-livekey}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-sutra-dev-live-secret-change-me-in-production}
       LIVEKIT_TOKEN_TTL_MINUTES: ${LIVEKIT_TOKEN_TTL_MINUTES:-120}
+      # G1 part 2: server-side SFU HTTP API base for the crash-host
+      # reconciler (RoomService.ListRooms). Compose service name here —
+      # clients use LIVEKIT_WS_URL, never this. Interval + grace of the
+      # sweep; fail-closed per pass, so generous defaults are safe.
+      LIVEKIT_API_URL: "http://livekit:7880"
+      LIVEKIT_RECONCILE_MINUTES: ${LIVEKIT_RECONCILE_MINUTES:-15}
+      LIVEKIT_RECONCILE_GRACE_HOURS: ${LIVEKIT_RECONCILE_GRACE_HOURS:-6}
     depends_on:
       postgres:
         condition: service_healthy

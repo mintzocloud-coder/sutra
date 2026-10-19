@@ -79,12 +79,36 @@ Viewers are NOT fanned out per-event in v1: they discover rooms via
 `live:started` is a later refinement (the celebrity rule from feed
 fan-out would apply).
 
-## Reconciliation (G1 part 2 — next)
+## Reconciliation (G1 part 2 — DONE 2026-10-19)
 
-The LiveKit webhook ingress (`room_finished` → flip the room to
-`ended` and publish `live:ended`) reconciles the registry against SFU
-truth, so a crashed host's room doesn't stay `live` forever. Until it
-lands, a host who lost their client re-ends the room via the API.
+The registry is reconciled against SFU truth on two paths:
+
+1. **Webhook ingress** — `POST /internal/livekit/webhook` (registered on
+   the root mux, *outside* the OIDC `RequireAuth`; the SFU has no user
+   credential). Every post must carry `Authorization: <api_key> <jwt>`
+   where the JWT is HS256-signed with `LIVEKIT_API_SECRET` and binds the
+   exact body via the `sha256` claim (the documented livekit-server
+   webhook scheme). The handler verifies signature → iss → nbf/exp →
+   body-hash, in that order; unsigned, mis-signed, expired, or
+   body-tampered posts are rejected 401 and never touch state.
+   `room_finished` naming one of our rooms (`sutra:<room_id>`) flips the
+   registry row to `ended` (idempotent — retries are a no-op) and
+   publishes `live:ended` best-effort. All other events are
+   acknowledged and ignored: the registry stays the platform's source
+   of truth.
+
+2. **Crash-host sweeper** — a background goroutine started when the
+   seam is enabled, first pass at boot, then every
+   `LIVEKIT_RECONCILE_MINUTES` (default 15). It lists registry rooms
+   still `live` older than `LIVEKIT_RECONCILE_GRACE_HOURS` (default 6)
+   and checks them against `RoomService.ListRooms` on the SFU (stdlib
+   HS256 server token with the `roomList` grant only — no server SDK).
+   Rows the SFU no longer has are ended + `live:ended` published; rows
+   the SFU still has are left alone. **Fail-closed per pass**: if the
+   SFU can't be reached or its answer can't be parsed, the sweep ends
+   nothing and logs — it would rather leave a stale `live` row than
+   mass-end rooms on a fetch failure. A host who lost their client can
+   also always re-end the room via the API.
 
 ## Configuration
 

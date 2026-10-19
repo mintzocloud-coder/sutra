@@ -17,6 +17,7 @@ package main
 // Reproduce:  cd services/api && go test -run='^$' -bench=. -benchtime=10s -count=3 ./...
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -43,7 +44,7 @@ func benchConfig() config.Config {
 // dereference them.
 func benchHandler(b *testing.B) http.Handler {
 	b.Helper()
-	return newHandler(benchConfig(), nil, testVerifier(), nil, nil, nil, nil, testLogger(), nil, nil, nil)
+	return newHandler(context.Background(), benchConfig(), nil, testVerifier(), nil, nil, nil, nil, testLogger(), nil, nil, nil)
 }
 
 // serveOnce runs one request through h; shared by the sequential

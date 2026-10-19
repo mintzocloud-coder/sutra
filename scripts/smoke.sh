@@ -310,8 +310,9 @@ pass "api /v1/me 401 without token (bypass confirmed off)"
 # Go live seam is enabled in smoke. Exercises: room open, host token
 # mint (canPublish), viewer token mint (subscribe-only, no publish),
 # on-air listing, room end (410 on post-end mint). The SFU itself is NOT
-# exercised — media bytes never touch the API; the webhook ingress that
-# reconciles crashed hosts against SFU truth lands in G1 part 2.
+# exercised — media bytes never touch the API; the webhook ingress is
+# covered below (G1 part 2): signed webhooks are verified, room_finished
+# flips the registry, retries are idempotent.
 echo "smoke: live room round-trip (G1)"
 room_json="$(curl -sf -H "Authorization: Bearer $access_token" \
   -H "Content-Type: application/json" \
@@ -370,6 +371,80 @@ pass "live room ended"
   "$API_URL/v1/live/token")" = "410" ] \
   || fail "token mint for an ended room did not 410"
 pass "token mint for ended room 410s"
+
+# --- LiveKit webhook ingress (G1 part 2) ------------------------------------
+# Signs webhooks the way livekit-server does (HS256, sha256 body bind)
+# and exercises: forged signatures 401, room_finished flipping the
+# room to ended, duplicate delivery being a no-op, ignored events
+# acking 200, and foreign room names being ignored.
+echo "smoke: livekit webhook ingress (G1 part 2)"
+LK_KEY="${LIVEKIT_API_KEY:-sutra-dev-livekey}"
+LK_SECRET="${LIVEKIT_API_SECRET:-sutra-dev-live-secret-change-me-in-production}"
+cat > /tmp/livekit_webhook_smoke.py <<'PY'
+import sys, json, hmac, hashlib, base64, time, urllib.request, urllib.error
+url, key, secret, event, room_name = sys.argv[1:6]
+body = json.dumps({"event": event, "id": "wh_smoke", "room": {"sid": "RM_x", "name": room_name}}).encode()
+s = hashlib.sha256(body).digest()
+claims = {"iss": key, "sub": key, "nbf": int(time.time()) - 60,
+          "exp": int(time.time()) + 300, "sha256": base64.b64encode(s).decode()}
+hdr = base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').rstrip(b"=").decode()
+pl = base64.urlsafe_b64encode(json.dumps(claims).encode()).rstrip(b"=").decode()
+sig = base64.urlsafe_b64encode(hmac.new(secret.encode(), (hdr + "." + pl).encode(), hashlib.sha256).digest()).rstrip(b"=").decode()
+req = urllib.request.Request(url, data=body, headers={
+    "Content-Type": "application/json", "Authorization": key + " " + hdr + "." + pl + "." + sig})
+try:
+    resp = urllib.request.urlopen(req)
+    print(resp.status)
+    print(resp.read().decode())
+except urllib.error.HTTPError as e:
+    print(e.code)
+    print(e.read().decode())
+PY
+post_webhook() { # event, room_name, secret -> "status|body"
+  python3 /tmp/livekit_webhook_smoke.py "$API_URL/internal/livekit/webhook" "$LK_KEY" "$3" "$1" "$2" \
+    | python3 -c 'import sys; parts = sys.stdin.read().splitlines(); print(parts[0] + "|" + (parts[1] if len(parts) > 1 else ""))'
+}
+wh_room_json="$(curl -sf -H "Authorization: Bearer $access_token" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"smoke webhook","kind":"livestream"}' \
+  "$API_URL/v1/live/rooms")" || fail "POST /v1/live/rooms (webhook room) did not return 201"
+wh_room_id="$(printf '%s' "$wh_room_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+wh_room_name="$(printf '%s' "$wh_room_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["livekit_room_name"])')"
+
+[ "$(post_webhook room_finished "$wh_room_name" wrong-secret | cut -d'|' -f1)" = "401" ] \
+  || fail "webhook with forged signature did not 401"
+pass "webhook rejects forged signature (401)"
+
+res="$(post_webhook room_finished "$wh_room_name" "$LK_SECRET")"
+[ "$(printf '%s' "$res" | cut -d'|' -f1)" = "200" ] \
+  && printf '%s' "$res" | python3 -c 'import json,sys; b=json.loads(sys.stdin.read().split("|",1)[1]); assert b["handled"] and b["flipped"] and b["room_id"], b' \
+  || fail "room_finished webhook did not flip the room: $res"
+pass "room_finished webhook flipped the room to ended"
+
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $access_token" \
+  -H "Content-Type: application/json" \
+  -d "{\"room_id\":\"$wh_room_id\",\"role\":\"viewer\"}" \
+  "$API_URL/v1/live/token")" = "410" ] \
+  || fail "token mint for webhook-ended room did not 410"
+pass "webhook-ended room refuses new tokens (410)"
+
+res="$(post_webhook room_finished "$wh_room_name" "$LK_SECRET")"
+[ "$(printf '%s' "$res" | cut -d'|' -f1)" = "200" ] \
+  && printf '%s' "$res" | python3 -c 'import json,sys; b=json.loads(sys.stdin.read().split("|",1)[1]); assert b["handled"] and not b["flipped"], b' \
+  || fail "duplicate room_finished was not an idempotent no-op: $res"
+pass "duplicate room_finished is an idempotent no-op"
+
+res="$(post_webhook participant_joined "$wh_room_name" "$LK_SECRET")"
+[ "$(printf '%s' "$res" | cut -d'|' -f1)" = "200" ] \
+  && printf '%s' "$res" | python3 -c 'import json,sys; b=json.loads(sys.stdin.read().split("|",1)[1]); assert not b["handled"], b' \
+  || fail "non-finish event was not acked-and-ignored: $res"
+pass "non-finish events are acknowledged, ignored"
+
+res="$(post_webhook room_finished someone-elses-room "$LK_SECRET")"
+[ "$(printf '%s' "$res" | cut -d'|' -f1)" = "200" ] \
+  && printf '%s' "$res" | python3 -c 'import json,sys; b=json.loads(sys.stdin.read().split("|",1)[1]); assert not b["handled"] and b["reason"]=="unknown_room", b' \
+  || fail "room_finished for a foreign room was not ignored: $res"
+pass "room_finished for a foreign room is ignored"
 
 # --- AI core round-trip (E1) -------------------------------------------------
 # The Python AI service boots behind its fail-closed service token; the Go

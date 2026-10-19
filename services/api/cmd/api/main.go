@@ -62,7 +62,7 @@ func methodGuard(allowed []string, h http.Handler) http.HandlerFunc {
 // be nil: the /v1/ai/* proxy routes are then unregistered. translator
 // may be nil or disabled: ?translate= is then a no-op and feed items
 // keep their original text.
-func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, mediaSvc *media.Service, rt realtime.Publisher, aiProxy *aiproxy.Proxy, log *slog.Logger, translator *feed.Translator, searchClient *search.Client, orderBus events.EventBus) http.Handler {
+func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, mediaSvc *media.Service, rt realtime.Publisher, aiProxy *aiproxy.Proxy, log *slog.Logger, translator *feed.Translator, searchClient *search.Client, orderBus events.EventBus) http.Handler {
 	auth := middleware.RequireAuth(verifier, log, middleware.AuthOptions{
 		Bypass:        cfg.AuthBypass,
 		BypassSubject: cfg.BypassSubject,
@@ -167,8 +167,28 @@ func newHandler(cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedS
 		v1.Handle("/v1/live/rooms", live.RoomsHandler(liveSvc, pool, rt, log))
 		v1.Handle("/v1/live/rooms/{id}/end", methodGuard([]string{http.MethodPost},
 			live.EndRoomHandler(liveSvc, pool, rt, log)))
+		// G1 part 2: LiveKit server-webhook ingress. NOT behind
+		// RequireAuth — the SFU has no user credential; its own signed
+		// webhook token is the auth (verified inside the handler).
+		mux.Handle("/internal/livekit/webhook", methodGuard([]string{http.MethodPost},
+			live.WebhookHandler(liveSvc, pool, rt, log)))
+		// Crash-host sweeper: reconciles the registry against SFU truth
+		// on an interval. Fail-closed per pass (see internal/live).
+		reconcileInterval := time.Duration(cfg.LiveKitReconcileMinutes) * time.Minute
+		if reconcileInterval <= 0 {
+			reconcileInterval = 15 * time.Minute
+		}
+		reconcileGrace := time.Duration(cfg.LiveKitReconcileGraceHours) * time.Hour
+		if reconcileGrace <= 0 {
+			reconcileGrace = 6 * time.Hour
+		}
+		go live.StartReconciler(bg, liveSvc, pool, rt, cfg.LiveKitAPIURL,
+			reconcileInterval, reconcileGrace, log)
 		log.Info("live media enabled", "ws_url", cfg.LiveKitWSURL,
-			"token_ttl_minutes", cfg.LiveTokenTTLMinutes)
+			"token_ttl_minutes", cfg.LiveTokenTTLMinutes,
+			"webhook", "/internal/livekit/webhook",
+			"reconcile_interval_minutes", int(reconcileInterval.Minutes()),
+			"reconcile_grace_hours", int(reconcileGrace.Hours()))
 	} else {
 		log.Warn("live media disabled — LIVEKIT_API_SECRET is not set; " +
 			"/v1/live/* routes are unregistered")
@@ -596,7 +616,9 @@ func main() {
 		log.Info("order event bus enabled", "nats", cfg.NatsURL)
 	}
 
-	handler := newHandler(cfg, pool, verifier, feedSvc, mediaSvc, rtPub, aiProxy, log, translator, searchClient, orderBus)
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+	defer bgCancel() // stops the live reconciler (G1) on shutdown
+	handler := newHandler(bgCtx, cfg, pool, verifier, feedSvc, mediaSvc, rtPub, aiProxy, log, translator, searchClient, orderBus)
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: handler}
 
 	go func() {

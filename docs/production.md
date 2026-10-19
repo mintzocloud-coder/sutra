@@ -126,6 +126,9 @@ CORS_ORIGINS=https://app.sutra.example.com
 | `LIVEKIT_API_KEY` | *(unset = live disabled)* | LiveKit API key (the `iss` claim of minted participant tokens). Must match the key half of the livekit service's `LIVEKIT_KEYS` |
 | `LIVEKIT_API_SECRET` | *(unset = live disabled)* | **SECRET.** LiveKit API secret = the HS256 signing key for participant tokens; must match the secret half of the livekit service's `LIVEKIT_KEYS`. A key with an empty secret makes the API refuse to boot (fail-closed). Override the compose dev default in production |
 | `LIVEKIT_TOKEN_TTL_MINUTES` | `120` | Participant token lifetime; `<=0` falls back to 120 |
+| `LIVEKIT_API_URL` | `http://localhost:7880` | **Server-side** LiveKit HTTP API base the crash-host reconciler calls (RoomService.ListRooms). Compose sets `http://livekit:7880`; never handed to clients |
+| `LIVEKIT_RECONCILE_MINUTES` | `15` | Crash-host sweep interval (G1 part 2); `<=0` falls back to 15 |
+| `LIVEKIT_RECONCILE_GRACE_HOURS` | `6` | A `live` registry row must be this old before the sweep checks it against the SFU; `<=0` falls back to 6 |
 | `PAYMENTS_PROVIDER` | `stub` | Only `stub` boots until the post-investors Cashfree onboarding; any other value makes the API refuse to boot (fail-closed). See `docs/payments.md` |
 | `CASHFREE_APP_ID` | *(unset)* | Cashfree App ID (post-investors); loaded, never logged, ignored by the stub (loud WARN when set) |
 | `CASHFREE_SECRET_KEY` | *(unset)* | Cashfree Secret Key; same handling as the App ID |
