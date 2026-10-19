@@ -717,8 +717,26 @@ printf '%s' "$chat_out" | grep -q '"type":"RUN_STARTED"' \
   || fail "chat stream missing RUN_STARTED"
 printf '%s' "$chat_out" | grep -q '"type":"TEXT_MESSAGE_START"' \
   || fail "chat stream missing TEXT_MESSAGE_START"
-printf '%s' "$chat_out" | grep -q 'AI_MODEL_STUB=1' \
-  || fail "chat stream missing the stub-model marker"
+# The stub streams in 24-char chunks (services/ai/app/model.py), so the
+# marker "AI_MODEL_STUB=1" is split across two TEXT_MESSAGE_CONTENT
+# events ("AI_M" | "ODEL_STUB=1,") — a line-based grep can never match
+# it. Reassemble the deltas exactly like a real AG-UI client does, then
+# assert on the full text.
+printf '%s' "$chat_out" | python3 -c '
+import json, sys
+text = ""
+for line in sys.stdin:
+    line = line.strip()
+    if not line.startswith("data:"):
+        continue
+    try:
+        ev = json.loads(line[5:])
+    except Exception:
+        continue
+    if ev.get("type") == "TEXT_MESSAGE_CONTENT":
+        text += ev.get("delta", "")
+assert "AI_MODEL_STUB=1" in text, "reassembled text missing marker: %r" % text[:120]
+' || fail "chat stream missing the stub-model marker (reassembled deltas)"
 printf '%s' "$chat_out" | grep -q '"type":"RUN_FINISHED"' \
   || fail "chat stream missing RUN_FINISHED"
 thread_id="$(printf '%s' "$chat_out" | grep -o '"threadId":"[^"]*"' | head -1 | cut -d'"' -f4)"

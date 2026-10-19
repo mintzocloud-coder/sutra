@@ -2291,6 +2291,26 @@ with documented contracts until then.
       no Go/Python/Elixir touched. H1 part 2 STAYS OPEN: CI-green
       confirmation of the smoke job on this push — next run checks the
       G2 section passes and H1 closes.
+    - [x] H1 part 2o DONE 2026-10-19 ~19:55 IST: CI-red triage #20.
+      Run 39262860777 (the 2n push) finished 6/7 green; smoke RED at
+      "smoke FAIL: chat stream missing the stub-model marker" — the E2
+      personal-AI section, reached for the first time (all earlier
+      runs died before E2). ROOT CAUSE (smoke.sh assertion, NOT the
+      service): the stub streams in 24-char chunks
+      (services/ai/app/model.py), so "AI_MODEL_STUB=1" is split across
+      two TEXT_MESSAGE_CONTENT events ("AI_M" | "ODEL_STUB=1,") — a
+      line-based grep can NEVER match it. Proven locally with the real
+      StubClient + real chat._event: marker in joined text = True, in
+      any single SSE line = False. FIX: the assertion now reassembles
+      TEXT_MESSAGE_CONTENT deltas exactly like a real AG-UI client
+      does (python3 parses the data: JSON lines, joins deltas, asserts
+      the marker in the full text) — the honest contract. VERIFIED:
+      bash -n green; positive sim (real stub SSE) passes the new
+      assertion; negative sim (marker-less stream) correctly fails it.
+      No Go/Python/Elixir touched. H1 part 2 STAYS OPEN: CI-green
+      confirmation of the smoke job on this push — next run checks
+      the E2 section passes and H1 (then the H1 business section)
+      follows.
 - [ ] H2: Business integrations — WhatsApp Cloud API direct adapter
   (fail-closed stub; no BSP), Tally on-premise bridge design + stub,
   Zoho Books default adapter (fail-closed stub), docs/integrations.md
@@ -2919,3 +2939,16 @@ Then report to founder: production-ready backend live on main.
   Webhooks round-trip uses the hydra JWT, so bypass-off is the stronger
   contract. bash -n green. Next run: confirm smoke job green on this
   push (H1 section should now be reached and pass).
+
+- 2026-10-19 ~19:55 IST: H1 part 2o done — CI-RED TRIAGE #20 (smoke.sh
+  assertion bug, service code untouched). Run 39262860777 (2n push):
+  6/7 green, smoke RED at E2 "chat stream missing the stub-model
+  marker" — first run ever to reach E2 (earlier runs died at D1/G2/E1).
+  Root cause: stub streams 24-char chunks, so "AI_MODEL_STUB=1" splits
+  across two TEXT_MESSAGE_CONTENT events ("AI_M"|"ODEL_STUB=1,") —
+  line-grep could never match. Proven with real StubClient + real
+  chat._event (joined=True, single-line=False). Fix: assertion now
+  reassembles deltas like a real AG-UI client (python3 parses data:
+  JSON lines, joins, asserts). bash -n green; positive sim passes,
+  negative sim correctly fails. H1 part 2 STAYS OPEN: CI-green
+  confirmation on this push. Pushed.
