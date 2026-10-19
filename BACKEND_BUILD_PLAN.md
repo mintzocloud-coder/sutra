@@ -2356,6 +2356,33 @@ with documented contracts until then.
       bash -n green. No Go/Python/Elixir touched. H1 part 2 STAYS
       OPEN: CI-green confirmation of the smoke job on this push —
       next run checks the E5 cleanup + H1 business section go green.
+    - [x] H1 part 2r DONE 2026-10-19 ~22:30 IST: CI-red triage #23
+      (real API bug — the service code was at fault this time).
+      Run 39281576810 (the 2q push) finished 6/7 green; smoke RED at
+      the F3 cart section — "smoke FAIL: cart over-stock add did not
+      return 409 (got 500)". ROOT CAUSE: services/api/internal/cart
+      validated only the REQUEST qty against maxLineQty (999); the
+      smoke adds 2 then 999, so the upsert tried quantity = 1001 and
+      tripped the migration's cart_items_qty_sane DB CHECK (quantity
+      <= 999, 0010_carts.sql) — the raw pgx error mapped to an
+      unmapped 500 before the service's stock check could return
+      409 insufficient_stock. FIX: AddItem now reads the existing line
+      inside the tx and refuses (ErrInvalidQuantity → 422) when the
+      ACCUMULATED total would exceed maxLineQty, so the DB CHECK is a
+      true last resort; the stock guard (409 insufficient_stock) still
+      fires for genuine over-stock. SMOKE: the over-stock step now adds
+      9 onto the 2-unit line (11 > 10 available, well under the cap)
+      so it asserts the intended stock-guard path; the cap path is
+      covered by the new TestCartAddAccumulatedCap (999 + 1 → 422,
+      line intact after rollback). VERIFIED: gofmt/go build/go vet
+      clean (whole module), SPDX checker green, bash -n green, full
+      cart integration suite green incl. the new test (run against a
+      local PG16 test DB; stock-2000 fixture so the stock guard can't
+      fire first). No contract changes (422 invalid_quantity already
+      in the OpenAPI contract; the 500 was never valid). H1 part 2
+      STAYS OPEN: CI-green confirmation of the smoke job on this
+      push — next run checks the F3 cart section + H1 business section
+      go green.
 - [ ] H2: Business integrations — WhatsApp Cloud API direct adapter
   (fail-closed stub; no BSP), Tally on-premise bridge design + stub,
   Zoho Books default adapter (fail-closed stub), docs/integrations.md

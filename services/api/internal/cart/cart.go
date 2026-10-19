@@ -28,8 +28,10 @@ import (
 	"github.com/mintzocloud-coder/sutra/services/api/internal/db"
 )
 
-// maxLineQty caps a single cart line: a sanity ceiling far above any
-// realistic order; the per-variant stock check is the real guard.
+// maxLineQty caps a single cart line (accumulated quantity, not the
+// request): a sanity ceiling far above any realistic order; the
+// per-variant stock check is the real guard. Mirrored by the
+// cart_items_qty_sane DB check (quantity <= 999) as a last resort.
 const maxLineQty = 999
 
 var (
@@ -139,6 +141,24 @@ func (s *Service) AddItem(ctx context.Context, userID, variantID pgtype.UUID, qt
 	}
 	if !buyable {
 		return nil, ErrVariantUnavailable
+	}
+	// The sanity cap applies to the ACCUMULATED line, not the request:
+	// read the existing line first and refuse the add if the total would
+	// exceed maxLineQty. Without this, an add of (say) 999 onto an
+	// existing line of 2 trips the cart_items_qty_sane DB check
+	// (quantity <= 999) on the upsert — a raw pgx error that maps to a
+	// 500 instead of the 422 ErrInvalidQuantity below. The DB check
+	// stays as a last-resort backstop.
+	var existing int
+	err = tx.QueryRow(ctx, `
+		SELECT COALESCE(
+			(SELECT quantity FROM cart_items WHERE user_id = $1 AND variant_id = $2), 0)`,
+		userID, variantID).Scan(&existing)
+	if err != nil {
+		return nil, err
+	}
+	if existing+qty > maxLineQty {
+		return nil, ErrInvalidQuantity
 	}
 	var newQty int
 	err = tx.QueryRow(ctx, `

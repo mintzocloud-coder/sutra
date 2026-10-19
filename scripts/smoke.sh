@@ -1724,10 +1724,12 @@ ord_line="$(curl -sf -X POST \
   || fail "cart line_total wrong (want 2 × 149900)"
 pass "cart add: 2 × SMOKE-O-001 → 201, line_total 299800 paise"
 
-# Over-stock add refuses: 2 + 999 > 10 available → 409 insufficient_stock.
+# Over-stock add refuses: 2 + 9 = 11 > 10 available → 409
+# insufficient_stock. (Deliberately small: the add must trip the
+# stock guard, not the 999 sanity cap on the accumulated line.)
 com_code="$(curl -s -o "$com_body" -w '%{http_code}' -X POST \
   -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
-  -d "{\"variant_id\":\"$ordv_id\",\"quantity\":999}" \
+  -d "{\"variant_id\":\"$ordv_id\",\"quantity\":9}" \
   "$API_URL/v1/cart/items")"
 [ "$com_code" = "409" ] || fail "cart over-stock add did not return 409 (got $com_code)"
 [ "$(python3 -c 'import json; print(json.load(open("'"$com_body"'"))["error"]["code"])')" = "insufficient_stock" ] \

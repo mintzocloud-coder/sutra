@@ -238,6 +238,36 @@ func TestCartAddValidation(t *testing.T) {
 	}
 }
 
+// The sanity cap applies to the ACCUMULATED line: adding onto an
+// existing line must refuse with ErrInvalidQuantity (422) instead of
+// tripping the cart_items_qty_sane DB check (quantity <= 999), which
+// used to surface as an unmapped 500 from the upsert.
+func TestCartAddAccumulatedCap(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	cat := catalog.NewService(pool)
+	svc := NewService(pool)
+
+	buyer := provisionUser(t, ctx, pool, uniqueSubject(t))
+	// Stock far above the cap so the stock guard cannot fire first.
+	variantID := sellableVariant(t, ctx, pool, cat, provisionUser(t, ctx, pool, uniqueSubject(t)), 2000)
+
+	if _, err := svc.AddItem(ctx, buyer, variantID, 999); err != nil {
+		t.Fatalf("AddItem 999: %v", err)
+	}
+	if _, err := svc.AddItem(ctx, buyer, variantID, 1); !errors.Is(err, ErrInvalidQuantity) {
+		t.Errorf("accumulate past cap = %v, want ErrInvalidQuantity", err)
+	}
+	// The original 999-unit line must be intact (rollback, not partial).
+	ln, err := svc.lineFor(ctx, buyer, variantID)
+	if err != nil {
+		t.Fatalf("lineFor: %v", err)
+	}
+	if ln.Quantity != 999 {
+		t.Errorf("line after failed accumulate = %d, want 999", ln.Quantity)
+	}
+}
+
 func TestCartSetQuantity(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
