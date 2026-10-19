@@ -1985,10 +1985,18 @@ orchestration joins chat/presence).
     CI's PG) ; redocly lint valid; bash -n smoke.sh; SPDX check green.
     Full stack boot is CI-gated (no docker/PG on this VM).
     **G3 COMPLETE — Phase G: G4 (dev platform) next.**
-- [ ] G4: Dev platform — OpenAPI promoted to single source of truth
+- [x] G4: Dev platform — OpenAPI promoted to single source of truth
   (SDK stub generation check in CI), Docusaurus docs site skeleton (MIT),
   developer onboarding guide (app keys, webhooks, mini-app submission),
   docs/dev-platform.md. Then Phase G complete.
+  G4 COMPLETE 2026-10-19 ~12:45 IST: parts 1, 2a, 2b all landed and
+  verified in earlier runs; this run confirmed the artifacts on disk
+  (docs-site/ skeleton + intro/onboarding/webhooks/mini-apps guides,
+  scripts/check_openapi_coverage.py, scripts/check_sdk_generation.sh,
+  docs/dev-platform.md) and closed the parent checkbox — Phase G now
+  fully [x]. Phase G: LiveKit + Svix + mini-app runtime + dev platform
+  COMPLETE. Next: H1 part 2b (CI-green confirmation of the H1 smoke
+  section), then H2.
   - [x] G4 part 1 DONE 2026-10-19 ~09:20 IST: spec-as-SSOT coverage gate.
     New `scripts/check_openapi_coverage.py` (stdlib-only, SPDX header) —
     parses route registrations out of `services/api/cmd/api/main.go`
