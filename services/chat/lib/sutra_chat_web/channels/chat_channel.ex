@@ -127,6 +127,21 @@ defmodule SutraChatWeb.ChatChannel do
 
   defp join_device_id(_params), do: nil
 
+  # client_msg_id is transport-level idempotency: required and capped
+  # exactly like the plaintext path (RoomPolicy.authorize_send's rules).
+  defp valid_client_msg_id?(id),
+    do: is_binary(id) and id != "" and byte_size(id) <= 128
+
+  defp envelope_error(:missing_field), do: "e2e envelope missing a required field"
+  defp envelope_error(:invalid_payload), do: "invalid e2e envelope"
+  defp envelope_error(:field_too_long), do: "e2e envelope field too long"
+  defp envelope_error(:bad_base64), do: "e2e envelope key field is not valid base64"
+  defp envelope_error(:bad_key_size), do: "e2e ratchet key must be 32 bytes"
+  defp envelope_error(:bad_counter), do: "e2e envelope counters must be non-negative integers"
+  defp envelope_error(:ciphertext_empty), do: "e2e ciphertext must not be empty"
+  defp envelope_error(:ciphertext_too_large), do: "e2e ciphertext too large"
+
+  @impl true
   def handle_in("message:new", %{"e2e_data" => _} = params, socket) do
     client_msg_id = params["client_msg_id"]
 
@@ -148,20 +163,6 @@ defmodule SutraChatWeb.ChatChannel do
         end
     end
   end
-
-  # client_msg_id is transport-level idempotency: required and capped
-  # exactly like the plaintext path (RoomPolicy.authorize_send's rules).
-  defp valid_client_msg_id?(id),
-    do: is_binary(id) and id != "" and byte_size(id) <= 128
-
-  defp envelope_error(:missing_field), do: "e2e envelope missing a required field"
-  defp envelope_error(:invalid_payload), do: "invalid e2e envelope"
-  defp envelope_error(:field_too_long), do: "e2e envelope field too long"
-  defp envelope_error(:bad_base64), do: "e2e envelope key field is not valid base64"
-  defp envelope_error(:bad_key_size), do: "e2e ratchet key must be 32 bytes"
-  defp envelope_error(:bad_counter), do: "e2e envelope counters must be non-negative integers"
-  defp envelope_error(:ciphertext_empty), do: "e2e ciphertext must not be empty"
-  defp envelope_error(:ciphertext_too_large), do: "e2e ciphertext too large"
 
   @impl true
   def handle_in("message:new", %{"body" => body, "client_msg_id" => client_msg_id}, socket) do

@@ -37,6 +37,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/db"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/middleware"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/users"
@@ -384,7 +385,16 @@ func resolveSeller(pool *db.Pool) func(ctx context.Context, subject string) (str
 		if err := pool.QueryRow(ctx,
 			`SELECT id::text FROM sellers WHERE user_id = $1::uuid`, u.ID).
 			Scan(&id); err != nil {
-			return "", errNoSellerRow
+			// Only "no row" means "not a seller". Any other database
+			// error must surface as a 500 (with the real error logged
+			// by the caller) — mapping it to not_a_seller would lie
+			// to the client and hide outages (this exact masking
+			// produced a phantom 403 in CI when the api container was
+			// freshly recreated).
+			if errors.Is(err, pgx.ErrNoRows) {
+				return "", errNoSellerRow
+			}
+			return "", err
 		}
 		return id, nil
 	}

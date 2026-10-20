@@ -8419,8 +8419,37 @@ components:
         recovered panics.
       schema:
         type: string
+    RetryAfter:
+      description: |
+        Seconds to wait before retrying (ceiling of the wait, at least
+        1). Present on 429 (rate limited) and 503 (bridge temporarily
+        unavailable) responses.
+      schema:
+        type: integer
+        example: 3
 
   responses:
+    MethodNotAllowed:
+      description: |
+        Wrong HTTP method for this route. The `Allow` header names the
+        supported methods (e.g. `GET`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            error:
+              code: method_not_allowed
+              message: method not allowed
+              request_id: 01J9X0ABCD...
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+        Allow:
+          description: Supported methods for this route.
+          schema:
+            type: string
+            example: GET
     Unauthorized:
       description: |
         Missing, malformed, expired, or wrong-signature bearer token.

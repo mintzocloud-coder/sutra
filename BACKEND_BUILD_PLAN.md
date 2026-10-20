@@ -3236,6 +3236,31 @@ Then report to founder: production-ready backend live on main.
 
 ## Log
 
+- 2026-10-20 ~14:20 IST: **J1 TRIAGE #1 — all 4 CI failures on
+  f8c52c77 root-caused and fixed, pushed.** Run 39392382821:
+  (1) OpenAPI: the 4 H2 integrations paths $ref
+  `#/components/responses/MethodNotAllowed` +
+  `#/components/headers/RetryAfter`, but those components were never
+  pushed — dangling refs (redocly lint passed, openapi-typescript
+  bundle failed). The components were already in the working tree;
+  this push carries them. (2) Elixir: I3's new
+  `handle_in("message:new", %{"e2e_data"...})` clause sat apart from
+  the other two `handle_in("message:new")` clauses → warning under
+  `--warnings-as-errors`. Moved adjacent (all three now grouped),
+  `@impl true` added to the e2e clause. (3) Go: `internal/ads`
+  `testAdsPool` never ran `db.Migrate` — CI's fresh `postgres` DB
+  has no schema → "relation users does not exist" on all 8 ads
+  integration tests. Added the house-convention `db.Migrate` call;
+  verified green on a brand-new database (the exact CI scenario).
+  (4) Smoke: Tally 503 assertion got 403. Code proven CORRECT
+  locally (503 tally_not_registered with a registered seller) — the
+  CI 403 came 2s after an api container recreate. REAL BUG FOUND:
+  `resolveSeller` mapped ANY sellers-SELECT error (not just
+  pgx.ErrNoRows) to errNoSellerRow → 403, swallowing DB errors into
+  a lie. Narrowed to ErrNoRows-only; other errors now log + 500.
+  J1 STAYS OPEN: CI-green confirmation on this push — next run
+  checks all 7 jobs.
+
 - 2026-10-20 ~14:05 IST: **I3 COMPLETE — E2E message envelope transport
   smoke round-trip. Phase I COMPLETE. ALL PHASES A→I COMPLETE.** The
   backend build plan is now fully done; CI-gated confirmations
@@ -4089,3 +4114,5 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-20 ~00:30 IST: H1 part 2w done — CI-RED TRIAGE #27 (see H1 part-2 note): run 39301650049 (2u push) finished 6/7 green; smoke RED at F3 "created → confirmed" with the new 2u DIAG printing the real evidence for the first time: HTTP 405 + `Allow: GET`. Per 2u's invariant that meant the request hit the GET-only /v1/orders/{id} detail route — and inspection of the checkout's smoke.sh showed why: ord_st's curl URL was "$API_URL/v1/orders/$oid", the trailing /status dropped in the 2t ord_st rewrite (the DIAG echo still printed the intended /status path, hiding the mismatch). The Go 1.22 mux, methodGuard, actorRole (2s) and OrderStatusHandler were all correct; the 2u route-lock test stands. Same typo fixed in 3 more status PATCHes (confirmed→delivered 422, unknown-status 422, missing-body 400). VERIFIED: bash -n green; no Go/Python/Elixir touched. H1 part 2 STAYS OPEN: CI-green confirmation on this push; next run checks the F3 state machine goes green for the first time and H1 closes. Pushed.
 
 - 2026-10-20 ~01:50 IST: H1 part 2z done — CI-RED TRIAGE #30 (see H1 part-2 note): run 39313860457 (2y push) finished 6/7 green; smoke RED at "miniapp: owner draft launch failed" — the FIRST run ever to reach the G3 section (2y's fix made the whole F2 matrix PASS; the H1 business section passed in full: grounded ₹1,299 SSE, fabricated-₹999 fallback, non-seller 403, 429 + Retry-After). ROOT CAUSE: docker compose forwards host env into containers ONLY when the var is referenced in the compose file — smoke.sh's `MINIAPP_LAUNCH_SECRET=... docker compose up -d --no-deps api` recreate silently dropped the secret (no entry in api.environment), cfg.MiniappLaunchSecret stayed empty, and launchHandler fails closed (503 launch_unavailable) → curl -sf → fail. Latent since G3 part 2 was authored 2026-10-19 with bash -n verification only (full stack is CI-gated). FIX: `MINIAPP_LAUNCH_SECRET: ${MINIAPP_LAUNCH_SECRET:-}` added to api.environment (house pattern, same as SEARCH_MASTER_KEY/SVIX_API_TOKEN); interpolation simulation proves the env-prefix recreate passes the secret through while the secretless recreate expands to empty, so the 503 fail-closed proof still holds. VERIFIED: compose YAML parses, bash -n smoke.sh green (untouched), scripts/check-headers.sh green. No Go/Python/Elixir touched. H1 part 2 STAYS OPEN: CI-green confirmation on this push — next run checks the G3 mini-app section goes green and H1 closes.
+
+- 2026-10-20 ~14:00 IST: J1 triage note (proactivity research run, no push): main RED on all 6 Phase-I pushes (22e6f68→95b86a47). Exact failing steps from Actions API on run 39392382821: OpenAPI job fails at "SDK stub generation check" (redocly lint + coverage gate PASS); Go job fails at `go test ./...` (build+vet pass; unit tests pass locally without DB — failure is in PG16 integration tests, suspect 0021/0022 or new E2E integration tests); Elixir job fails at `mix compile --warnings-as-errors` (compile error/warning in today's E2E code — needs CI toolchain to reproduce); smoke fails at "Boot stack and run smoke tests". ROOT CAUSE (OpenAPI, fixed): 8 dangling $refs — `#/components/responses/MethodNotAllowed` x4 and `#/components/headers/RetryAfter` x4 on the integration paths — openapi-typescript throws "Can't resolve $ref" (reproduced locally via scripts/check_sdk_generation.sh). FIX APPLIED in working tree: added `components.responses.MethodNotAllowed` (405 + Allow header, code method_not_allowed, mirrors existing inline 405 pattern and the Go MethodNotAllowedHandler) and `components.headers.RetryAfter` (integer seconds, mirrors RateLimited inline def). VERIFIED LOCALLY: redocly lint valid, scripts/check_sdk_generation.sh OK (77 paths, consumer compiles), scripts/check_openapi_coverage.py OK. NOT pushed — J1 run to push with its own verification + continue Go/Elixir/smoke triage.

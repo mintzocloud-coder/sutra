@@ -203,6 +203,13 @@ func testAdsPool(t *testing.T) *db.Pool {
 	if err != nil {
 		t.Fatalf("db.Open: %v", err)
 	}
+	// House convention (users/orders/…): the CI test database is a
+	// fresh `postgres` database with no schema — run the migrations
+	// before touching tables. Without this the fixture INSERTs fail
+	// with "relation does not exist" (seen in CI on the ads suite).
+	if err := db.Migrate(context.Background(), pool); err != nil {
+		t.Fatalf("db.Migrate: %v", err)
+	}
 	t.Cleanup(func() { pool.Close() })
 	return pool
 }
