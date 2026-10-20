@@ -2835,6 +2835,37 @@ with documented contracts until then.
   Winner), the ad_events delivery ledger, spend accrual + 55/45 billing
   (ledger-only until F4's Cashfree onboarding), Promovolve-pattern
   contextual matching. docs/ads.md already specifies the contract.
+  - H3 part 3b chunk 1 DONE 2026-10-20 ~06:45 IST: the serving
+    integration core, verified against real PG16. Migration
+    0019_ad_serving.sql (ad_campaigns.bid_paise NULL=fail-closed +
+    ad_events delivery ledger with creator/platform share CHECKs)
+    applies cleanly through the real migration runner; campaigns.go
+    carries bid_paise (CreateInput + UpdateInput explicit-null clear +
+    validateBid + ListActiveBidEnabled); new internal/ads/serving.go --
+    ServingConfig from env (ADS_SERVING_ENABLED default OFF,
+    ADS_RESERVE_PAISE default 50), SlotContext (content-only, no
+    identity fields), ContextualQuality (pure, Promovolve-pattern:
+    base 0.5 + category 0.35 + language 0.15, clamped (0,1]), Decide
+    (pure -> kernel -> winner, nil-bid/zero-quality excluded), Serve
+    (fail-closed when disabled; one txn = ad_events INSERT + spend
+    accrual with budget-predicate -> ErrBudgetRaced on concurrent
+    drain, full rollback), 55/45 split on the ledger row. VERIFIED:
+    gofmt clean, `go build`+`go vet` clean, FULL
+    `go test -count=1 ./...` green (29 packages, 0 failures) against
+    real PG16 via TEST_DATABASE_URL -- TestServeRoundTrip passes:
+    disabled->ErrServingDisabled, no-creative->nil, single-bidder
+    price = reserve floor 50, ledger row + spend accrue in one txn,
+    bid-clear -> out of auctions, negative/over-budget bids rejected,
+    pause gating. Two bugs caught and fixed pre-push by reasoning
+    from the kernel: (1) test asserted single-bidder price 51 --
+    kernel floors at reserve = 50; (2) TestServeRoundTrip was not
+    hermetic -- Serve reads ALL active bid-enabled campaigns, so
+    leftover fixtures from failed runs polluted the auction (cleanup
+    added at test start). The previous run's BLOCKER (VM recycled
+    mid-run, PG wiped, dpkg locked) is resolved: PG16 restarted from
+    the Debian config dir (`pg_ctl -D /etc/postgresql/16/main` -- the
+    data dir lacks postgresql.conf), integration test + modified
+    Create/Update SQL paths now runtime-verified. Pushed.
 - [ ] H4: Subscriptions — Cashfree + UPI AutoPay subscription adapter
   (fail-closed stub), plans/entitlements model, creator-membership
   billing wiring (70/30 split), docs/subscriptions.md, OpenAPI + tests +
@@ -2866,6 +2897,17 @@ All boxes ticked (A through I), CI green, `scripts/smoke.sh` passes, docs comple
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-20 ~06:45 IST: H3 part 3b chunk 1 done and pushed — the ad
+  serving integration core (migration 0019 bid_paise fail-closed +
+  ad_events ledger; serving.go: ServingConfig/Decide/Serve with atomic
+  ad_events+spend txn, ErrBudgetRaced rollback, 55/45 split; pure
+  ContextualQuality Promovolve-pattern scoring). Previous run's blocker
+  (VM-recycled, PG wiped) resolved: PG16 restarted from
+  /etc/postgresql/16/main, FULL `go test -count=1 ./...` green on real
+  PG16 (29 pkgs, 0 failures), TestServeRoundTrip passes end-to-end
+  (reserve-floor price, ledger+spend txn, bid-clear, pause gating).
+  H3 STAYS OPEN: part 3b = serving HTTP endpoint + OpenAPI + smoke.
 
 - 2026-10-20 ~04:55 IST: H3 part 2 done — advertiser API (see H3 task
   note): migration 0017 (ad_campaigns), internal/ads campaigns service

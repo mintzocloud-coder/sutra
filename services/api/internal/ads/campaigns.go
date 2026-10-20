@@ -106,18 +106,22 @@ type Targeting struct {
 
 // Campaign is the advertiser record.
 type Campaign struct {
-	ID               pgtype.UUID `json:"id"`
-	AdvertiserID     pgtype.UUID `json:"advertiser_id"`
-	Name             string      `json:"name"`
-	Status           string      `json:"status"`
-	BudgetPaise      int64       `json:"budget_paise"`
-	SpendPaise       int64       `json:"spend_paise"`
-	DailyBudgetPaise *int64      `json:"daily_budget_paise,omitempty"`
-	Targeting        Targeting   `json:"targeting"`
-	StartAt          *time.Time  `json:"start_at,omitempty"`
-	EndAt            *time.Time  `json:"end_at,omitempty"`
-	CreatedAt        time.Time   `json:"created_at"`
-	UpdatedAt        time.Time   `json:"updated_at"`
+	ID           pgtype.UUID `json:"id"`
+	AdvertiserID pgtype.UUID `json:"advertiser_id"`
+	Name         string      `json:"name"`
+	Status       string      `json:"status"`
+	BudgetPaise  int64       `json:"budget_paise"`
+	SpendPaise   int64       `json:"spend_paise"`
+	// BidPaise is the max paise per won impression set by the advertiser.
+	// NULL (omitted) = not bid-enabled: the campaign can never enter an
+	// auction (fail-closed — no bid, no spend).
+	BidPaise         *int64     `json:"bid_paise,omitempty"`
+	DailyBudgetPaise *int64     `json:"daily_budget_paise,omitempty"`
+	Targeting        Targeting  `json:"targeting"`
+	StartAt          *time.Time `json:"start_at,omitempty"`
+	EndAt            *time.Time `json:"end_at,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
 // Eligible reports whether the campaign may enter auctions at time t.
@@ -228,8 +232,11 @@ func NewCampaignService(pool *db.Pool) *CampaignService { return &CampaignServic
 
 // CreateInput is the POST /v1/ads/campaigns body.
 type CreateInput struct {
-	Name             string          `json:"name"`
-	BudgetPaise      int64           `json:"budget_paise"`
+	Name        string `json:"name"`
+	BudgetPaise int64  `json:"budget_paise"`
+	// BidPaise is the max paise per won impression. Optional: nil means
+	// the campaign is not bid-enabled and can never enter auctions.
+	BidPaise         *int64          `json:"bid_paise,omitempty"`
 	DailyBudgetPaise *int64          `json:"daily_budget_paise"`
 	Targeting        json.RawMessage `json:"targeting"`
 	StartAt          *time.Time      `json:"start_at"`
@@ -249,6 +256,24 @@ func validateMoney(budget int64, daily *int64) error {
 		if *daily > budget {
 			return fmt.Errorf("%w: daily_budget_paise cannot exceed budget_paise", ErrInvalidCampaignField)
 		}
+	}
+	return nil
+}
+
+// validateBid checks the per-impression max bid. A nil bid means the
+// campaign is not bid-enabled (fail-closed: never enters auctions). A
+// set bid must be positive and can never exceed the campaign's total
+// budget — one impression cannot be allowed to spend more than the
+// whole campaign.
+func validateBid(bid *int64, budget int64) error {
+	if bid == nil {
+		return nil
+	}
+	if *bid <= 0 {
+		return fmt.Errorf("%w: bid_paise must be positive", ErrInvalidCampaignField)
+	}
+	if *bid > budget {
+		return fmt.Errorf("%w: bid_paise cannot exceed budget_paise", ErrInvalidCampaignField)
 	}
 	return nil
 }
@@ -306,6 +331,9 @@ func (s *CampaignService) Create(ctx context.Context, advertiser pgtype.UUID, in
 	if err := validateMoney(in.BudgetPaise, in.DailyBudgetPaise); err != nil {
 		return nil, err
 	}
+	if err := validateBid(in.BidPaise, in.BudgetPaise); err != nil {
+		return nil, err
+	}
 	if err := validateWindow(in.StartAt, in.EndAt); err != nil {
 		return nil, err
 	}
@@ -327,10 +355,10 @@ func (s *CampaignService) Create(ctx context.Context, advertiser pgtype.UUID, in
 	}
 	var c Campaign
 	row := tx.QueryRow(ctx, `
-		INSERT INTO ad_campaigns (advertiser_id, name, budget_paise, daily_budget_paise, targeting, start_at, end_at)
-		VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
-		RETURNING id, advertiser_id, name, status, budget_paise, spend_paise, daily_budget_paise, targeting, start_at, end_at, created_at, updated_at`,
-		advertiser, name, in.BudgetPaise, in.DailyBudgetPaise, string(targetingJSON), in.StartAt, in.EndAt)
+		INSERT INTO ad_campaigns (advertiser_id, name, budget_paise, bid_paise, daily_budget_paise, targeting, start_at, end_at)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+		RETURNING id, advertiser_id, name, status, budget_paise, spend_paise, bid_paise, daily_budget_paise, targeting, start_at, end_at, created_at, updated_at`,
+		advertiser, name, in.BudgetPaise, in.BidPaise, in.DailyBudgetPaise, string(targetingJSON), in.StartAt, in.EndAt)
 	if err := scanCampaign(row, &c); err != nil {
 		return nil, err
 	}
@@ -346,7 +374,7 @@ func (s *CampaignService) Create(ctx context.Context, advertiser pgtype.UUID, in
 func (s *CampaignService) Get(ctx context.Context, advertiser, id pgtype.UUID) (*Campaign, error) {
 	var c Campaign
 	row := s.pool.QueryRow(ctx, `
-		SELECT id, advertiser_id, name, status, budget_paise, spend_paise, daily_budget_paise, targeting, start_at, end_at, created_at, updated_at
+		SELECT id, advertiser_id, name, status, budget_paise, spend_paise, bid_paise, daily_budget_paise, targeting, start_at, end_at, created_at, updated_at
 		FROM ad_campaigns WHERE id = $1 AND status <> 'archived'`, id)
 	if err := scanCampaign(row, &c); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -365,8 +393,11 @@ func (s *CampaignService) Get(ctx context.Context, advertiser, id pgtype.UUID) (
 // moves via the activate/pause/resume/archive routes so every state
 // change is explicit. Spend is NEVER settable through this API.
 type UpdateInput struct {
-	Name             *string          `json:"name"`
-	BudgetPaise      *int64           `json:"budget_paise"`
+	Name        *string `json:"name"`
+	BudgetPaise *int64  `json:"budget_paise"`
+	// BidPaise is a double pointer: explicit null clears the bid, which
+	// drops the campaign out of auctions (fail-closed).
+	BidPaise         **int64          `json:"bid_paise"`
 	DailyBudgetPaise **int64          `json:"daily_budget_paise"` // double pointer: explicit null clears
 	Targeting        *json.RawMessage `json:"targeting"`
 	StartAt          **time.Time      `json:"start_at"`
@@ -387,11 +418,15 @@ func (s *CampaignService) Update(ctx context.Context, advertiser, id pgtype.UUID
 	daily := c.DailyBudgetPaise
 	start := c.StartAt
 	end := c.EndAt
+	bid := c.BidPaise
 	if in.BudgetPaise != nil {
 		budget = *in.BudgetPaise
 	}
 	if in.DailyBudgetPaise != nil {
 		daily = *in.DailyBudgetPaise
+	}
+	if in.BidPaise != nil {
+		bid = *in.BidPaise // explicit null clears the bid
 	}
 	if in.StartAt != nil {
 		start = *in.StartAt
@@ -402,8 +437,17 @@ func (s *CampaignService) Update(ctx context.Context, advertiser, id pgtype.UUID
 	if err := validateMoney(budget, daily); err != nil {
 		return nil, err
 	}
+	if err := validateBid(bid, budget); err != nil {
+		return nil, err
+	}
 	if budget < c.SpendPaise {
 		return nil, fmt.Errorf("%w: budget_paise cannot be lowered below current spend (%d paise)", ErrInvalidCampaignField, c.SpendPaise)
+	}
+	// A bid may not outlive the spend it guards: lowering the budget
+	// below the current bid is rejected (the advertiser must lower the
+	// bid first — explicit money moves only).
+	if bid != nil && *bid > budget {
+		return nil, fmt.Errorf("%w: bid_paise cannot exceed budget_paise", ErrInvalidCampaignField)
 	}
 	if err := validateWindow(start, end); err != nil {
 		return nil, err
@@ -436,6 +480,9 @@ func (s *CampaignService) Update(ctx context.Context, advertiser, id pgtype.UUID
 	}
 	if in.BudgetPaise != nil {
 		add("budget_paise", budget)
+	}
+	if in.BidPaise != nil {
+		add("bid_paise", bid) // nil clears the column
 	}
 	if in.DailyBudgetPaise != nil {
 		if *in.DailyBudgetPaise == nil {
@@ -476,7 +523,7 @@ func (s *CampaignService) Update(ctx context.Context, advertiser, id pgtype.UUID
 	row := tx.QueryRow(ctx, fmt.Sprintf(`
 		UPDATE ad_campaigns SET %s, updated_at = now()
 		WHERE id = $%d AND advertiser_id = $%d AND status <> 'archived'
-		RETURNING id, advertiser_id, name, status, budget_paise, spend_paise, daily_budget_paise, targeting, start_at, end_at, created_at, updated_at`,
+		RETURNING id, advertiser_id, name, status, budget_paise, spend_paise, bid_paise, daily_budget_paise, targeting, start_at, end_at, created_at, updated_at`,
 		strings.Join(set, ", "), n, n+1), args...)
 	if err := scanCampaign(row, &updated); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -522,7 +569,7 @@ func (s *CampaignService) Transition(ctx context.Context, advertiser, id pgtype.
 	row := s.pool.QueryRow(ctx, `
 		UPDATE ad_campaigns SET status = $1, updated_at = now()
 		WHERE id = $2 AND advertiser_id = $3 AND status = $4
-		RETURNING id, advertiser_id, name, status, budget_paise, spend_paise, daily_budget_paise, targeting, start_at, end_at, created_at, updated_at`,
+		RETURNING id, advertiser_id, name, status, budget_paise, spend_paise, bid_paise, daily_budget_paise, targeting, start_at, end_at, created_at, updated_at`,
 		to, id, advertiser, c.Status)
 	if err := scanCampaign(row, &updated); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -552,7 +599,7 @@ func (s *CampaignService) List(ctx context.Context, advertiser pgtype.UUID, limi
 		args = append(args, after.CreatedAt, after.ID)
 	}
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
-		SELECT id, advertiser_id, name, status, budget_paise, spend_paise, daily_budget_paise, targeting, start_at, end_at, created_at, updated_at
+		SELECT id, advertiser_id, name, status, budget_paise, spend_paise, bid_paise, daily_budget_paise, targeting, start_at, end_at, created_at, updated_at
 		FROM ad_campaigns %s
 		ORDER BY created_at DESC, id DESC
 		LIMIT $2`, where), args...)
@@ -581,11 +628,40 @@ func (s *CampaignService) List(ctx context.Context, advertiser pgtype.UUID, limi
 	return page, nil
 }
 
+// ListActiveBidEnabled is the serving path's inventory read (H3 part 3b):
+// every ACTIVE campaign that has a bid set. Campaigns without a bid are
+// excluded here (fail-closed — they can never enter an auction). The
+// serving path still checks Eligible() per row at decision time (window
+// + budget), because status alone is not enough.
+func (s *CampaignService) ListActiveBidEnabled(ctx context.Context) ([]*Campaign, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, advertiser_id, name, status, budget_paise, spend_paise, bid_paise, daily_budget_paise, targeting, start_at, end_at, created_at, updated_at
+		FROM ad_campaigns
+		WHERE status = 'active' AND bid_paise IS NOT NULL
+		ORDER BY created_at, id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*Campaign{}
+	for rows.Next() {
+		var c Campaign
+		if err := scanCampaign(rows, &c); err != nil {
+			return nil, err
+		}
+		out = append(out, &c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // scanCampaign scans the canonical 12-column row shape.
 func scanCampaign(row pgx.Row, c *Campaign) error {
 	var targetingJSON []byte
 	if err := row.Scan(&c.ID, &c.AdvertiserID, &c.Name, &c.Status,
-		&c.BudgetPaise, &c.SpendPaise, &c.DailyBudgetPaise, &targetingJSON,
+		&c.BudgetPaise, &c.SpendPaise, &c.BidPaise, &c.DailyBudgetPaise, &targetingJSON,
 		&c.StartAt, &c.EndAt, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return err
 	}
