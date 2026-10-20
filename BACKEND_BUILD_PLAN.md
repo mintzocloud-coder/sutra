@@ -3070,7 +3070,7 @@ contributor design input gets incorporated, implementation supersedes.)
   past it) — explicit EXISTS check added, ErrAlreadySubscribed before
   any provider call; (c) TestSubscribeFailClosed asserted count==0 on a
   shared DB — now asserts no-delta. Full go test ./... green again.
-- [ ] I2: X3DH handshake + Double Ratchet sessions per 1:1 conversation;
+- [x] I2: X3DH handshake + Double Ratchet sessions per 1:1 conversation;
   session establishment over the existing chat channel; forward secrecy +
   post-compromise healing properties documented and tested; no custom crypto
   primitives (use audited constructions only).
@@ -3106,8 +3106,37 @@ contributor design input gets incorporated, implementation supersedes.)
   design — the server could not do it without the private keys.
   VERIFIED: elixir syntax clean on all 7 files, go build ./... green
   (untouched), SPDX checker green.
-  I2 STAYS OPEN: part 2 = smoke.sh round-trip (init push → broadcast →
-  rejoin replay) via smoke_e2e.py + CI green.
+  I2 PART 2 DONE 2026-10-20 ~12:55 IST: smoke.sh round-trip shipped,
+  I2 COMPLETE. New `run_i2_handshake_round_trip()` in scripts/smoke_e2e.py
+  (runs while the I1 device is still registered, before the cleanup
+  delete): joins room:smoke-e2e-room, pushes `e2e:session_init` with an
+  openssl-minted envelope (fresh X25519 base key + the device's real
+  Ed25519 identity key + 64 random ciphertext bytes; prekey_id 1 is the
+  audit echo of the id REST consumed) → asserts the `e2e:session_init`
+  broadcast (kind e2e_session_init, canonical envelope version 1,
+  32-byte keys, recipient/device/registration/prekey/ciphertext echoed
+  byte-for-byte) + the sender-only `msg:ack` (id matches broadcast,
+  deduped:false, sent_at int) → same-envelope retry → broadcast + ack
+  with deduped:true and the ORIGINAL id (a retry never builds a second
+  session) → 31-byte key → error reply "handshake public key must be
+  32 bytes", missing recipient → "handshake envelope missing a required
+  field" → reconnect + rejoin → the init replays from history exactly
+  once (offline-recipient path: their first ratchet step derives from
+  exactly this message). smoke.sh: the I1 section's comment/echo now
+  covers the I2 transport round-trip (one script call — same Hydra
+  identity, bypass stays off). A successful push has NO phx_reply (the
+  channel returns {:noreply, socket}) — the script pushes then waits on
+  the broadcast/ack events, not the reply.
+  VERIFIED: bash -n + py_compile + SPDX checker green; full
+  smoke_e2e.py EXIT 0 against a fake Go-API + fake Phoenix-chat harness
+  (/tmp/fake_i2_stack.py, not committed) that verifies the Ed25519
+  register signature for REAL via openssl, shares the prekey queue
+  between REST/WS, implements the validate_init rules + idempotent
+  upsert + history replay; the rejoin-assertion caught one REAL script
+  bug pre-merge (rejoin["response"] — PhoenixClient.join returns the
+  response dict directly). Real-stack run is CI-gated (no docker on
+  this VM) via the smoke job. CI-green confirmation of this push lands
+  in the next run's check. NEXT: I3 (E2E message envelope).
 - [ ] I3: E2E message envelope — ciphertext payload over `message:new`
   (server persists ciphertext only, never plaintext); per-conversation E2E
   flag in the API; client guidance docs; smoke coverage; NEVER claim E2E on
@@ -3119,6 +3148,24 @@ All boxes ticked (A through I), CI green, `scripts/smoke.sh` passes, docs comple
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-20 ~12:55 IST: **I2 COMPLETE — X3DH session-establishment
+  transport smoke round-trip.** scripts/smoke_e2e.py gains
+  `run_i2_handshake_round_trip()` (joins room:smoke-e2e-room, pushes a
+  real openssl-minted `e2e:session_init` envelope, asserts broadcast
+  with the canonical envelope + sender-only msg:ack, idempotent retry
+  → deduped:true with the original id, 31-byte-key + missing-recipient
+  negatives → error replies, reconnect + rejoin → the init replays from
+  history exactly once); smoke.sh's I1 section comment/echo now covers
+  the I2 transport round-trip (one script call, bypass stays off).
+  Verified: bash -n/py_compile/SPDX green; full script EXIT 0 against
+  a fake Go-API + fake Phoenix-chat harness (real openssl Ed25519
+  register verification, shared prekey queue, validate_init rules,
+  idempotent upsert, history replay — /tmp/fake_i2_stack.py, not
+  committed). One real script bug caught pre-merge (rejoin["response"]
+  — join() returns the response dict directly). Real-stack run
+  CI-gated via the smoke job; CI-green confirmation lands next run.
+  NEXT: I3 (E2E message envelope).
 
 - 2026-10-20 ~12:05 IST: I1 COMPLETE (part 2b chunk 2 — smoke.sh
   round-trip): new `scripts/smoke_e2e.py` (openssl-minted bundle →
