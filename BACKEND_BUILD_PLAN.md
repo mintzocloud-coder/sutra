@@ -3236,6 +3236,25 @@ Then report to founder: production-ready backend live on main.
 
 ## Log
 
+- 2026-10-20 ~17:20 IST: **J1 TRIAGE #6 — ROOT CAUSE FOUND (Go JSON shape,
+  service correct):** Run 39412817814 (triage-#5 push) finished 6/7 green
+  again; smoke died at "H4: subscriptions list not empty" with the bare
+  `AssertionError: non-empty`. The fail-closed subscribe was HONEST (503
+  `subscriptions_unavailable`, and the provider call precedes any INSERT —
+  no row exists). The list handler returned `{"subscriptions": null}`:
+  `ListMine` returns a nil slice when empty and Go marshals nil slices
+  as JSON `null`; Python's `["subscriptions"] == []` then fails with the
+  misleading "non-empty" message. Same latent shape bug in `ListPlans`
+  (`{"plans": null}` for a plan-less creator) — both violate the OpenAPI
+  array contract. This assertion had NEVER been CI-validated before (the
+  H4 section landed after the 02:20 fully-green run). FIX (Go only):
+  both accumulators now start as non-nil empty slices, matching the
+  codebase's `listFollows` convention (`Items: []FollowItem{}`) — no
+  Python changes, no DB behavior changed. VERIFIED: gofmt + `go build`
+  + `go vet` clean; subscriptions package tests green; throwaway marshal
+  proof shows `{"subscriptions":[]}` and `{"plans":[]}`. J1 STAYS OPEN:
+  CI-green confirmation on this push — next run checks all 7 jobs.
+
 - 2026-10-20 ~16:20 IST: **J1 TRIAGE #5 — ROOT CAUSE FOUND (impossible
   smoke assert, service correct):** Run 39411776562 (triage-#4 push)
   finished 6/7 green again — Elixir, Go, OpenAPI, SPDX, compose, Python

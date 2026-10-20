@@ -154,7 +154,11 @@ func (s *PlanService) ListPlans(ctx context.Context, creatorID pgtype.UUID, limi
 		return nil, err
 	}
 	defer rows.Close()
-	var out []*Plan
+	// Non-nil empty slice on purpose: Go marshals a nil slice as JSON
+	// null, but the OpenAPI contract declares "plans" as an array and
+	// clients (incl. smoke.sh) assert == []. Emit [] when there are no
+	// plans, never null.
+	out := []*Plan{}
 	for rows.Next() {
 		p, err := scanPlan(rows)
 		if err != nil {
@@ -344,7 +348,11 @@ func (s *SubscriptionService) ListMine(ctx context.Context, memberID pgtype.UUID
 		return nil, err
 	}
 	defer rows.Close()
-	var out []*Subscription
+	// Non-nil empty slice on purpose: Go marshals a nil slice as JSON
+	// null, but the OpenAPI contract declares "subscriptions" as an
+	// array. Emit [] when the member has none, never null — a fail-
+	// closed subscribe (503, no row) must read back as an empty list.
+	out := []*Subscription{}
 	for rows.Next() {
 		sub, err := scanSubscription(rows)
 		if err != nil {
