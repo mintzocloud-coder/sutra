@@ -2650,10 +2650,16 @@ pass "miniapp: secretless launch -> 503 launch_unavailable (fail-closed)"
 echo "smoke: ads platform round-trip (H3)"
 ads_body="$(mktemp)"
 
-camp_json="$(curl -sf -X POST \
+# NOTE: country/language codes are LOWERCASE per the advertiser contract
+# (internal/ads validates ^[a-z]{2}$; "IN" is a loud 400 invalid_targeting
+# by design — the closed targeting set must never silently match).
+ads_create_body="$(mktemp)"
+ads_create_code="$(curl -s -o "$ads_create_body" -w '%{http_code}' -X POST \
   -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
-  -d '{"name":"Smoke Kurta Campaign","budget_paise":5000000,"daily_budget_paise":500000,"targeting":{"countries":["IN"],"languages":["hi","en"],"categories":["audio"],"devices":["mobile"]}}' \
-  "$API_URL/v1/ads/campaigns")" || fail "ads: campaign create failed"
+  -d '{"name":"Smoke Kurta Campaign","budget_paise":5000000,"daily_budget_paise":500000,"targeting":{"countries":["in"],"languages":["hi","en"],"categories":["audio"],"devices":["mobile"]}}' \
+  "$API_URL/v1/ads/campaigns")"
+[ "$ads_create_code" = "201" ] || { echo "ads: create response: $(cat "$ads_create_body")"; rm -f "$ads_create_body"; fail "ads: campaign create failed (got $ads_create_code)"; }
+camp_json="$(cat "$ads_create_body")"; rm -f "$ads_create_body"
 camp_id="$(jget "$camp_json" id)"
 [ "$(jget "$camp_json" status)" = "draft" ] || fail "ads: new campaign is not draft"
 pass "ads: campaign created as draft: $camp_id"
@@ -2742,12 +2748,24 @@ rep_billed="$(curl -sf -H "Authorization: Bearer $token_c" \
 pass "ads: serve → 200, reserve-floor price, 55/45 split, spend accrued"
 
 # Serve a slot that no campaign can fill → 204 (organic fallback),
-# and bad slot shapes → 400 loud.
+# and bad slot shapes → 400 loud. v1 serving gives every ELIGIBLE
+# campaign a quality floor (0.5 — unrelated categories only lose the
+# boost, never the fill; pinned by TestContextualQualityMatrix), so
+# "no campaign can fill" means no ELIGIBLE campaign: pause first, then
+# resume so the rest of the round-trip is unchanged.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_c" \
+  "$API_URL/v1/ads/campaigns/$camp_id/pause")" = "200" ] \
+  || fail "ads: pause before no-demand serve failed"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
   -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
   -d '{"slot":"empty_slot","categories":["no-such-category-xyz"]}' \
   "$API_URL/v1/ads/serve")" = "204" ] \
-  || fail "ads: serve with no matching demand did not 204"
+  || fail "ads: serve with no eligible demand did not 204"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_c" \
+  "$API_URL/v1/ads/campaigns/$camp_id/resume")" = "200" ] \
+  || fail "ads: resume after no-demand serve failed"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
   -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
   -d '{"categories":["audio"]}' \

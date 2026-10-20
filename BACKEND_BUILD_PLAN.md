@@ -3236,6 +3236,40 @@ Then report to founder: production-ready backend live on main.
 
 ## Log
 
+- 2026-10-20 ~15:40 IST: **J1 TRIAGE #4 — ROOT CAUSE FOUND (smoke.sh bug,
+  service correct): the H3 ads round-trip was never CI-validated before
+  (first run ever to reach it).** Run 39400252242 (triage-#3 push)
+  finished 6/7 green — the AUTH_BYPASS fix WORKED (H2 Tally/WhatsApp
+  checks all passed); smoke died at "ads: campaign create failed".
+  Downloaded the real CI logs via the logs API (blob-URL redirect +
+  full SAS query). Root cause #1: smoke.sh sent
+  `"countries":["IN"]` (uppercase) but the advertiser contract requires
+  LOWERCASE ISO codes (`^[a-z]{2}$` — documented in the internal/ads
+  package comment and PINNED by unit test: `{"bad country code",
+  {"countries":["IN"]}, true}`) → 400 invalid_targeting. Reproduced
+  locally on the real binary (fresh PG16 + redis): exact smoke JSON →
+  400 `"IN" is not an ISO 3166-1 alpha-2 code`; with `"in"` → 201 and
+  the full H3 flow passes (bad-key 400, draft report, activate,
+  creative, bid, serve 200 reserve-floor 50 with 55/45 split, archive
+  → report 404, serve-after-archive 204). Root cause #2 (latent, would
+  have failed right after #1): the "no-demand serve → 204" assert sent
+  a no-match slot while an eligible campaign was active — but v1
+  serving deliberately fills ANY slot when an eligible campaign exists
+  (quality floor 0.5, unrelated categories only lose the boost; pinned
+  by TestContextualQualityMatrix "unrelated category" → 0.5), so that
+  assert contradicted the shipped design. FIX (smoke.sh only, no Go
+  changes): create sends `"in"` + self-diagnosing create assert (dumps
+  the response body on failure, triage-#5 pattern); the no-demand check
+  now pauses the campaign first (204 = *no eligible demand*, the honest
+  v1 contract) and resumes after. docs/ads.md: lowercase convention
+  documented explicitly (+ corrected "loud 422s" → 400s on unknown
+  targeting keys). VERIFIED: bash -n clean; full H3 flow re-validated
+  against the local binary with the fixed payloads; pause→serve-204→
+  resume chain verified by code inspection (Eligible requires active;
+  ListActiveBidEnabled filters status='active'; served==nil → 204).
+  J1 STAYS OPEN: CI-green confirmation on this push — next run checks
+  all 7 jobs.
+
 - 2026-10-20 ~15:10 IST: **J1 TRIAGE #3 — ROOT CAUSE FOUND (deterministic,
   not a race): the phantom Tally 403 was an AUTH_BYPASS leak in smoke.sh.**
   The two H2 api recreates (line 1017 `WHATSAPP_WEBHOOK_VERIFY_TOKEN=

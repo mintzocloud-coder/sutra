@@ -78,11 +78,15 @@ never see another's campaigns (404s leak nothing).
 - **Money**: `budget_paise` > 0 (≤ ₹10cr), `spend_paise` read-only
   (billing owns it), optional `daily_budget_paise` ≤ budget, budget can
   never be patched below current spend.
-- **Targeting is a closed key set** — unknown keys are loud 422s. A
+- **Targeting is a closed key set** — unknown keys are loud 400s. A
   typo'd key silently matching everything would spend real money.
   Keys: ISO-3166-1 countries, ISO-639-1 languages, real catalog
   category slugs (verified against the tree in-tx), mobile/tablet/
-  desktop devices.
+  desktop devices. Country/language codes are **lowercase**
+  (`^[a-z]{2}$`) — uppercase is a loud 400 `invalid_targeting`.
+  Serving matches contextually (categories/languages boost quality);
+  v1 never filters on targeting — eligibility is active + window +
+  spend < budget, so a 204 means *no eligible demand*, not "no match".
 - **Eligibility** (`ads.Eligible`, pure, unit-tested): active + window
   open + spend < budget. The kernel must not depend on the status flip
   having landed — an exhausted budget stops serving even while the row
