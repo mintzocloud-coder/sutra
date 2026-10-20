@@ -35,6 +35,22 @@ device is still registered):
     recipient's path: their first ratchet step derives from exactly
     this message).
 
+I3 — the Double-Ratchet message-envelope transport round-trip (runs
+after the I2 init, whose session_init flipped the room's E2E flag):
+
+    join room:smoke-e2e-room → e2e_enabled:true (flag from the I2 init)
+    → push message:new + e2e_data (openssl-minted ratchet key + 96 random
+      ciphertext bytes) → expect the message:new broadcast with kind
+      e2e_message (canonical ciphertext-only envelope, version 1) + the
+      sender-only msg:ack (deduped false) → push again → broadcast + ack
+      with deduped:true and the ORIGINAL id → negatives: mixed
+      body+e2e_data, 31-byte ratchet key, empty ciphertext, missing
+      recipient, missing client_msg_id → error replies, nothing persisted
+      → reconnect, rejoin → the e2e message replays from history exactly
+      once (kind e2e_message, ciphertext intact) → GET
+      /v1/conversations/<room>/e2e → 200 e2e_enabled:true / unknown room →
+      404 (never claim E2E) / malformed room id → 400 → delete device
+
 Usage:
     python3 scripts/smoke_e2e.py <api-url> <chat-host> <chat-port> \
         <api-token> <target-subject> <ws-subject>
@@ -267,6 +283,167 @@ def run_i2_handshake_round_trip(workdir, chat_host, chat_port, target_subject,
     client2.close()
 
 
+def build_e2e_data(*, recipient, sender_device_id, ratchet_key_b64,
+                   prev_chain_length, message_number, ciphertext_b64):
+    """A well-formed e2e_data message envelope. The ciphertext is opaque
+    random bytes — the server never decrypts it; on-device ratchet output
+    looks exactly like this to the transport."""
+    return {
+        "recipient": recipient,
+        "sender_device_id": sender_device_id,
+        "ratchet_key": ratchet_key_b64,
+        "prev_chain_length": prev_chain_length,
+        "message_number": message_number,
+        "ciphertext": ciphertext_b64,
+    }
+
+
+def run_i3_message_round_trip(workdir, api_url, chat_host, chat_port, token,
+                               target_subject, ws_subject, device_id):
+    """I3: message:new + e2e_data -> ciphertext-only persist -> broadcast
+    as message:new (kind e2e_message) -> sender-only msg:ack -> idempotent
+    retry (deduped ack, same id) -> validation negatives (mixed
+    body+e2e_data, bad key size, empty ciphertext, missing recipient,
+    missing client_msg_id) -> rejoin replay from history (kind
+    e2e_message, ciphertext-only) -> flag GET 200/404 + join e2e_enabled.
+    Runs after the I2 round-trip, whose session_init flipped the room's
+    E2E flag."""
+    room = "room:smoke-e2e-room"
+    room_id = "smoke-e2e-room"
+    cid = f"smoke-e2e-msg-{int(time.time() * 1000)}"
+    ratchet_pub = mint_x25519_pubkey(workdir, "ratchet")
+    ciphertext_b64 = b64(_openssl("rand", "96"))
+    e2e_data = build_e2e_data(
+        recipient=target_subject, sender_device_id=device_id,
+        ratchet_key_b64=b64(ratchet_pub), prev_chain_length=3,
+        message_number=7, ciphertext_b64=ciphertext_b64)
+
+    client = PhoenixClient(chat_host, chat_port, token="smoke-test-token")
+    join_resp = client.join(room)
+    # The I2 session_init already flipped the per-conversation flag.
+    check(join_resp.get("e2e_enabled") is True,
+          f"join after session_init: e2e_enabled must be true: {join_resp}")
+    print("smoke PASS: room join after session_init reports e2e_enabled:true")
+
+    # 1. Push the e2e message: no phx_reply on success — the broadcast
+    #    and the sender-only ack follow.
+    client.push(room, "message:new",
+                {"client_msg_id": cid, "e2e_data": e2e_data})
+    bc = client.wait_event(room, "message:new")
+    check(bc["kind"] == "e2e_message", f"broadcast kind: {bc}")
+    check(bc["client_msg_id"] == cid, f"broadcast client_msg_id: {bc}")
+    check(bc["user_id"] == ws_subject, f"broadcast user_id (sender): {bc}")
+    env = json.loads(bc["body"])
+    # Ciphertext-only body: exactly the canonical envelope keys, nothing
+    # else — a plaintext field can never smuggle through this path.
+    check(set(env.keys()) == {"version", "recipient", "sender_device_id",
+                              "ratchet_key", "prev_chain_length",
+                              "message_number", "ciphertext"},
+          f"envelope keys: {sorted(env.keys())}")
+    check(env["version"] == 1, f"envelope version: {env}")
+    check(env["recipient"] == target_subject, f"envelope recipient: {env}")
+    check(env["sender_device_id"] == device_id, f"envelope device: {env}")
+    check(env["ratchet_key"] == b64(ratchet_pub),
+          "envelope ratchet_key not canonical")
+    check(env["prev_chain_length"] == 3, f"envelope prev_chain_length: {env}")
+    check(env["message_number"] == 7, f"envelope message_number: {env}")
+    check(env["ciphertext"] == ciphertext_b64, "envelope ciphertext mismatch")
+    print("smoke PASS: e2e message broadcast (kind e2e_message, canonical "
+          "ciphertext-only envelope, version 1, 32B ratchet key)")
+
+    ack = client.wait_event(room, "msg:ack")
+    check(ack["id"] == bc["id"], f"ack id {ack['id']} != broadcast id {bc['id']}")
+    check(ack["client_msg_id"] == cid, f"ack client_msg_id: {ack}")
+    check(ack["deduped"] is False, f"ack deduped: {ack}")
+    check(isinstance(ack["sent_at"], int), f"ack sent_at: {ack}")
+    print("smoke PASS: e2e message msg:ack "
+          "(sender-only, id matches broadcast, deduped:false)")
+
+    # 2. Idempotent retry: same client_msg_id -> same id, deduped:true.
+    client.push(room, "message:new",
+                {"client_msg_id": cid, "e2e_data": e2e_data})
+    bc2 = client.wait_event(room, "message:new")
+    ack2 = client.wait_event(room, "msg:ack")
+    check(bc2["id"] == bc["id"], f"retry broadcast id {bc2['id']} != {bc['id']}")
+    check(ack2["id"] == bc["id"] and ack2["deduped"] is True,
+          f"retry ack: {ack2}")
+    print("smoke PASS: e2e message retry -> deduped:true, original id")
+
+    # 3. Validation negatives: each malformed push gets an error reply
+    #    and is never persisted or broadcast.
+    mixed = {"client_msg_id": cid + "-mixed", "body": "plaintext leak",
+             "e2e_data": e2e_data}
+    reply = client.push_and_wait_reply(room, "message:new", mixed)
+    check(reply["status"] == "error" and reply["response"].get("reason") ==
+          "a message is either plaintext or E2E, never both",
+          f"mixed push: expected never-both error, got {reply}")
+    badkey = dict(e2e_data)
+    badkey["ratchet_key"] = b64(os.urandom(31))
+    reply = client.push_and_wait_reply(
+        room, "message:new", {"client_msg_id": cid + "-badkey", "e2e_data": badkey})
+    check(reply["status"] == "error" and reply["response"].get("reason") ==
+          "e2e ratchet key must be 32 bytes",
+          f"31-byte ratchet key: expected bad_key_size error, got {reply}")
+    emptyct = dict(e2e_data)
+    emptyct["ciphertext"] = b64(b"")
+    reply = client.push_and_wait_reply(
+        room, "message:new", {"client_msg_id": cid + "-emptyct", "e2e_data": emptyct})
+    check(reply["status"] == "error" and reply["response"].get("reason") ==
+          "e2e ciphertext must not be empty",
+          f"empty ciphertext: expected ciphertext_empty error, got {reply}")
+    missing = dict(e2e_data)
+    missing["client_msg_id"] = cid + "-norecipient"
+    del missing["recipient"]
+    reply = client.push_and_wait_reply(
+        room, "message:new", {"client_msg_id": cid + "-norecipient", "e2e_data": missing})
+    check(reply["status"] == "error" and reply["response"].get("reason") ==
+          "e2e envelope missing a required field",
+          f"missing recipient: expected missing_field error, got {reply}")
+    reply = client.push_and_wait_reply(room, "message:new", {"e2e_data": e2e_data})
+    check(reply["status"] == "error" and reply["response"].get("reason") ==
+          "client_msg_id required",
+          f"missing client_msg_id: expected client_msg_id required, got {reply}")
+    print("smoke PASS: e2e message validation negatives "
+          "(mixed body+e2e_data / 31B ratchet key / empty ciphertext / "
+          "missing recipient / missing client_msg_id -> error replies)")
+
+    # 4. Rejoin replay: the e2e message replays from history exactly once,
+    #    as kind e2e_message with the same ciphertext-only body.
+    client.close()
+    client2 = PhoenixClient(chat_host, chat_port, token="smoke-test-token")
+    rejoin = client2.join(room)
+    check(rejoin.get("e2e_enabled") is True,
+          f"rejoin: e2e_enabled must stay true: {rejoin}")
+    msgs = rejoin["history"]["messages"]
+    found = [m for m in msgs if m.get("client_msg_id") == cid]
+    check(len(found) == 1, f"e2e message replayed {len(found)} times from history")
+    m = found[0]
+    check(m["kind"] == "e2e_message", f"replayed kind: {m}")
+    check(m["id"] == bc["id"], f"replayed id {m['id']} != {bc['id']}")
+    env2 = json.loads(m["body"])
+    check(env2["ciphertext"] == ciphertext_b64, "replayed ciphertext mismatch")
+    check(env2["ratchet_key"] == b64(ratchet_pub), "replayed ratchet_key mismatch")
+    print("smoke PASS: e2e message replayed from history on rejoin "
+          "(offline-recipient path, ciphertext intact)")
+    client2.close()
+
+    # 5. The per-conversation E2E flag over the Go API: 200 for this
+    #    room (unknown rooms are NEVER E2E), 404 for a room that never
+    #    had a session_init, 400 for a malformed room id.
+    status, st = api("GET", f"{api_url}/v1/conversations/{room_id}/e2e", token)
+    check(status == 200, f"flag GET: expected 200, got {status}: {st}")
+    check(st["e2e_enabled"] is True and st["room_id"] == room_id,
+          f"flag GET body: {st}")
+    print("smoke PASS: GET /v1/conversations/<room>/e2e -> 200 e2e_enabled:true")
+    status, body404 = api("GET", f"{api_url}/v1/conversations/smoke-no-such-room/e2e",
+                          token)
+    check(status == 404, f"flag GET unknown room: expected 404, got {status}: {body404}")
+    status, body400 = api("GET", f"{api_url}/v1/conversations/%20bad%20id/e2e", token)
+    check(status == 400, f"flag GET malformed room: expected 400, got {status}: {body400}")
+    print("smoke PASS: flag GET unknown room -> 404 (never claim E2E), "
+          "malformed room id -> 400")
+
+
 def api(method, url, token, body=None):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(
@@ -394,6 +571,16 @@ def main():
               "(broadcast -> ack -> deduped retry -> negatives -> "
               "history replay)")
 
+        # I3: the Double-Ratchet message-envelope transport round-trip —
+        # ciphertext only, never plaintext; the flag the I2 init flipped
+        # reads back as e2e_enabled:true over REST + WS.
+        run_i3_message_round_trip(workdir, api_url, chat_host, chat_port, token,
+                                  target_subject, ws_subject, device_id)
+        print("smoke PASS: I3 e2e message envelope round-trip "
+              "(message:new+e2e_data -> broadcast/ack -> deduped retry -> "
+              "negatives -> history replay -> flag GET 200/404 -> "
+              "join e2e_enabled)")
+
         client.close()
 
         # 9. Cleanup: delete the device; directory empty; consume 404s.
@@ -417,7 +604,9 @@ def main():
           "(register → 422 bad-sig → directory → REST/WS/REST consume 1-2-3 "
           "→ dry-queue fallback → negatives) + I2 X3DH transport round-trip "
           "(init broadcast → ack → deduped retry → validation negatives "
-          "→ history replay) → delete")
+          "→ history replay) + I3 e2e message envelope round-trip "
+          "(message:new+e2e_data → broadcast/ack → deduped retry → "
+          "negatives → history replay → flag GET 200/404) → delete")
 
 
 if __name__ == "__main__":

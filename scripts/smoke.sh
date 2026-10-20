@@ -129,6 +129,15 @@
 #     retry -> deduped:true ack with the original id -> bad key size /
 #     missing recipient -> error replies -> reconnect + rejoin ->
 #     the init replays from history (offline-recipient path).
+#   - The I3 e2e message envelope transport round-trip: after the I2
+#     init flips the room's E2E flag -> message:new + e2e_data
+#     (openssl-minted ratchet key + random ciphertext) -> message:new
+#     broadcast (kind e2e_message, canonical ciphertext-only envelope) +
+#     sender-only msg:ack (deduped false) -> retry -> deduped:true with
+#     the original id -> mixed body+e2e_data / bad key size / empty
+#     ciphertext / missing recipient / missing client_msg_id -> error
+#     replies -> reconnect + rejoin -> the e2e message replays from
+#     history -> join reports e2e_enabled:true -> flag GET 200/404/400.
 # The chat release fails closed at boot without a real SECRET_KEY_BASE, so
 # this script generates an ephemeral one (kept in the environment only,
 # never written to disk or committed).
@@ -2867,7 +2876,7 @@ grep -q "subscriptions: CASHFREE_" "$api_boot_log" \
 pass "api boot log has no set-but-ignored subscription WARN"
 rm -f "$api_boot_log" "$sub_body" "$sub_hdr"
 
-# --- I1 E2E device keys + I2 session-init transport round-trip --------------
+# --- I1 E2E device keys + I2 session-init + I3 message envelope round-trip --
 # openssl-minted Ed25519 identity + X25519 signed prekey (signature made
 # by the identity key, exactly like a real client) -> Go API register
 # (201; cross-key-signed bundle 422s) -> directory -> REST consume of
@@ -2886,11 +2895,21 @@ rm -f "$api_boot_log" "$sub_body" "$sub_hdr"
 # "handshake envelope missing a required field" -> reconnect + rejoin
 # -> the init replays from history (offline-recipient path) ->
 # device deleted (cleanup). The REST-1 / WS-2 / REST-3 ordering proves
-# the Go API and the chat share one atomic prekey queue. Runs against
+# the Go API and the chat share one atomic prekey queue.
+# I3: after the I2 init flips the room's E2E flag -> message:new +
+# e2e_data (openssl-minted ratchet key + 96 random ciphertext bytes) ->
+# message:new broadcast (kind e2e_message, canonical ciphertext-only
+# envelope) + sender-only msg:ack (deduped false) -> retry -> deduped:true
+# with the ORIGINAL id -> mixed body+e2e_data, 31-byte ratchet key,
+# empty ciphertext, missing recipient, missing client_msg_id -> error
+# replies, nothing persisted -> reconnect + rejoin -> the e2e message
+# replays from history (kind e2e_message) -> join reports e2e_enabled:true
+# -> GET /v1/conversations/<room>/e2e -> 200 (unknown room -> 404, never
+# claim E2E; malformed id -> 400). Runs against
 # the real-issuer path (bypass stays off, as for all sections above);
 # the chat boots with AUTH_BYPASS=1, so the websocket connects as the
 # bypass subject and joins its own user:<subject> topic.
-echo "smoke: I1 E2E device keys + I2 session-init transport round-trip"
+echo "smoke: I1 E2E device keys + I2 session-init + I3 message envelope round-trip"
 e2e_client="sutra-e2e-$(date +%s)"
 SMOKE_E2E_SECRET="$(openssl rand -hex 16)"
 create_jwt_client "$e2e_client" "$SMOKE_E2E_SECRET"
@@ -2899,8 +2918,8 @@ e2e_token="$(hydra_token "$e2e_client" "$SMOKE_E2E_SECRET")" \
 [ -n "$e2e_token" ] || fail "e2e: hydra token for '$e2e_client' was empty"
 python3 scripts/smoke_e2e.py "$API_URL" "$CHAT_HOST" "$CHAT_PORT" \
   "$e2e_token" "$e2e_client" "$EXPECTED_SUBJECT" \
-  || fail "I1 E2E device-key round-trip + I2 session-init transport"
-pass "I1: E2E device-key round-trip complete; I2: session-init transport round-trip complete"
+  || fail "I1 E2E device-key round-trip + I2 session-init + I3 message envelope transport"
+pass "I1: E2E device-key round-trip complete; I2: session-init transport round-trip complete; I3: e2e message envelope round-trip complete"
 
 # --- Chat websocket round-trip --------------------------------------------
 wait_for 90 "chat websocket listener" \
