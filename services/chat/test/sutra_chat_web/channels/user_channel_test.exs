@@ -92,4 +92,45 @@ defmodule SutraChatWeb.UserChannelTest do
       payload: ^payload
     }
   end
+
+  # -- e2e:prekey_fetch (I1) -------------------------------------------------
+
+  setup do
+    SutraChat.DataCase.create_e2e_tables!()
+    :ok
+  end
+
+  test "e2e:prekey_fetch returns the bundle and consumes one prekey per call" do
+    SutraChat.DataCase.insert_e2e_device!("bob", "pixel-9", [1, 2])
+    {:ok, _, socket} = subscribe_and_join(socket_for("alice"), SutraChatWeb.UserChannel, "user:alice")
+
+    assert {:ok, b1} = push(socket, "e2e:prekey_fetch", %{"user_id" => "bob", "device_id" => "pixel-9"})
+    assert b1["device_id"] == "pixel-9"
+    assert b1["one_time_prekey"]["id"] == 1
+    assert b1["available_prekeys"] == 1
+
+    assert {:ok, b2} = push(socket, "e2e:prekey_fetch", %{"user_id" => "bob", "device_id" => "pixel-9"})
+    assert b2["one_time_prekey"]["id"] == 2
+    assert b2["available_prekeys"] == 0
+
+    assert {:ok, b3} = push(socket, "e2e:prekey_fetch", %{"user_id" => "bob", "device_id" => "pixel-9"})
+    assert b3["one_time_prekey"] == nil
+  end
+
+  test "e2e:prekey_fetch on an unknown device replies not_found" do
+    {:ok, _, socket} = subscribe_and_join(socket_for("alice"), SutraChatWeb.UserChannel, "user:alice")
+
+    assert {:error, %{reason: "not_found"}} =
+             push(socket, "e2e:prekey_fetch", %{"user_id" => "nobody", "device_id" => "x"})
+  end
+
+  test "e2e:prekey_fetch with a malformed payload replies invalid_request" do
+    {:ok, _, socket} = subscribe_and_join(socket_for("alice"), SutraChatWeb.UserChannel, "user:alice")
+
+    assert {:error, %{reason: "invalid_request"}} =
+             push(socket, "e2e:prekey_fetch", %{"user_id" => "bob"})
+
+    assert {:error, %{reason: "invalid_request"}} =
+             push(socket, "e2e:prekey_fetch", %{"user_id" => "bob", "device_id" => ""})
+  end
 end

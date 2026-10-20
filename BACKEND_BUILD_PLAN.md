@@ -3005,6 +3005,33 @@ contributor design input gets incorporated, implementation supersedes.)
   replenish → 2, 422 bad sig, 400 unknown field, 204 delete,
   404s after. I1 STAYS OPEN: part 2b = Elixir chat-side prekey fetch
   (SutraChat.E2E context + channel event) + smoke.sh round-trip.
+  I1 part 2b chunk 1 DONE 2026-10-20 ~11:30 IST: Elixir chat-side
+  prekey fetch. New `SutraChat.E2E` context (`services/chat/lib/
+  sutra_chat/e2e.ex`) — `fetch_prekey_bundle/2` mirrors the Go
+  `ConsumePrekey` semantics exactly against the SHARED database (the
+  e2e tables are Go-migration-owned; no Elixir migration touches
+  them, DDL source of truth stays migration 0021): subject→user join
+  (no UUID plumbing), one transaction, lowest-id unconsumed prekey
+  via SELECT ... FOR UPDATE SKIP LOCKED, dry queue → bundle with
+  `one_time_prekey: nil` (signed-prekey-only X3DH fallback), unknown
+  subject/device → `:not_found` (no existence oracle), base64 wire
+  shape matching the Go PrekeyBundle JSON. `UserChannel` gains the
+  `e2e:prekey_fetch` event (directory operation — lives on the
+  per-user channel, not the room channel; I2's handshake events will
+  ride the chat channel) with `not_found`/`invalid_request` replies.
+  Tests: `test/sutra_chat/e2e_test.exs` (6 DataCase suites: consume
+  ordering 1→2→3, dry-queue nil, empty-queue nil, not_found matrix,
+  validation matrix, per-owner device scoping) + 3 new
+  UserChannelTest cases (event round-trip incl. drain-to-nil,
+  not_found, invalid_request); shared DDL/fixture helpers in
+  DataCase (`create_e2e_tables!`/`insert_e2e_device!` — minimal
+  test-local tables, no pgcrypto/FKs needed).
+  VERIFIED: all 5 new/edited files `Code.string_to_quoted!` clean
+  (Elixir 1.14); SPDX checker green; Go build green (untouched).
+  Full `mix test` is CI-gated (Elixir 1.18), same as B1–B6.
+  I1 STAYS OPEN: part 2b chunk 2 = smoke.sh round-trip (openssl-minted
+  bundle → Go register → websocket user:<subject> join →
+  e2e:prekey_fetch consume assertions) — next run.
   FIX-FORWARD (pre-existing H4 breakage found by this run's full-suite
   verification — NOT caused by I1): internal/subscriptions had 2 red
   tests (proven on a fresh DB without any e2e changes): (a) fakeProvider
@@ -3031,6 +3058,16 @@ All boxes ticked (A through I), CI green, `scripts/smoke.sh` passes, docs comple
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-20 ~11:30 IST: I1 part 2b chunk 1 done and pushed (Elixir
+  chat-side prekey fetch): new `SutraChat.E2E` context
+  (`fetch_prekey_bundle/2` — atomic SKIP LOCKED consume on the shared
+  DB, Go-migration-owned tables, base64 wire shape) + `UserChannel`
+  `e2e:prekey_fetch` event (directory op on the per-user channel) +
+  9 new tests (6 context + 3 channel) with DataCase DDL/fixture
+  helpers. Verified: 5 files syntax-clean (Elixir 1.14), SPDX green,
+  Go build green; `mix test` CI-gated (1.18). I1 STAYS OPEN: chunk 2 =
+  smoke.sh round-trip — next run.
 
 - 2026-10-20 ~11:15 IST: I1 part 2a done and pushed (Go HTTP surface):
   internal/e2e service (Register/Devices/Replenish/Delete/Directory/
