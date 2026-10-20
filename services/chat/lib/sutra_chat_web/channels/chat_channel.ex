@@ -27,11 +27,20 @@ defmodule SutraChatWeb.ChatChannel do
   into any well-formed `room:*` topic — see `docs/room-membership.md` for
   the Wave 1 → Wave 2 membership roadmap. Send payloads are size-capped
   (body 4096 chars, client_msg_id 128 chars) before reaching persistence.
+
+  E2E session establishment (I2): the `e2e:session_init` event carries
+  the initiator's X3DH initial message (computed on-device — the server
+  performs no crypto). The envelope is validated by
+  `SutraChat.E2E.Handshake`, persisted with kind `"e2e_session_init"`
+  before broadcast (so offline recipients replay it from history), and
+  broadcast as `e2e:session_init`. Clients decode `body` as JSON when
+  `kind == "e2e_session_init"`. Full protocol contract: `docs/e2e.md`.
   """
   use SutraChatWeb, :channel
 
   alias SutraChat.Chat
   alias SutraChat.Chat.RoomPolicy
+  alias SutraChat.E2E.Handshake
   alias SutraChat.Presence
 
   @impl true
@@ -116,21 +125,49 @@ defmodule SutraChatWeb.ChatChannel do
     {:reply, {:error, %{reason: "body and client_msg_id required"}}, socket}
   end
 
+  # I2: X3DH session-establishment transport. The initiator computed the
+  # X3DH on-device (the server performs NO crypto); this event carries
+  # the opaque PreKey-style initial message to the recipient. The
+  # envelope is validated (shape, base64, exact key sizes, ciphertext
+  # cap), persisted BEFORE broadcast with kind "e2e_session_init" — an
+  # offline recipient replays it from history, which is required because
+  # their first ratchet step is derived from exactly this message — then
+  # broadcast as "e2e:session_init" and acked to the sender like a normal
+  # send (idempotent on (sender_subject, client_msg_id): a retry never
+  # establishes a second session).
+  @impl true
+  def handle_in("e2e:session_init", params, socket) do
+    case Handshake.validate_init(params) do
+      {:ok, envelope} ->
+        init_and_broadcast(socket, envelope)
+
+      {:error, reason} ->
+        {:reply, {:error, %{reason: handshake_error(reason)}}, socket}
+    end
+  end
+
   # -- persist path ----------------------------------------------------
 
   defp persist_and_broadcast(socket, body, client_msg_id) do
+    persist_and_broadcast(socket, body, client_msg_id, "text")
+  end
+
+  defp persist_and_broadcast(socket, body, client_msg_id, kind) do
     attrs = %{
       room_id: socket.assigns.room_id,
       sender_subject: socket.assigns.user_id,
       client_msg_id: client_msg_id,
-      body: body
+      body: body,
+      kind: kind
     }
 
     case Chat.persist_message(attrs) do
       {:ok, message, deduped} ->
         # Broadcast only after the write is durable: what clients see as
-        # "sent" always survives a restart.
-        broadcast!(socket, "message:new", render_message(message))
+        # "sent" always survives a restart. Handshake messages broadcast
+        # under their own event name so recipients can pick them out.
+        event = if kind == "e2e_session_init", do: "e2e:session_init", else: "message:new"
+        broadcast!(socket, event, render_message(message))
         # The ack is a pushed event (not the push reply) so there is exactly
         # one confirmation path, and it fires only after BOTH persist and
         # broadcast completed — no ack ever precedes durability.
@@ -141,6 +178,28 @@ defmodule SutraChatWeb.ChatChannel do
         {:reply, {:error, %{reason: "invalid message", errors: errors_on(changeset)}}, socket}
     end
   end
+
+  # The stored body is the canonical JSON envelope: ciphertext +
+  # public keys only, never plaintext. Clients Jason-decode `body` when
+  # `kind == "e2e_session_init"`.
+  defp init_and_broadcast(socket, envelope) do
+    persist_and_broadcast(
+      socket,
+      Jason.encode!(envelope),
+      envelope["client_msg_id"],
+      "e2e_session_init"
+    )
+  end
+
+  defp handshake_error(:missing_field), do: "handshake envelope missing a required field"
+  defp handshake_error(:invalid_payload), do: "invalid handshake envelope"
+  defp handshake_error(:field_too_long), do: "handshake field too long"
+  defp handshake_error(:bad_base64), do: "handshake key field is not valid base64"
+  defp handshake_error(:bad_key_size), do: "handshake public key must be 32 bytes"
+  defp handshake_error(:bad_registration_id), do: "registration_id must be 1..65535"
+  defp handshake_error(:bad_prekey_id), do: "prekey id must be 1..16777215"
+  defp handshake_error(:ciphertext_empty), do: "handshake ciphertext must not be empty"
+  defp handshake_error(:ciphertext_too_large), do: "handshake ciphertext too large"
 
   # -- history params -------------------------------------------------
 
@@ -168,6 +227,7 @@ defmodule SutraChatWeb.ChatChannel do
       id: message.id,
       room_id: message.room_id,
       body: message.body,
+      kind: message.kind,
       client_msg_id: message.client_msg_id,
       user_id: message.sender_subject,
       sent_at: DateTime.to_unix(message.inserted_at, :millisecond)

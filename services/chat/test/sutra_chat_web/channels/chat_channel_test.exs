@@ -209,7 +209,121 @@ defmodule SutraChatWeb.ChatChannelTest do
     assert_reply ref2, :error, %{reason: "body and client_msg_id required"}
   end
 
+  # -- e2e:session_init (I2: X3DH handshake transport) --------------------
+
+  test "session_init persists the envelope, broadcasts, and acks", %{socket: socket} do
+    room = "e2e-init-#{uniq()}"
+    {:ok, _, socket} = subscribe_and_join(socket, SutraChatWeb.ChatChannel, "room:#{room}")
+
+    push(socket, "e2e:session_init", init_params("peer-#{uniq()}", "init-1"))
+
+    # Room subscribers see the handshake under its own event name, with
+    # the kind marker so clients know body is a JSON envelope.
+    assert_broadcast "e2e:session_init", broadcast
+    assert broadcast.kind == "e2e_session_init"
+    assert broadcast.client_msg_id == "init-1"
+    assert broadcast.user_id == @user
+    assert is_binary(broadcast.id)
+
+    envelope = Jason.decode!(broadcast.body)
+    assert envelope["version"] == 1
+    assert envelope["recipient"] =~ "peer-"
+    assert {:ok, <<_::256>>} = Base.decode64(envelope["identity_key"])
+    assert {:ok, <<_::256>>} = Base.decode64(envelope["base_key"])
+    assert {:ok, _} = Base.decode64(envelope["ciphertext"])
+
+    # Sender-only ack, exactly like message:new.
+    assert_push "msg:ack", ack
+    assert ack.deduped == false
+    assert ack.id == broadcast.id
+
+    # The row is really in PostgreSQL with the E2E kind: an offline
+    # recipient replays it from history — required, because their first
+    # ratchet step is derived from exactly this message.
+    assert {:ok, %{messages: [stored]}} = Chat.history(room)
+    assert stored.kind == "e2e_session_init"
+    assert stored.body == broadcast.body
+  end
+
+  test "retried session_init with the same client_msg_id is deduped", %{socket: socket} do
+    room = "e2e-dedupe-#{uniq()}"
+    {:ok, _, socket} = subscribe_and_join(socket, SutraChatWeb.ChatChannel, "room:#{room}")
+
+    params = init_params("peer-#{uniq()}", "init-dup")
+    push(socket, "e2e:session_init", params)
+    assert_push "msg:ack", %{deduped: false, id: first_id}
+
+    # A retry (e.g. the ack was lost) must not create a second session:
+    # no new row, ack carries deduped: true with the ORIGINAL id.
+    push(socket, "e2e:session_init", params)
+    assert_push "msg:ack", %{deduped: true, id: ^first_id}
+
+    assert {:ok, %{messages: messages}} = Chat.history(room)
+    assert length(messages) == 1
+    assert hd(messages).id == first_id
+    assert hd(messages).kind == "e2e_session_init"
+  end
+
+  test "offline recipient replays the handshake from history", %{socket: socket} do
+    room = "e2e-replay-#{uniq()}"
+    {:ok, _, socket} = subscribe_and_join(socket, SutraChatWeb.ChatChannel, "room:#{room}")
+
+    push(socket, "e2e:session_init", init_params("peer-#{uniq()}", "init-replay"))
+    assert_push "msg:ack", %{deduped: false}
+
+    # A fresh socket (Bob, coming online later) gets the init message in
+    # the join reply — session establishment cannot depend on being
+    # online at send time.
+    socket2 = socket(SutraChatWeb.UserSocket, "user_socket:#{@user}", %{user_id: @user})
+
+    assert {:ok, %{history: %{messages: [replayed]}}, _} =
+             subscribe_and_join(socket2, SutraChatWeb.ChatChannel, "room:#{room}")
+
+    assert replayed.kind == "e2e_session_init"
+    assert Jason.decode!(replayed.body)["client_msg_id"] == "init-replay"
+  end
+
+  test "malformed handshake envelopes are rejected and never persisted", %{socket: socket} do
+    room = "e2e-bad-#{uniq()}"
+    {:ok, _, socket} = subscribe_and_join(socket, SutraChatWeb.ChatChannel, "room:#{room}")
+
+    base = init_params("peer-#{uniq()}", "init-bad")
+
+    cases = [
+      {Map.put(base, "identity_key", "!!!not-base64!!!"), "handshake key field is not valid base64"},
+      {Map.put(base, "base_key", Base.encode64(:crypto.strong_rand_bytes(31))),
+       "handshake public key must be 32 bytes"},
+      {Map.delete(base, "ciphertext"), "handshake envelope missing a required field"},
+      {Map.put(base, "registration_id", 0), "registration_id must be 1..65535"},
+      {Map.put(base, "ciphertext", Base.encode64(:crypto.strong_rand_bytes(65_537))),
+       "handshake ciphertext too large"},
+      {%{"junk" => true}, "handshake envelope missing a required field"}
+    ]
+
+    for {params, reason} <- cases do
+      ref = push(socket, "e2e:session_init", params)
+      assert_reply ref, :error, %{reason: ^reason}
+    end
+
+    # Nothing reached the database.
+    assert {:ok, %{messages: []}} = Chat.history(room)
+  end
+
   # -- helpers ------------------------------------------------------------
 
   defp uniq, do: System.unique_integer([:positive])
+
+  defp init_params(recipient, client_msg_id) do
+    %{
+      "recipient" => recipient,
+      "client_msg_id" => client_msg_id,
+      "sender_device_id" => "test-device",
+      "registration_id" => 4242,
+      "identity_key" => Base.encode64(:crypto.strong_rand_bytes(32)),
+      "base_key" => Base.encode64(:crypto.strong_rand_bytes(32)),
+      "signed_prekey_id" => 7,
+      "prekey_id" => 3,
+      "ciphertext" => Base.encode64(:crypto.strong_rand_bytes(128))
+    }
+  end
 end

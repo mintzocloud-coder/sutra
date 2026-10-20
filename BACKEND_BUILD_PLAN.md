@@ -3074,6 +3074,40 @@ contributor design input gets incorporated, implementation supersedes.)
   session establishment over the existing chat channel; forward secrecy +
   post-compromise healing properties documented and tested; no custom crypto
   primitives (use audited constructions only).
+  I2 PART 1 DONE 2026-10-20 ~12:25 IST: server-side session-establishment
+  transport (Elixir chat). New migration 20261020130000 (messages.kind —
+  'text' default + 'e2e_session_init', CHECK constraint; backfills clean);
+  Message schema gains kind + per-kind body cap (4096 text / 96_000 e2e);
+  Chat.persist_message/upsert carry kind (RETURNING extended); new pure
+  SutraChat.E2E.Handshake (validate_init: required fields, base64,
+  keys exactly 32B, registration_id 1..65535, prekey ids 1..16777215,
+  ciphertext 1B..64KiB, canonical base64 re-encoding, protocol version 1
+  stamped); ChatChannel gains `e2e:session_init` — validate → persist
+  BEFORE broadcast (kind e2e_session_init, body = canonical JSON
+  envelope: ciphertext + public keys only) → broadcast as
+  e2e:session_init → sender-only msg:ack (idempotent on
+  (sender_subject, client_msg_id), deduped flag — a retry never builds a
+  second session); render_message/history carry kind; offline recipients
+  replay the init from history (their first ratchet step derives from
+  exactly this message). docs/e2e.md gains the X3DH + Double Ratchet
+  sections: mandatory audited-construction profile table (X25519 /
+  HKDF-SHA256 / XChaCha20-Poly1305 / Ed25519), initiator steps (fetch
+  bundle → verify signed-prekey sig → X3DH → delete ephemeral),
+  recipient steps (replay-safe, AEAD-fail drops, delete one-time
+  private), server transport contract, forward-secrecy + post-compromise
+  healing enforcement tables (server vs client), ratchet rules (delete
+  chain keys, nonce discipline, skipped-key cap 1000, DH-step cap,
+  identity-change UX). Tests: 12 pure handshake unit tests (ran live:
+  12/12 green — caught 1 real bug: empty-string recipient returned
+  :field_too_long instead of :missing_field, fixed) + 4 channel
+  integration suites (init round-trip persist/broadcast/ack/history,
+  dedupe, offline replay, 6-shape validation rejection) — channel suites
+  are CI-gated (Elixir 1.18) like B1–B6. No crypto math server-side, by
+  design — the server could not do it without the private keys.
+  VERIFIED: elixir syntax clean on all 7 files, go build ./... green
+  (untouched), SPDX checker green.
+  I2 STAYS OPEN: part 2 = smoke.sh round-trip (init push → broadcast →
+  rejoin replay) via smoke_e2e.py + CI green.
 - [ ] I3: E2E message envelope — ciphertext payload over `message:new`
   (server persists ciphertext only, never plaintext); per-conversation E2E
   flag in the API; client guidance docs; smoke coverage; NEVER claim E2E on

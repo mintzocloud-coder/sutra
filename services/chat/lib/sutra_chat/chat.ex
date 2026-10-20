@@ -27,7 +27,10 @@ defmodule SutraChat.Chat do
   Persists a message idempotently.
 
   On a `(sender_subject, client_msg_id)` conflict the existing row is returned
-  unchanged — a retried send can never create a second row.
+  unchanged — a retried send can never create a second row. `attrs` may carry
+  `kind` (`"text"` default, or `"e2e_session_init"` for the I2 X3DH
+  session-establishment transport — the channel sets it; direct callers
+  should leave it default).
 
   Returns `{:ok, message, deduped}` or `{:error, changeset}`. `deduped` is
   `true` when the row already existed (this call was a retry) and `false` on
@@ -90,13 +93,14 @@ defmodule SutraChat.Chat do
   # Ecto's autogenerate only applies to `Repo.insert/2`.
   #
   # NOTE: the column list is coupled to
-  # `priv/repo/migrations/*_create_messages.exs` — keep them in sync.
+  # `priv/repo/migrations/*_create_messages.exs` and
+  # `*_add_kind_to_messages.exs` — keep them in sync.
   @upsert_sql """
-  INSERT INTO messages (id, room_id, sender_subject, client_msg_id, body, inserted_at)
-  VALUES ($1::uuid, $2, $3, $4, $5, $6::timestamptz)
+  INSERT INTO messages (id, room_id, sender_subject, client_msg_id, body, kind, inserted_at)
+  VALUES ($1::uuid, $2, $3, $4, $5, $6, $7::timestamptz)
   ON CONFLICT (sender_subject, client_msg_id)
   DO UPDATE SET body = EXCLUDED.body
-  RETURNING id, room_id, sender_subject, client_msg_id, body, inserted_at,
+  RETURNING id, room_id, sender_subject, client_msg_id, body, kind, inserted_at,
             (xmax = 0) AS inserted_new
   """
 
@@ -116,12 +120,13 @@ defmodule SutraChat.Chat do
       fields.sender_subject,
       fields.client_msg_id,
       fields.body,
+      fields.kind,
       DateTime.utc_now() |> DateTime.truncate(:microsecond)
     ]
 
     # Raises on DB failure — the caller (channel) then sends no ack and the
     # client retries; see docs/delivery-semantics.md.
-    %{rows: [[id, room_id, sender_subject, client_msg_id, body, inserted_at, inserted_new]]} =
+    %{rows: [[id, room_id, sender_subject, client_msg_id, body, kind, inserted_at, inserted_new]]} =
       Ecto.Adapters.SQL.query!(Repo, @upsert_sql, params)
 
     # RETURNING decodes uuid as a 16-byte binary too — load it back to the
@@ -147,6 +152,7 @@ defmodule SutraChat.Chat do
       sender_subject: sender_subject,
       client_msg_id: client_msg_id,
       body: body,
+      kind: kind,
       inserted_at: inserted_at
     }
 
