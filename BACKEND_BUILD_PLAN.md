@@ -3222,7 +3222,7 @@ annotations; job logs are not downloadable via the push credential, so
 reproduce locally where possible and let CI be the gate), fix forward,
 verify green on a fresh push. The alarm stays on until this is done.
 
-- [ ] J1: Main branch CI fully green — all 7 jobs (Go API builds+tests,
+- [x] J1: Main branch CI fully green — all 7 jobs (Go API builds+tests,
   Elixir chat builds+tests, OpenAPI spec validates, SPDX, docker-compose
   validates, Python AI tests, full-stack smoke) green on the latest push.
   Triage from check-runs annotations; fix the real failures (Elixir/Go/
@@ -4231,3 +4231,16 @@ Then report to founder: production-ready backend live on main.
 - 2026-10-20 ~01:50 IST: H1 part 2z done — CI-RED TRIAGE #30 (see H1 part-2 note): run 39313860457 (2y push) finished 6/7 green; smoke RED at "miniapp: owner draft launch failed" — the FIRST run ever to reach the G3 section (2y's fix made the whole F2 matrix PASS; the H1 business section passed in full: grounded ₹1,299 SSE, fabricated-₹999 fallback, non-seller 403, 429 + Retry-After). ROOT CAUSE: docker compose forwards host env into containers ONLY when the var is referenced in the compose file — smoke.sh's `MINIAPP_LAUNCH_SECRET=... docker compose up -d --no-deps api` recreate silently dropped the secret (no entry in api.environment), cfg.MiniappLaunchSecret stayed empty, and launchHandler fails closed (503 launch_unavailable) → curl -sf → fail. Latent since G3 part 2 was authored 2026-10-19 with bash -n verification only (full stack is CI-gated). FIX: `MINIAPP_LAUNCH_SECRET: ${MINIAPP_LAUNCH_SECRET:-}` added to api.environment (house pattern, same as SEARCH_MASTER_KEY/SVIX_API_TOKEN); interpolation simulation proves the env-prefix recreate passes the secret through while the secretless recreate expands to empty, so the 503 fail-closed proof still holds. VERIFIED: compose YAML parses, bash -n smoke.sh green (untouched), scripts/check-headers.sh green. No Go/Python/Elixir touched. H1 part 2 STAYS OPEN: CI-green confirmation on this push — next run checks the G3 mini-app section goes green and H1 closes.
 
 - 2026-10-20 ~14:00 IST: J1 triage note (proactivity research run, no push): main RED on all 6 Phase-I pushes (22e6f68→95b86a47). Exact failing steps from Actions API on run 39392382821: OpenAPI job fails at "SDK stub generation check" (redocly lint + coverage gate PASS); Go job fails at `go test ./...` (build+vet pass; unit tests pass locally without DB — failure is in PG16 integration tests, suspect 0021/0022 or new E2E integration tests); Elixir job fails at `mix compile --warnings-as-errors` (compile error/warning in today's E2E code — needs CI toolchain to reproduce); smoke fails at "Boot stack and run smoke tests". ROOT CAUSE (OpenAPI, fixed): 8 dangling $refs — `#/components/responses/MethodNotAllowed` x4 and `#/components/headers/RetryAfter` x4 on the integration paths — openapi-typescript throws "Can't resolve $ref" (reproduced locally via scripts/check_sdk_generation.sh). FIX APPLIED in working tree: added `components.responses.MethodNotAllowed` (405 + Allow header, code method_not_allowed, mirrors existing inline 405 pattern and the Go MethodNotAllowedHandler) and `components.headers.RetryAfter` (integer seconds, mirrors RateLimited inline def). VERIFIED LOCALLY: redocly lint valid, scripts/check_sdk_generation.sh OK (77 paths, consumer compiles), scripts/check_openapi_coverage.py OK. NOT pushed — J1 run to push with its own verification + continue Go/Elixir/smoke triage.
+
+- 2026-10-20 ~17:45 IST: **J1 COMPLETE — ALL 7 CI JOBS GREEN (run 39418638762,
+  "J1: subscriptions/plans empty lists emit [] not null", push 799e47db):**
+  verified via the GitHub Actions runs+jobs API — conclusion=success on ALL 7
+  jobs: Go API builds+tests, Elixir chat builds+tests, OpenAPI spec validates,
+  SPDX license headers, docker-compose validates, Python AI service tests,
+  full-stack smoke test (the triage-#6 subscriptions/plans []-vs-null fix
+  unblocked the smoke H4 section, which had never been CI-validated before).
+  **ALL phases A→J are now complete: the Sutra backend is production-ready on
+  main.** Done-when met: all boxes ticked, CI green, full-stack smoke passes,
+  docs complete (A–I docs + ads/e2e/subscription contract updates landed with
+  the fixes). Final run message flags reporting trigger (a): ALL phases complete —
+  backend production-ready on main.
