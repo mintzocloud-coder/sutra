@@ -914,6 +914,339 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /v1/e2e/devices:
+    post:
+      tags: [e2e]
+      summary: Register (or re-register) a device key bundle
+      description: |
+        Verifies and persists the caller's device key bundle (I1, Phase I).
+        The signed-prekey Ed25519 signature is verified against the
+        identity key before anything is stored — a bundle that fails
+        verification is rejected, never persisted. The server stores
+        PUBLIC keys only; private keys never leave the device.
+
+        First registration for a device label is 201; re-registering the
+        same label (app reinstall, signed-prekey rotation) REPLACES the
+        key material and the unconsumed one-time queue and is 200.
+        All key bytes are standard base64 (with padding).
+      operationId: registerDeviceKeys
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/KeyBundleInput'
+      responses:
+        '200':
+          description: Device re-registered (key material replaced)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '201':
+          description: Device registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed JSON, unknown field, or wrong field type.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          description: |
+            Bundle rejected — error code `e2e_invalid_bundle` (bad shape,
+            lengths, id ranges, duplicate prekey ids, or the signed-prekey
+            signature does not verify against the identity key) or
+            `e2e_invalid_key_encoding` (a key field is not valid base64).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    get:
+      tags: [e2e]
+      summary: List my devices
+      description: |
+        The caller's own devices — ids, registration ids, signed-prekey
+        ids, live one-time-prekey counts, timestamps. No key material
+        (the device-management view).
+      operationId: listMyDevices
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Device list (empty array when none registered)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Device'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/e2e/devices/{device_id}/prekeys:
+    post:
+      tags: [e2e]
+      summary: Replenish one-time prekeys
+      description: |
+        Adds one-time prekeys to the caller's device queue. Idempotent on
+        retry (same id + same key bytes = no-op); the same id with
+        DIFFERENT key bytes is 409 `e2e_prekey_id_conflict` (a client bug —
+        prekey ids must be unique per device). Returns the new available
+        count so the client knows when it has restocked enough. Clients
+        should keep ~100 stocked (Signal's target).
+      operationId: replenishPrekeys
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: device_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The client-chosen device label from registration.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReplenishInput'
+      responses:
+        '200':
+          description: Queue restocked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplenishResult'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed JSON / unknown field / empty device id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No such device for the caller (`e2e_device_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '409':
+          description: Prekey id already registered with different key bytes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '422':
+          description: Invalid bundle shape or undecodable key bytes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/e2e/devices/{device_id}:
+    delete:
+      tags: [e2e]
+      summary: Delete a device
+      description: |
+        Removes the caller's device; the one-time queue cascades. The
+        device's private keys die with it — there is no server-side
+        recovery, by design.
+      operationId: deleteDevice
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: device_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The client-chosen device label from registration.
+      responses:
+        '204':
+          description: Device deleted
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Empty device id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No such device for the caller (`e2e_device_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/users/{id}/devices:
+    get:
+      tags: [e2e]
+      summary: Public key directory for a user
+      description: |
+        Every device of the user with the public key material a session
+        initiator needs for X3DH (identity key, signed prekey + id +
+        signature, registration id, live one-time-prekey count). Any
+        authenticated user may read it — initiating an E2E session
+        requires the peer's public bundle, exactly like Signal's prekey
+        server. Unknown users yield an empty list.
+      operationId: getDeviceDirectory
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: Public device directory
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DevicePublic'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed user id (not a UUID).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/users/{id}/devices/{device_id}/prekey-bundle:
+    get:
+      tags: [e2e]
+      summary: Fetch a prekey bundle for X3DH session initiation
+      description: |
+        Returns the device's public bundle and ATOMICALLY consumes its
+        lowest-id available one-time prekey. Each prekey is handed out at
+        most once (concurrent initiators never receive the same one —
+        the property the first message's forward secrecy rests on).
+
+        When the queue is dry the bundle still returns with
+        `one_time_prekey: null` and the initiator falls back to
+        signed-prekey-only X3DH; `available_prekeys` tells the initiator
+        how urgently the device should replenish.
+      operationId: fetchPrekeyBundle
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - name: device_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The target device label (from the directory).
+      responses:
+        '200':
+          description: Prekey bundle (one-time prekey null when the queue is dry)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrekeyBundle'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed user id or empty device id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No such device for the user (`e2e_device_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /v1/posts:
     post:
       tags: [posts]
@@ -6713,6 +7046,172 @@ components:
           type: [string, 'null']
           description: |
             Opaque cursor for the next page; null on the last page.
+
+    KeyBundleInput:
+      type: object
+      required: [device_id, registration_id, identity_key, signed_prekey, signed_prekey_id, signed_prekey_sig, one_time_prekeys]
+      description: |
+        A device's E2E registration bundle (I1). All key bytes are
+        standard base64 (with padding). The server verifies the
+        signed-prekey Ed25519 signature against the identity key before
+        persisting — only PUBLIC keys are ever sent.
+      properties:
+        device_id:
+          type: string
+          description: Client-chosen stable device label, unique per user.
+          example: pixel-9-pro
+          maxLength: 64
+        registration_id:
+          type: integer
+          description: Signal-style uint16 id (1..65535).
+          minimum: 1
+          maximum: 65535
+          example: 4242
+        identity_key:
+          type: string
+          description: Ed25519 public key, 32 bytes, base64.
+        signed_prekey:
+          type: string
+          description: X25519 public key, 32 bytes, base64.
+        signed_prekey_id:
+          type: integer
+          minimum: 0
+          example: 7
+        signed_prekey_sig:
+          type: string
+          description: Ed25519 signature by the identity private key over the RAW 32 signed-prekey bytes, 64 bytes, base64.
+        one_time_prekeys:
+          type: array
+          minItems: 1
+          description: Initial one-time-prekey queue (clients should keep ~100 stocked).
+          items:
+            $ref: '#/components/schemas/OneTimePrekeyInput'
+      additionalProperties: false
+
+    OneTimePrekeyInput:
+      type: object
+      required: [id, public_key]
+      properties:
+        id:
+          type: integer
+          minimum: 0
+          description: Client's prekey id, unique per device.
+          example: 12
+        public_key:
+          type: string
+          description: X25519 public key, 32 bytes, base64.
+      additionalProperties: false
+
+    ReplenishInput:
+      type: object
+      required: [one_time_prekeys]
+      properties:
+        one_time_prekeys:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/OneTimePrekeyInput'
+      additionalProperties: false
+
+    ReplenishResult:
+      type: object
+      required: [device_id, available_prekeys]
+      properties:
+        device_id:
+          type: string
+          example: pixel-9-pro
+        available_prekeys:
+          type: integer
+          description: Unconsumed one-time prekeys after this restock.
+          example: 98
+
+    Device:
+      type: object
+      required: [id, device_id, registration_id, signed_prekey_id, available_prekeys, created_at, updated_at]
+      description: A registered device (no key material — the device-management view).
+      properties:
+        id:
+          type: string
+          format: uuid
+        device_id:
+          type: string
+          example: pixel-9-pro
+        registration_id:
+          type: integer
+          example: 4242
+        signed_prekey_id:
+          type: integer
+          example: 7
+        available_prekeys:
+          type: integer
+          description: Live count of unconsumed one-time prekeys.
+          example: 97
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: [string, 'null']
+          format: date-time
+
+    DevicePublic:
+      allOf:
+        - $ref: '#/components/schemas/Device'
+        - type: object
+          required: [identity_key, signed_prekey, signed_prekey_sig]
+          description: Device plus the public key material an X3DH initiator needs.
+          properties:
+            identity_key:
+              type: string
+              description: Ed25519 public key, 32 bytes, base64.
+            signed_prekey:
+              type: string
+              description: X25519 public key, 32 bytes, base64.
+            signed_prekey_sig:
+              type: string
+              description: Ed25519 signature over the raw signed-prekey bytes, 64 bytes, base64.
+
+    PrekeyBundle:
+      type: object
+      required: [device_id, registration_id, identity_key, signed_prekey, signed_prekey_id, signed_prekey_sig, one_time_prekey, available_prekeys]
+      description: |
+        A device's public bundle plus the one consumed one-time prekey.
+        `one_time_prekey` is null when the queue ran dry — the initiator
+        then falls back to signed-prekey-only X3DH.
+      properties:
+        device_id:
+          type: string
+          example: pixel-9-pro
+        registration_id:
+          type: integer
+          example: 4242
+        identity_key:
+          type: string
+          description: Ed25519 public key, 32 bytes, base64.
+        signed_prekey:
+          type: string
+          description: X25519 public key, 32 bytes, base64.
+        signed_prekey_id:
+          type: integer
+          example: 7
+        signed_prekey_sig:
+          type: string
+          description: Ed25519 signature over the raw signed-prekey bytes, 64 bytes, base64.
+        one_time_prekey:
+          type: ['object', 'null']
+          properties:
+            id:
+              type: integer
+              example: 12
+            public_key:
+              type: string
+              description: X25519 public key, 32 bytes, base64.
+        available_prekeys:
+          type: integer
+          description: Queue depth AFTER this consumption.
+          example: 96
 
     Post:
       type: object

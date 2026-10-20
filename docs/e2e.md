@@ -115,6 +115,48 @@ marks it consumed in the same transaction). No crypto beyond
 `crypto/ed25519` verification and length checks lives server-side; no
 custom primitives anywhere.
 
+## HTTP API (I1 part 2)
+
+All key bytes travel as standard base64 (with padding). Request bodies
+are strict: unknown fields are rejected, and undecodable key fields
+are 422 `e2e_invalid_key_encoding` naming the bad field. A bundle whose
+signature does not verify is 422 `e2e_invalid_bundle` — rejected, never
+persisted.
+
+- `POST /v1/e2e/devices` — register (201) or re-register (200) the
+  caller's device bundle. Re-registration REPLACES the key material and
+  drops the unconsumed one-time queue (their private halves are gone
+  with the old install); consumed rows are kept for audit.
+- `GET /v1/e2e/devices` — the caller's devices: ids, registration ids,
+  live prekey counts, timestamps. No key material.
+- `POST /v1/e2e/devices/{device_id}/prekeys` — replenish the one-time
+  queue. Idempotent on retry (same id + same key = no-op); the same id
+  with different bytes is 409 `e2e_prekey_id_conflict`. Returns the new
+  available count.
+- `DELETE /v1/e2e/devices/{device_id}` — remove the device (204); the
+  queue cascades. The private keys die with the device.
+- `GET /v1/users/{id}/devices` — the public key directory: identity
+  key, signed prekey + id + signature, registration id, and live
+  prekey count per device. Any authenticated user may read it —
+  initiating a session requires the peer's public bundle.
+- `GET /v1/users/{id}/devices/{device_id}/prekey-bundle` — the
+  session-initiation fetch: returns the public bundle and ATOMICALLY
+  consumes the lowest-id available one-time prekey (`SELECT ... FOR
+  UPDATE SKIP LOCKED`, so concurrent initiators never receive the same
+  prekey). When the queue is dry the bundle still returns with
+  `one_time_prekey: null` and the initiator falls back to
+  signed-prekey-only X3DH; `available_prekeys` reports the post-consume
+  depth so the initiator can nudge the device to replenish.
+
+Abuse note: the consume endpoint spends a finite resource (the
+device's prekey queue). There is no per-device consume rate limit
+beyond the global per-IP limiter — a hostile initiator can drain a
+queue and weaken (not break) first-message forward secrecy until the
+device replenishes. Clients MUST treat a falling `available_prekeys`
+as a replenish signal and SHOULD alert the user on abnormal drain;
+server-side per-target throttling is future work, not a silent
+assumption.
+
 ## Security properties (what this construction buys)
 
 - **Server compromise ≠ message compromise.** The database holds

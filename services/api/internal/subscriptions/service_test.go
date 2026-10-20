@@ -6,6 +6,8 @@ package subscriptions
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -25,14 +27,31 @@ import (
 // verified without touching real money rails.
 type fakeProvider struct {
 	subSeq int
+	// uniq makes provider refs unique per fake instance. The webhook
+	// lookup is by provider_ref, so two tests sharing a database must
+	// never mint the same ref — deterministic "cf-sub-test-1" refs
+	// collided across tests and made HandleWebhook hit the wrong row
+	// (found 2026-10-20: TestWebhookLifecycle + TestCancelMember both
+	// failed on a fresh DB for exactly this reason).
+	uniq string
+}
+
+// newFakeProvider builds a fake with instance-unique refs.
+func newFakeProvider() *fakeProvider {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("fakeProvider: rand: " + err.Error())
+	}
+	return &fakeProvider{uniq: hex.EncodeToString(b[:])}
 }
 
 func (f *fakeProvider) CreateSubscription(_ context.Context, p CreateParams) (*CreateResult, error) {
 	f.subSeq++
+	ref := fmt.Sprintf("cf-sub-test-%s-%d", f.uniq, f.subSeq)
 	return &CreateResult{
-		ProviderSubID: fmt.Sprintf("cf-sub-test-%d", f.subSeq),
+		ProviderSubID: ref,
 		Status:        "pending",
-		AuthURL:       "https://pay.example/auth/cf-sub-test",
+		AuthURL:       "https://pay.example/auth/" + ref,
 	}, nil
 }
 
@@ -90,17 +109,25 @@ func TestSubscribeFailClosed(t *testing.T) {
 	subs := NewSubscriptionService(pool, StubProvider{}, plans)
 	plan := testPlan(t, plans, creator)
 
+	var before int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM subscriptions`).Scan(&before); err != nil {
+		t.Fatalf("count before: %v", err)
+	}
+
 	_, err := subs.Subscribe(ctx, member, plan.ID, "Test Member", "+919876543210", "m@example.com")
 	var disabled *ErrSubscriptionsDisabled
 	if !errors.As(err, &disabled) {
 		t.Fatalf("Subscribe with stub: want *ErrSubscriptionsDisabled, got %v", err)
 	}
+	// The table is shared across test runs on TEST_DATABASE_URL, so the
+	// invariant is "no NEW rows", not "zero rows" (the old count == 0
+	// assertion failed on any non-pristine database — found 2026-10-20).
 	var n int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM subscriptions`).Scan(&n); err != nil {
 		t.Fatalf("count: %v", err)
 	}
-	if n != 0 {
-		t.Fatalf("fail-closed violated: %d subscription rows written by a stub subscribe", n)
+	if n != before {
+		t.Fatalf("fail-closed violated: stub subscribe wrote %d subscription row(s)", n-before)
 	}
 }
 
@@ -170,7 +197,7 @@ func TestWebhookLifecycle(t *testing.T) {
 	creator := testSubUser(t, pool, "creator")
 	member := testSubUser(t, pool, "member")
 	plans := NewPlanService(pool)
-	subs := NewSubscriptionService(pool, &fakeProvider{}, plans)
+	subs := NewSubscriptionService(pool, newFakeProvider(), plans)
 	plan := testPlan(t, plans, creator) // 9900 paise monthly
 
 	res, err := subs.Subscribe(ctx, member, plan.ID, "Test Member", "+919876543210", "m@example.com")
@@ -328,7 +355,7 @@ func TestCancelMember(t *testing.T) {
 	creator := testSubUser(t, pool, "creator")
 	member := testSubUser(t, pool, "member")
 	plans := NewPlanService(pool)
-	subs := NewSubscriptionService(pool, &fakeProvider{}, plans)
+	subs := NewSubscriptionService(pool, newFakeProvider(), plans)
 	plan := testPlan(t, plans, creator)
 
 	res, err := subs.Subscribe(ctx, member, plan.ID, "Test Member", "+919876543210", "m@example.com")

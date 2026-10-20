@@ -2978,6 +2978,44 @@ contributor design input gets incorporated, implementation supersedes.)
   I1 STAYS OPEN: part 2 = device registration + prekey fetch/consume
   HTTP routes (auth, service, handler, OpenAPI) + Elixir chat-side
   prekey fetch + smoke.sh coverage.
+  I1 part 2a DONE 2026-10-20 ~11:15 IST: Go HTTP surface complete.
+  New internal/e2e/service.go — Service{pool}: RegisterDevice (txn:
+  upsert device row via xmax trick, drop unconsumed queue, insert new
+  queue; consumed rows kept for audit), Devices (own, no key material),
+  ReplenishPrekeys (idempotent same-id+same-key, 409 on same-id+
+  different-key, returns new count), DeleteDevice (cascade), Directory
+  (public bundles for any user), ConsumePrekey (txn: device lookup +
+  SELECT...FOR UPDATE SKIP LOCKED lowest-id prekey + consume + count).
+  New internal/e2e/handler.go — 6 endpoints (DevicesHandler dispatches
+  POST register 201/200 re-register + GET list; replenish; delete 204;
+  directory; prekey-bundle consume), strict JSON (DisallowUnknownFields),
+  base64 field-level decode errors, envelope-mapped errors
+  (e2e_invalid_bundle 422 / e2e_device_not_found 404 /
+  e2e_prekey_id_conflict 409 / e2e_invalid_key_encoding 422).
+  main.go: e2eSvc built in newHandler from pool (pool==nil unit tests
+  keep routes unregistered — no signature change needed). OpenAPI: 5
+  paths + 8 schemas, redocly valid. docs/e2e.md gains the HTTP API
+  section incl. the prekey-drain abuse note.
+  VERIFIED: gofmt/build/vet clean; go test ./internal/e2e/ green on
+  real PG16 (11 tests: register/re-register, bad-sig + cross-key
+  forgery, consume ordering 1-3-5-then-nil, 20-racer concurrent
+  consume → 20 distinct prekeys, replenish idempotency/conflict,
+  delete cascade, directory base64 round-trip); live binary smoke
+  (AUTH_BYPASS): 201/200 register, list, directory, consume 1-2-3-nil,
+  replenish → 2, 422 bad sig, 400 unknown field, 204 delete,
+  404s after. I1 STAYS OPEN: part 2b = Elixir chat-side prekey fetch
+  (SutraChat.E2E context + channel event) + smoke.sh round-trip.
+  FIX-FORWARD (pre-existing H4 breakage found by this run's full-suite
+  verification — NOT caused by I1): internal/subscriptions had 2 red
+  tests (proven on a fresh DB without any e2e changes): (a) fakeProvider
+  minted deterministic provider_refs ("cf-sub-test-1") that collided
+  across TestWebhookLifecycle/TestCancelMember, so HandleWebhook's
+  by-ref lookup hit the wrong row — refs are now instance-unique;
+  (b) Subscribe had no live-subscription guard (the partial unique
+  index only covers active/past_due, so a second pending INSERT sailed
+  past it) — explicit EXISTS check added, ErrAlreadySubscribed before
+  any provider call; (c) TestSubscribeFailClosed asserted count==0 on a
+  shared DB — now asserts no-delta. Full go test ./... green again.
 - [ ] I2: X3DH handshake + Double Ratchet sessions per 1:1 conversation;
   session establishment over the existing chat channel; forward secrecy +
   post-compromise healing properties documented and tested; no custom crypto
@@ -2993,6 +3031,19 @@ All boxes ticked (A through I), CI green, `scripts/smoke.sh` passes, docs comple
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-20 ~11:15 IST: I1 part 2a done and pushed (Go HTTP surface):
+  internal/e2e service (Register/Devices/Replenish/Delete/Directory/
+  ConsumePrekey with SKIP LOCKED atomic consume) + 6 handlers + routes
+  + OpenAPI (redocly valid) + docs/e2e.md HTTP section. Verified:
+  gofmt/build/vet clean, 11 e2e integration tests green on real PG16
+  (incl. 20-racer concurrent-consume distinctness), live binary smoke
+  of all routes incl. 422/400/404/204 paths. Fix-forward: repaired 2
+  pre-existing H4 subscriptions failures found by full-suite verification
+  (fakeProvider ref collision across tests; missing Subscribe
+  double-billing guard; shared-DB count==0 assertion) — full
+  `go test ./...` green again. I1 STAYS OPEN: part 2b = Elixir
+  chat-side prekey fetch + smoke.sh round-trip. NEXT: I1 part 2b.
 
 - 2026-10-20 ~10:35 IST: I1 part 1 done and verified (foundation push):
   migration 0021 (e2e_devices + e2e_one_time_prekeys, public-keys-only

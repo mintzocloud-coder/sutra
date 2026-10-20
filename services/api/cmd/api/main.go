@@ -22,6 +22,7 @@ import (
 	"github.com/mintzocloud-coder/sutra/services/api/internal/catalog"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/config"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/db"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/e2e"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/engagement"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/events"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/feed"
@@ -184,6 +185,29 @@ func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *
 		social.FollowersHandler(pool, log)))
 	v1.Handle("/v1/users/{id}/following", methodGuard([]string{http.MethodGet},
 		social.FollowingHandler(pool, log)))
+
+	// E2E device keys (I1, Phase I): registration, replenishment, the
+	// public device directory, and atomic one-time-prekey consumption
+	// for X3DH session initiation. The service needs only the pool, so
+	// it is built here; unit tests pass pool == nil, in which case the
+	// routes stay unregistered (same convention as mediaSvc).
+	var e2eSvc *e2e.Service
+	if pool != nil {
+		e2eSvc = e2e.NewService(pool)
+	}
+	if e2eSvc != nil {
+		// DevicesHandler dispatches POST (register) / GET (list) with
+		// 405 + Allow inside, like FollowHandler.
+		v1.Handle("/v1/e2e/devices", e2e.DevicesHandler(e2eSvc, log))
+		v1.Handle("/v1/e2e/devices/{device_id}/prekeys", methodGuard([]string{http.MethodPost},
+			e2e.ReplenishHandler(e2eSvc, log)))
+		v1.Handle("/v1/e2e/devices/{device_id}", methodGuard([]string{http.MethodDelete},
+			e2e.DeleteHandler(e2eSvc, log)))
+		v1.Handle("/v1/users/{id}/devices", methodGuard([]string{http.MethodGet},
+			e2e.DirectoryHandler(e2eSvc, log)))
+		v1.Handle("/v1/users/{id}/devices/{device_id}/prekey-bundle", methodGuard([]string{http.MethodGet},
+			e2e.PrekeyHandler(e2eSvc, log)))
+	}
 
 	// Posts (D3): publish, author timeline, author-only delete.
 	postsSvc := posts.NewService(pool, cfg.PostVelocityCap)

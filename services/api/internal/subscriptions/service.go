@@ -271,6 +271,24 @@ func (s *SubscriptionService) Subscribe(ctx context.Context, memberID pgtype.UUI
 	if err != nil {
 		return nil, err
 	}
+	// Double-billing guard: a member with a live (active/past_due)
+	// subscription on this plan must 409 instead of minting a second
+	// mandate. The partial unique index stays the race backstop, but it
+	// only fires on live-status rows — a plain second INSERT lands as
+	// pending and would sail past it, so the explicit check comes
+	// first (before any provider call: no mandate is created on the
+	// rejection path).
+	var live bool
+	if err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM subscriptions
+		 WHERE subscriber_id = $1 AND plan_id = $2
+		   AND status IN ('active', 'past_due'))`,
+		memberID, planID).Scan(&live); err != nil {
+		return nil, err
+	}
+	if live {
+		return nil, ErrAlreadySubscribed
+	}
 	res, err := s.provider.CreateSubscription(ctx, CreateParams{
 		MemberID:      uuidString(memberID),
 		PlanID:        uuidString(planID),
