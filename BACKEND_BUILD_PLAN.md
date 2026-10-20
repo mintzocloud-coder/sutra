@@ -3211,9 +3211,27 @@ contributor design input gets incorporated, implementation supersedes.)
   CI-gated (no docker on this VM) via the smoke job. CI-green
   confirmation of this push lands in the next run's check.
 
+## Phase J — CI-green close-out (all waves truly done)
+
+The plan's "Done when" requires CI green, not just checked boxes. Phase I
+code (0e9d22be onward) turned main RED: Elixir chat builds+tests, Go API
+builds+tests, OpenAPI spec validates, and full-stack smoke all fail on
+95b86a47 ("I3: e2e message envelope smoke round-trip — Phase I complete").
+No new features here — triage the failures from evidence (check-runs
+annotations; job logs are not downloadable via the push credential, so
+reproduce locally where possible and let CI be the gate), fix forward,
+verify green on a fresh push. The alarm stays on until this is done.
+
+- [ ] J1: Main branch CI fully green — all 7 jobs (Go API builds+tests,
+  Elixir chat builds+tests, OpenAPI spec validates, SPDX, docker-compose
+  validates, Python AI tests, full-stack smoke) green on the latest push.
+  Triage from check-runs annotations; fix the real failures (Elixir/Go/
+  OpenAPI), push via sutra_push.py, confirm green via the API before
+  marking [x].
+
 ## Done when
 
-All boxes ticked (A through I), CI green, `scripts/smoke.sh` passes, docs complete.
+All boxes ticked (A through J), CI green, `scripts/smoke.sh` passes, docs complete.
 Then report to founder: production-ready backend live on main.
 
 ## Log
