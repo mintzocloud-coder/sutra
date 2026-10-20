@@ -84,7 +84,7 @@ func testConfig(authBypass bool) config.Config {
 // DB-backed (readyz, /v1/me) is covered by the gated tests below.
 
 func TestHandler_HealthzAndNotFound_NoDB(t *testing.T) {
-	h := newHandler(context.Background(), testConfig(true), nil, testVerifier(), nil, nil, nil, nil, testLogger(), nil, nil, nil, nil, nil, nil, nil)
+	h := newHandler(context.Background(), testConfig(true), nil, testVerifier(), nil, nil, nil, nil, testLogger(), nil, nil, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
@@ -117,7 +117,7 @@ func testDeps(t *testing.T, authBypass bool) (http.Handler, *db.Pool) {
 	if err := db.Migrate(ctx, pool); err != nil {
 		t.Fatalf("db.Migrate: %v", err)
 	}
-	return newHandler(context.Background(), testConfig(authBypass), pool, testVerifier(), nil, nil, nil, nil, testLogger(), nil, nil, nil, nil, nil, nil, nil), pool
+	return newHandler(context.Background(), testConfig(authBypass), pool, testVerifier(), nil, nil, nil, nil, testLogger(), nil, nil, nil, nil, nil, nil, nil, nil), pool
 }
 
 func TestHandler_UnauthorizedEnvelope(t *testing.T) {
@@ -210,7 +210,7 @@ func TestHandler_ReadyzNotReadyEnvelope(t *testing.T) {
 	}
 	pool.Close() // simulate a dead database
 
-	h := newHandler(context.Background(), testConfig(true), pool, testVerifier(), nil, nil, nil, nil, testLogger(), nil, nil, nil, nil, nil, nil, nil)
+	h := newHandler(context.Background(), testConfig(true), pool, testVerifier(), nil, nil, nil, nil, testLogger(), nil, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

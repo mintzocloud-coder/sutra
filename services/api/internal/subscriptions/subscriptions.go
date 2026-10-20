@@ -250,26 +250,30 @@ func NewProvider(name string) (Provider, error) {
 	}
 }
 
+// ErrInvalidPlanInput is returned by ValidatePlanInput; handlers map it
+// to a 400 invalid_field envelope.
+var ErrInvalidPlanInput = errors.New("invalid plan field")
+
 // ValidatePlanInput checks a creator's new/updated plan fields before
 // anything is persisted. Limits mirror the migration 0020 CHECKs so the
 // DB never has to be the first to complain.
 func ValidatePlanInput(name, description string, pricePaise int64, period BillingPeriod, currency string) error {
 	if name == "" || len([]rune(name)) > 80 {
-		return fmt.Errorf("subscriptions: plan name must be 1..80 characters")
+		return fmt.Errorf("%w: plan name must be 1..80 characters", ErrInvalidPlanInput)
 	}
 	if len([]rune(description)) > 500 {
-		return fmt.Errorf("subscriptions: plan description must be at most 500 characters")
+		return fmt.Errorf("%w: plan description must be at most 500 characters", ErrInvalidPlanInput)
 	}
 	if pricePaise <= 0 {
-		return fmt.Errorf("subscriptions: plan price must be > 0 paise")
+		return fmt.Errorf("%w: plan price must be > 0 paise", ErrInvalidPlanInput)
 	}
 	switch period {
 	case BillingMonthly, BillingYearly:
 	default:
-		return fmt.Errorf("subscriptions: billing period must be %q or %q", BillingMonthly, BillingYearly)
+		return fmt.Errorf("%w: billing period must be %q or %q", ErrInvalidPlanInput, BillingMonthly, BillingYearly)
 	}
 	if currency != CurrencyINR {
-		return fmt.Errorf("subscriptions: currency must be %q", CurrencyINR)
+		return fmt.Errorf("%w: currency must be %q", ErrInvalidPlanInput, CurrencyINR)
 	}
 	return nil
 }

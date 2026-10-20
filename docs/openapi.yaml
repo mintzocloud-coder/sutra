@@ -5089,6 +5089,452 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /v1/memberships/plans:
+    post:
+      tags: [memberships]
+      summary: Create a membership plan
+      description: |
+        Registers a paid membership tier for the caller (the creator).
+        `price_paise` is integer paise (> 0), `currency` is pinned to
+        `INR` (India-first launch), `billing_period` is `monthly` or
+        `yearly`. Price and period are **immutable** after creation —
+        changing a member's terms requires a new plan. Runs fully
+        local (no aggregator).
+      operationId: createMembershipPlan
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubscriptionPlanCreate'
+      responses:
+        '201':
+          description: Plan created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionPlan'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Invalid fields (`invalid_field`, `invalid_json`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    get:
+      tags: [memberships]
+      summary: List the caller's membership plans
+      description: |
+        Returns the caller's plans, newest first. `?limit=` is clamped
+        to 1..100 (default 20). Local read — no aggregator involved.
+      operationId: listMembershipPlans
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Plan page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionPlanPage'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/memberships/plans/{id}:
+    get:
+      tags: [memberships]
+      summary: Get a membership plan
+      description: |
+        Owner-only read: another creator's plans answer 404 (never
+        leaks existence).
+      operationId: getMembershipPlan
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Plan UUID.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The plan.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionPlan'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed id (`invalid_id`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Not found (or not yours).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags: [memberships]
+      summary: Update a membership plan
+      description: |
+        Presence-flag partial update of `name`, `description` and
+        `is_active`. `price_paise` and `billing_period` are **immutable**
+        — sending them answers 400 `immutable_field`; create a new plan
+        for a new price or period.
+      operationId: updateMembershipPlan
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Plan UUID.
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubscriptionPlanPatch'
+      responses:
+        '200':
+          description: Plan updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionPlan'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Invalid fields (`invalid_field`, `immutable_field`, `invalid_json`, `invalid_id`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Not found (or not yours).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [memberships]
+      summary: Deactivate a membership plan
+      description: |
+        Plans are never hard-deleted (subscriptions reference them
+        `ON DELETE RESTRICT`); the row flips to `is_active: false` so no
+        new member can subscribe while history and accruals stay intact.
+      operationId: deactivateMembershipPlan
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Plan UUID.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Plan deactivated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionPlan'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed id (`invalid_id`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Not found (or not yours).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/memberships/subscriptions:
+    post:
+      tags: [memberships]
+      summary: Subscribe to a membership plan
+      description: |
+        Starts the caller's subscription to an **active** plan. The
+        aggregator mandate is created first; only its success writes the
+        local row (status `pending` until the mandate's first verified
+        billing event). Fail-closed: while the stub provider is wired
+        this answers 503 `subscriptions_unavailable` — no mandate can
+        exist, so nothing was subscribed.
+      operationId: subscribeToPlan
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubscribeRequest'
+      responses:
+        '201':
+          description: Subscription created (pending until the mandate's first billing event).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscribeResult'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Invalid fields (`invalid_field`, `invalid_json`, `invalid_id`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Plan not found (or inactive).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: An active or past-due subscription on this plan already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Subscription billing not wired yet (`subscriptions_unavailable`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    get:
+      tags: [memberships]
+      summary: List the caller's subscriptions
+      description: |
+        Returns the caller's own subscriptions, newest first.
+        `?limit=` is clamped to 1..100 (default 20).
+      operationId: listMySubscriptions
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Subscription page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionPage'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/memberships/subscriptions/{id}:
+    get:
+      tags: [memberships]
+      summary: Get a subscription
+      description: |
+        Owner-only read: another member's subscription answers 404
+        (never leaks existence).
+      operationId: getSubscription
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Subscription UUID.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The subscription.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Subscription'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed id (`invalid_id`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Not found (or not yours).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/memberships/subscriptions/{id}/cancel:
+    post:
+      tags: [memberships]
+      summary: Cancel a subscription
+      description: |
+        Cancels the caller's subscription at the aggregator first, then
+        records the outcome locally. `at_period_end: true` keeps access
+        until `current_period_end` (the row flips when the aggregator's
+        verified `cancelled` webhook lands); `false` cancels now.
+        Fail-closed: while the stub provider is wired this answers 503
+        `subscriptions_unavailable` — there is no mandate to cancel.
+      operationId: cancelSubscription
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Subscription UUID.
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelRequest'
+      responses:
+        '200':
+          description: Subscription cancelled (or scheduled).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Subscription'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Invalid fields (`invalid_json`, `invalid_id`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Not found (or not yours).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Subscription not cancellable (pending without a mandate, or already cancelled).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Subscription billing not wired yet (`subscriptions_unavailable`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/memberships/entitlements:
+    get:
+      tags: [memberships]
+      summary: List the caller's membership entitlements
+      description: |
+        Returns the `member_of:<creator_id>` grants the caller holds —
+        one per ACTIVE subscription. Membership gating (exclusive
+        posts, paid groups, live tiers) checks this list, never the
+        provider state, so a fail-closed subscription can never grant
+        access.
+      operationId: listMembershipEntitlements
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Entitlement list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entitlements]
+                properties:
+                  entitlements:
+                    type: array
+                    items:
+                      type: string
+                      example: member_of:7e2a8f4c-1b3d-4e5f-8a09-b1c2d3e4f506
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
 components:
   parameters:
     UserId:
@@ -7088,6 +7534,195 @@ components:
             Opaque base64url cursor over the last hit's
             `(updated_at_unix, sort_seq)`; pass as `cursor` for the
             next page. Absent on the last page.
+
+    SubscriptionPlan:
+      type: object
+      description: |
+        A creator's membership tier (`subscription_plans`). Price and
+        period are immutable after creation — a new tier is a new row.
+      required: [id, creator_id, name, price_paise, billing_period, currency, is_active, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        creator_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          maxLength: 80
+          example: Gold members
+        description:
+          type: string
+          maxLength: 500
+        price_paise:
+          type: integer
+          format: int64
+          minimum: 1
+          example: 9900
+        billing_period:
+          type: string
+          enum: [monthly, yearly]
+          example: monthly
+        currency:
+          type: string
+          enum: [INR]
+          description: Pinned to INR until the international launch.
+        is_active:
+          type: boolean
+          description: Inactive plans are not subscribable; rows are never hard-deleted.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      additionalProperties: false
+    SubscriptionPlanCreate:
+      type: object
+      required: [name, price_paise, billing_period]
+      properties:
+        name:
+          type: string
+          maxLength: 80
+          example: Gold members
+        description:
+          type: string
+          maxLength: 500
+        price_paise:
+          type: integer
+          format: int64
+          minimum: 1
+          example: 9900
+        billing_period:
+          type: string
+          enum: [monthly, yearly]
+          example: monthly
+        currency:
+          type: string
+          enum: [INR]
+          default: INR
+          description: Pinned to INR; anything else is a 400.
+      additionalProperties: false
+    SubscriptionPlanPatch:
+      type: object
+      description: |
+        Presence-flag partial update. `name`, `description` and
+        `is_active` only — `price_paise`/`billing_period` are immutable
+        (sending them answers 400 `immutable_field`).
+      properties:
+        name:
+          type: string
+          maxLength: 80
+        description:
+          type: string
+          maxLength: 500
+        is_active:
+          type: boolean
+      additionalProperties: false
+    SubscriptionPlanPage:
+      type: object
+      required: [plans]
+      properties:
+        plans:
+          type: array
+          items:
+            $ref: '#/components/schemas/SubscriptionPlan'
+    Subscription:
+      type: object
+      description: |
+        A member's billing relationship with a plan (`subscriptions`).
+        Only a verified `billing_succeeded` aggregator event promotes a
+        row to `active` — the stub can never emit one, so a fail-closed
+        row can never grant `member_of:<creator_id>`.
+      required: [id, subscriber_id, plan_id, status, cancel_at_period_end, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        subscriber_id:
+          type: string
+          format: uuid
+        plan_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending, active, past_due, cancelled]
+          example: active
+        provider_ref:
+          type: string
+          description: Aggregator subscription id; absent while the stub is wired (fail-closed).
+        current_period_start:
+          type: string
+          format: date-time
+          nullable: true
+        current_period_end:
+          type: string
+          format: date-time
+          nullable: true
+        cancel_at_period_end:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      additionalProperties: false
+    SubscriptionPage:
+      type: object
+      required: [subscriptions]
+      properties:
+        subscriptions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Subscription'
+    SubscribeRequest:
+      type: object
+      required: [plan_id, customer_name, customer_phone, customer_email]
+      properties:
+        plan_id:
+          type: string
+          format: uuid
+          description: Must be an ACTIVE plan; inactive or missing plans are 404.
+        customer_name:
+          type: string
+          maxLength: 120
+          example: Ramesh Patel
+        customer_phone:
+          type: string
+          description: E.164 (UPI AutoPay mandate setup requires it).
+          example: +919876543210
+        customer_email:
+          type: string
+          format: email
+          maxLength: 254
+      additionalProperties: false
+    SubscribeResult:
+      type: object
+      description: |
+        The local row (pending until the mandate's first billing event)
+        plus the aggregator authorization session the member must
+        complete (UPI AutoPay e-mandate).
+      required: [subscription]
+      properties:
+        subscription:
+          $ref: '#/components/schemas/Subscription'
+        auth_url:
+          type: string
+          description: UPI AutoPay authorization session; absent while the stub is wired.
+    CancelRequest:
+      type: object
+      properties:
+        at_period_end:
+          type: boolean
+          default: false
+          description: |
+            true keeps the member's access until `current_period_end`
+            (the row flips on the aggregator's verified `cancelled`
+            webhook); false cancels now.
+      additionalProperties: false
 
     ErrorEnvelope:
       type: object

@@ -107,6 +107,14 @@
 #     floor, 55/45 split on the ledger row, spend accrued in report ->
 #     no-demand serve 204, missing slot 400 -> archive -> report 404s
 #     (archived campaigns never leak) -> serve 204.
+#   - The H4 memberships round-trip (reuses the H1 identities):
+#     plan create -> 201 -> zero-price plan 400s -> list carries the
+#     plan, other user's read 404s (no existence leak) -> rename 200,
+#     price change 400s (immutable_field) -> subscribe fails closed
+#     503 (subscriptions_unavailable) + Retry-After -> empty
+#     subscriptions + entitlements -> unknown cancel 404, bad id 400 ->
+#     webhook ingress 503 -> deactivate (no hard delete) -> the api
+#     boot log carries the subscriptions fail-closed WARN.
 # The chat release fails closed at boot without a real SECRET_KEY_BASE, so
 # this script generates an ephemeral one (kept in the environment only,
 # never written to disk or committed).
@@ -2720,6 +2728,130 @@ arch_json="$(curl -sf -X DELETE -H "Authorization: Bearer $token_c" \
   || fail "ads: serve after archive did not 204"
 rm -f "$ads_body"
 pass "ads: archive terminal; report on archived → 404 (cleanup); serve → 204"
+
+# --- Memberships round-trip (H4) ---------------------------------------------------
+# Reuses the H1 identities: $token_h (creator) and $token_h2 (member,
+# owns nothing). Plans CRUD is pure local config (no provider), so it
+# works fully; subscribe/cancel/webhook must fail CLOSED (503) while
+# the stub is the only wired provider — a fake 201 would claim a
+# mandate that does not exist. The boot log must carry the
+# subscriptions fail-closed WARN and no set-but-ignored WARN (creds
+# are unset in smoke).
+echo "smoke: memberships round-trip (H4)"
+sub_body="$(mktemp)"; sub_hdr="$(mktemp)"
+
+plan_json="$(curl -sf -X POST \
+  -H "Authorization: Bearer $token_h" -H 'Content-Type: application/json' \
+  -d '{"name":"Smoke Inner Circle","description":"paid supporter tier","price_paise":19900,"billing_period":"monthly","currency":"INR"}' \
+  "$API_URL/v1/memberships/plans")" || fail "H4: plan create failed"
+plan_id="$(jget "$plan_json" id)"
+[ "$(jget "$plan_json" is_active)" = "True" ] || fail "H4: new plan is not active"
+[ "$(jget "$plan_json" price_paise)" = "19900" ] || fail "H4: plan price not stored"
+pass "H4: plan created: $plan_id"
+
+# Zero-price plan → 400 (validation runs before any write).
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_h" -H 'Content-Type: application/json' \
+  -d '{"name":"Free Tier","price_paise":0,"billing_period":"monthly"}' \
+  "$API_URL/v1/memberships/plans")" = "400" ] \
+  || fail "H4: zero-price plan did not 400"
+pass "H4: zero-price plan → 400 invalid_field"
+
+# List carries the plan; a different user's read 404s (never leaks
+# existence).
+plans_json="$(curl -sf -H "Authorization: Bearer $token_h" \
+  "$API_URL/v1/memberships/plans")" || fail "H4: plan list failed"
+[ "$(printf '%s' "$plans_json" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["plans"]))')" -ge 1 ] \
+  || fail "H4: plan list missing the new plan"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token_h2" \
+  "$API_URL/v1/memberships/plans/$plan_id")" = "404" ] \
+  || fail "H4: other user's plan read did not 404"
+pass "H4: list + owner get + other-user 404 (no existence leak)"
+
+# Rename → 200; price_paise is immutable → 400 immutable_field (a client
+# that tries to rewrite a member's terms gets a loud error, never a
+# silent ignore).
+patch_json="$(curl -sf -X PATCH \
+  -H "Authorization: Bearer $token_h" -H 'Content-Type: application/json' \
+  -d '{"name":"Smoke Inner Circle Plus"}' \
+  "$API_URL/v1/memberships/plans/$plan_id")" || fail "H4: plan patch failed"
+[ "$(jget "$patch_json" name)" = "Smoke Inner Circle Plus" ] \
+  || fail "H4: plan rename did not stick"
+imm_code="$(curl -s -o "$sub_body" -w '%{http_code}' -X PATCH \
+  -H "Authorization: Bearer $token_h" -H 'Content-Type: application/json' \
+  -d '{"price_paise":29900}' \
+  "$API_URL/v1/memberships/plans/$plan_id")"
+[ "$imm_code" = "400" ] \
+  || { rm -f "$sub_body" "$sub_hdr"; fail "H4: price patch did not 400 (got $imm_code)"; }
+[ "$(python3 -c 'import json; print(json.load(open("'"$sub_body"'"))["error"]["code"])')" = "immutable_field" ] \
+  || { rm -f "$sub_body" "$sub_hdr"; fail "H4: price patch envelope code is not immutable_field"; }
+pass "H4: rename → 200; price change → 400 immutable_field"
+
+# Subscribe: the stub fails closed → 503 subscriptions_unavailable +
+# Retry-After, never a fake 201. No token → 401.
+sub_code="$(curl -s -o "$sub_body" -D "$sub_hdr" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_h2" -H 'Content-Type: application/json' \
+  -d '{"plan_id":"'"$plan_id"'","customer_name":"Smoke Member","customer_phone":"+919876543210","customer_email":"member@example.com"}' \
+  "$API_URL/v1/memberships/subscriptions")"
+[ "$sub_code" = "503" ] \
+  || { rm -f "$sub_body" "$sub_hdr"; fail "H4: subscribe did not fail closed 503 (got $sub_code)"; }
+[ "$(python3 -c 'import json; print(json.load(open("'"$sub_body"'"))["error"]["code"])')" = "subscriptions_unavailable" ] \
+  || { rm -f "$sub_body" "$sub_hdr"; fail "H4: subscribe envelope code is not subscriptions_unavailable"; }
+grep -qi '^Retry-After: [1-9]' "$sub_hdr" \
+  || { rm -f "$sub_body" "$sub_hdr"; fail "H4: subscribe 503 missing Retry-After header"; }
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+  -d '{"plan_id":"'"$plan_id"'","customer_name":"x","customer_phone":"+919876543210","customer_email":"x@y.z"}' \
+  "$API_URL/v1/memberships/subscriptions")" = "401" ] \
+  || { rm -f "$sub_body" "$sub_hdr"; fail "H4: unauthenticated subscribe did not 401"; }
+pass "H4: subscribe fails closed — 503 subscriptions_unavailable + Retry-After; 401 without token"
+
+# The member's own subscription list is empty (no row can exist), and
+# the entitlements list is empty. Cancel of an unknown id → 404 (the
+# owner-scoped lookup runs before the provider), bad id → 400.
+mine_json="$(curl -sf -H "Authorization: Bearer $token_h2" \
+  "$API_URL/v1/memberships/subscriptions")" || fail "H4: subscriptions list failed"
+python3 -c 'import json,sys; assert json.load(sys.stdin)["subscriptions"] == [], "non-empty"' \
+  <<<"$mine_json" || fail "H4: subscriptions list not empty"
+ent_json="$(curl -sf -H "Authorization: Bearer $token_h2" \
+  "$API_URL/v1/memberships/entitlements")" || fail "H4: entitlements failed"
+python3 -c 'import json,sys; assert json.load(sys.stdin)["entitlements"] == [], "non-empty"' \
+  <<<"$ent_json" || fail "H4: entitlements not empty"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $token_h2" \
+  "$API_URL/v1/memberships/subscriptions/00000000-0000-0000-0000-000000000000/cancel")" = "404" ] \
+  || fail "H4: cancel of unknown subscription did not 404"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $token_h2" \
+  "$API_URL/v1/memberships/subscriptions/not-a-uuid/cancel")" = "400" ] \
+  || fail "H4: cancel with bad id did not 400"
+pass "H4: empty subscriptions + entitlements; unknown cancel → 404; bad id → 400"
+
+# Webhook ingress: the stub cannot verify a callback → 503 (an
+# unverified callback is never acknowledged, no local state touched).
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+  -d '{"type":"SUBSCRIPTION_PAYMENT_SUCCESS"}' \
+  "$API_URL/internal/subscriptions/webhook")" = "503" ] \
+  || fail "H4: subscription webhook did not fail closed 503"
+pass "H4: webhook ingress fails closed — 503 subscriptions_unavailable"
+
+# Deactivate: plans are never hard-deleted (history and accruals stay).
+del_json="$(curl -sf -X DELETE -H "Authorization: Bearer $token_h" \
+  "$API_URL/v1/memberships/plans/$plan_id")" || fail "H4: plan deactivate failed"
+[ "$(jget "$del_json" is_active)" = "False" ] \
+  || fail "H4: plan not inactive after DELETE"
+pass "H4: deactivate → is_active false (history intact, no hard delete)"
+
+# Boot log: the subscriptions seam must boot with its loud fail-closed
+# WARN and no set-but-ignored WARN (creds are unset in smoke).
+api_boot_log="$(mktemp)"
+docker compose logs --no-log-prefix api >"$api_boot_log" 2>/dev/null \
+  || fail "could not read the api boot log (docker compose logs api failed)"
+[ -s "$api_boot_log" ] || fail "api boot log is empty"
+grep -q "subscriptions: running with the fail-closed stub" "$api_boot_log" \
+  || { echo "smoke: api boot log tail (subscriptions WARN not found):" >&2; tail -30 "$api_boot_log" >&2; rm -f "$api_boot_log" "$sub_body" "$sub_hdr"; fail "api boot log missing the fail-closed subscriptions WARN"; }
+pass "api boot log carries the fail-closed subscriptions WARN"
+grep -q "subscriptions: CASHFREE_" "$api_boot_log" \
+  && { rm -f "$api_boot_log" "$sub_body" "$sub_hdr"; fail "api boot log claims CASHFREE_* set-but-ignored (creds are unset in smoke)"; }
+pass "api boot log has no set-but-ignored subscription WARN"
+rm -f "$api_boot_log" "$sub_body" "$sub_hdr"
 
 # --- Chat websocket round-trip --------------------------------------------
 wait_for 90 "chat websocket listener" \

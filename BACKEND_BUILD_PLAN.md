@@ -2897,10 +2897,23 @@ with documented contracts until then.
     verified H3 curl/jget/assert patterns. H3 acceptance criteria ALL
     MET: auction kernel, advertiser API, creative registry, reporting,
     serving integration, docs/ads.md, OpenAPI, tests, smoke.
-- [ ] H4: Subscriptions — Cashfree + UPI AutoPay subscription adapter
+- [x] H4: Subscriptions — Cashfree + UPI AutoPay subscription adapter
   (fail-closed stub), plans/entitlements model, creator-membership
   billing wiring (70/30 split), docs/subscriptions.md, OpenAPI + tests +
-  smoke. Then Phase H complete — ALL WAVES DONE.
+  smoke. **Phase H complete — ALL WAVES DONE.**
+  H4 COMPLETE 2026-10-20 ~09:35 IST: part 2 was found largely landed in
+  the tree (PlanService + SubscriptionService + webhook promotion txn +
+  routes + OpenAPI were already pushed); this run closed the gaps —
+  (a) the H4 newHandler param (subProvider) had broken FIVE test call
+  sites in cmd/api (bench_test.go, main_test.go ×3,
+  orders_status_route_test.go) — `go vet` was RED, all fixed with the
+  17th nil arg; (b) smoke.sh gains the H4 membership round-trip
+  (plan create 201 → zero-price 400 → list + other-user 404 →
+  rename 200 + immutable price 400 → subscribe 503
+  subscriptions_unavailable + Retry-After → empty list/entitlements →
+  unknown cancel 404 → webhook 503 → deactivate → boot-log
+  fail-closed WARN); (c) production.md SUBSCRIPTIONS_PROVIDER rows
+  + .env placeholder. All phases A→H now [x]. NEXT: Phase I (E2E).
   H4 part 1 DONE 2026-10-20 ~07:55 IST: foundation. Migration
   0020_subscriptions.sql (subscription_plans — creator_id/name/price>0/
   monthly|yearly/INR-pinned/is_active; subscriptions — pending→active→
@@ -2956,6 +2969,22 @@ All boxes ticked (A through I), CI green, `scripts/smoke.sh` passes, docs comple
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-20 ~09:35 IST: **H4 COMPLETE — Phase H complete — ALL WAVES
+  DONE.** This run closed the last H4 gaps: (1) fixed the RED
+  `go vet` (the H4 `subProvider` newHandler param had broken 5 test call
+  sites in cmd/api — bench_test.go, main_test.go ×3,
+  orders_status_route_test.go — all got the 17th nil arg); (2) smoke.sh
+  gains the H4 membership round-trip (plan CRUD incl. immutable-price
+  400, subscribe 503 subscriptions_unavailable + Retry-After, empty
+  list/entitlements, webhook 503, deactivate, boot-log fail-closed WARN);
+  (3) production.md SUBSCRIPTIONS_PROVIDER env rows + .env placeholder.
+  The DB service (plans CRUD, webhook promotion txn: transition + 70/30
+  ledger + accrual in one txn), HTTP routes, and OpenAPI were already in
+  the tree and verified — gofmt/build/vet clean, full `go test`
+  -count=1 ./... green (DB-gated suites skip on this VM, CI-gated),
+  coverage gate OK (71 spec paths), redocly valid, SPDX + bash -n clean.
+  NEXT: Phase I (E2E: I1 device key management).
 
 - 2026-10-20 ~06:45 IST: H3 part 3b chunk 1 done and pushed — the ad
   serving integration core (migration 0019 bid_paise fail-closed +

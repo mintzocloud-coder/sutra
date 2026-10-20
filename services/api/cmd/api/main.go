@@ -72,7 +72,7 @@ func methodGuard(allowed []string, h http.Handler) http.HandlerFunc {
 // is always registered (the HMAC check needs no provider). tallyBridge
 // may be nil: the voucher route answers 503 (the registry lookup runs
 // regardless). zohoProvider may be nil: the Zoho routes answer 503.
-func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, mediaSvc *media.Service, rt realtime.Publisher, aiProxy *aiproxy.Proxy, log *slog.Logger, translator *feed.Translator, searchClient *search.Client, orderBus events.EventBus, whClient *webhooks.Client, waProvider integrations.WhatsAppProvider, tallyBridge integrations.TallyBridge, zohoProvider integrations.ZohoBooksProvider) http.Handler {
+func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *oidc.Verifier, feedSvc *feed.Service, mediaSvc *media.Service, rt realtime.Publisher, aiProxy *aiproxy.Proxy, log *slog.Logger, translator *feed.Translator, searchClient *search.Client, orderBus events.EventBus, whClient *webhooks.Client, waProvider integrations.WhatsAppProvider, tallyBridge integrations.TallyBridge, zohoProvider integrations.ZohoBooksProvider, subProvider subscriptions.Provider) http.Handler {
 	auth := middleware.RequireAuth(verifier, log, middleware.AuthOptions{
 		Bypass:        cfg.AuthBypass,
 		BypassSubject: cfg.BypassSubject,
@@ -325,6 +325,35 @@ func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *
 		ads.ServingConfigFromEnv(), log)
 	v1.Handle("/v1/ads/serve", methodGuard([]string{http.MethodPost}, serveHandler))
 	log.Info("ads serving route registered", "route", "/v1/ads/serve")
+
+	// Memberships / subscriptions (H4 part 2): creator membership plans,
+	// member subscriptions, the member_of:<creator> entitlement list,
+	// and the aggregator subscription-webhook ingress. Everything money
+	// touches rides the fail-closed provider seam (part 1): while the
+	// stub is wired, subscribe/cancel/webhook answer 503
+	// subscriptions_unavailable and plans CRUD runs fully local. The
+	// webhook ingress is public by necessity (the aggregator calls it)
+	// like /internal/whatsapp/webhook; the signature check inside
+	// Provider.VerifyWebhook is the auth, so it stays out of the
+	// public OpenAPI spec (see scripts/check_openapi_coverage.py
+	// INTERNAL_ROUTES).
+	subHandler := subscriptions.NewMembershipHandler(pool, subProvider, log)
+	v1.Handle("/v1/memberships/plans", methodGuard([]string{http.MethodPost, http.MethodGet},
+		subHandler.PlansMux()))
+	v1.Handle("/v1/memberships/plans/{id}", methodGuard([]string{http.MethodGet, http.MethodPatch, http.MethodDelete},
+		subHandler.PlanMux()))
+	v1.Handle("/v1/memberships/subscriptions", methodGuard([]string{http.MethodPost, http.MethodGet},
+		subHandler.SubscriptionsMux()))
+	v1.Handle("/v1/memberships/subscriptions/{id}", methodGuard([]string{http.MethodGet},
+		subHandler.SubscriptionMux()))
+	v1.Handle("/v1/memberships/subscriptions/{id}/cancel", methodGuard([]string{http.MethodPost},
+		subHandler.CancelMux()))
+	v1.Handle("/v1/memberships/entitlements", methodGuard([]string{http.MethodGet},
+		http.HandlerFunc(subHandler.Entitlements())))
+	mux.Handle("/internal/subscriptions/webhook", methodGuard([]string{http.MethodPost},
+		subHandler.Webhook()))
+	log.Info("membership routes registered",
+		"routes", "/v1/memberships/plans (+{id}),/v1/memberships/subscriptions (+{id},+{id}/cancel),/v1/memberships/entitlements,/internal/subscriptions/webhook")
 
 	// Recommendations v1 (E5): the like store feeds the home-feed
 	// ranker. Created ahead of the feed block so the /v1/feed/home
@@ -711,11 +740,12 @@ func main() {
 	// only provider is the fail-closed stub (see internal/subscriptions):
 	// every operation — CreateSubscription, CancelSubscription,
 	// VerifyWebhook — is an explicit typed error, never a mandate and
-	// never a charge. The constructed provider is discarded for now and
-	// consumed by the membership routes landing in H4 part 2. Cashfree
-	// credentials are shared with the payments seam (CASHFREE_*):
-	// loaded, never logged, never committed; the stub ignores them.
-	if _, err := subscriptions.NewProvider(cfg.SubscriptionsProvider); err != nil {
+	// never a charge. The constructed provider is consumed by the
+	// membership routes (H4 part 2). Cashfree credentials are shared
+	// with the payments seam (CASHFREE_*): loaded, never logged, never
+	// committed; the stub ignores them.
+	subProvider, err := subscriptions.NewProvider(cfg.SubscriptionsProvider)
+	if err != nil {
 		log.Error("invalid subscriptions config — refusing to start", "err", err)
 		os.Exit(1)
 	}
@@ -867,7 +897,7 @@ func main() {
 
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	defer bgCancel() // stops the live reconciler (G1) on shutdown
-	handler := newHandler(bgCtx, cfg, pool, verifier, feedSvc, mediaSvc, rtPub, aiProxy, log, translator, searchClient, orderBus, whClient, waProvider, tallyBridge, zohoProvider)
+	handler := newHandler(bgCtx, cfg, pool, verifier, feedSvc, mediaSvc, rtPub, aiProxy, log, translator, searchClient, orderBus, whClient, waProvider, tallyBridge, zohoProvider, subProvider)
 	srv := &http.Server{Addr: ":" + cfg.Port, Handler: handler}
 
 	go func() {

@@ -20,7 +20,7 @@ import (
 func testHandler() http.Handler {
 	cfg := config.Config{AuthBypass: true, BypassSubject: "route-test-user"}
 	return newHandler(context.Background(), cfg, nil, nil, nil, nil, nil, nil,
-		slog.New(slog.NewTextHandler(os.Stderr, nil)), nil, nil, nil, nil, nil, nil, nil)
+		slog.New(slog.NewTextHandler(os.Stderr, nil)), nil, nil, nil, nil, nil, nil, nil, nil)
 }
 
 // TestOrderStatusRouteReachesHandler locks the F3 contract: PATCH
