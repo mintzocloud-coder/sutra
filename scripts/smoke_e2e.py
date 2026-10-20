@@ -17,9 +17,23 @@ Proves the full I1 path against the real stack:
     → websocket fetch empty payload → invalid_request
     → DELETE the device (cleanup) → directory empty, consume 404s
 
-The consume ordering (REST 1, WS 2, REST 3, dry on WS) proves the Go
-API and the chat service share one atomic one-time-prekey queue —
-no duplicate hand-out across the two paths.
+I2 — the X3DH session-establishment transport round-trip (runs while the
+device is still registered):
+
+    join room:smoke-e2e-room → push `e2e:session_init` with an
+    openssl-minted envelope (fresh X25519 base key + the device's real
+    Ed25519 identity key + 64 random ciphertext bytes; prekey_id 1 is
+    the audit echo of the id REST consumed) → expect the
+    `e2e:session_init` broadcast (canonical envelope, kind
+    e2e_session_init) + the sender-only `msg:ack` (deduped false, ids
+    match) → push the same envelope again → broadcast + ack with
+    deduped:true and the ORIGINAL id (a retry never builds a second
+    session) → malformed envelope (31-byte key) → error reply
+    "handshake public key must be 32 bytes"; missing recipient →
+    "handshake envelope missing a required field" → reconnect, rejoin
+    the room → the join history replays the init message (the offline
+    recipient's path: their first ratchet step derives from exactly
+    this message).
 
 Usage:
     python3 scripts/smoke_e2e.py <api-url> <chat-host> <chat-port> \
@@ -40,6 +54,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 
@@ -119,6 +134,137 @@ def register_body(bundle, device_id, registration_id=4242):
             {"id": pid, "public_key": b64(pub)} for pid, pub in bundle["prekeys"]
         ],
     }
+
+
+def mint_x25519_pubkey(workdir, name):
+    """Fresh X25519 key pair; returns the raw 32-byte public key."""
+    p = os.path.join(workdir, f"{name}.pem")
+    _openssl("genpkey", "-algorithm", "X25519", "-out", p)
+    os.chmod(p, 0o600)
+    return _raw_pubkey(p)
+
+
+def build_init_payload(*, recipient, client_msg_id, sender_device_id,
+                       registration_id, identity_key_b64, base_key_b64,
+                       signed_prekey_id, prekey_id, ciphertext_b64):
+    """A well-formed e2e:session_init envelope. The ciphertext is opaque
+    random bytes — the server never decrypts it; on-device X3DH output
+    looks exactly like this to the transport."""
+    payload = {
+        "recipient": recipient,
+        "client_msg_id": client_msg_id,
+        "sender_device_id": sender_device_id,
+        "registration_id": registration_id,
+        "identity_key": identity_key_b64,
+        "base_key": base_key_b64,
+        "signed_prekey_id": signed_prekey_id,
+        "ciphertext": ciphertext_b64,
+    }
+    if prekey_id is not None:
+        payload["prekey_id"] = prekey_id
+    return payload
+
+
+def run_i2_handshake_round_trip(workdir, chat_host, chat_port, target_subject,
+                                ws_subject, device_id, bundle):
+    """I2: e2e:session_init push → broadcast → sender-only msg:ack →
+    idempotent retry (deduped ack, same id) → validation negatives →
+    rejoin replay from history (the offline-recipient path)."""
+    room = "room:smoke-e2e-room"
+    cid = f"smoke-e2e-init-{int(time.time() * 1000)}"
+    base_pub = mint_x25519_pubkey(workdir, "base")
+    ciphertext_b64 = b64(_openssl("rand", "64"))
+    payload = build_init_payload(
+        recipient=target_subject, client_msg_id=cid,
+        sender_device_id=device_id, registration_id=4242,
+        identity_key_b64=b64(bundle["id_pub"]),
+        base_key_b64=b64(base_pub), signed_prekey_id=7,
+        # Audit echo of the prekey REST consumed — kept for the
+        # recipient's X3DH bookkeeping, not verified server-side.
+        prekey_id=1, ciphertext_b64=ciphertext_b64)
+
+    client = PhoenixClient(chat_host, chat_port, token="smoke-test-token")
+    client.join(room)
+
+    # 1. Push the init: expect the broadcast, then the sender-only ack
+    #    (a successful push has NO phx_reply — the channel returns
+    #    {:noreply, socket}).
+    client.push(room, "e2e:session_init", payload)
+    bc = client.wait_event(room, "e2e:session_init")
+    check(bc["kind"] == "e2e_session_init", f"broadcast kind: {bc}")
+    check(bc["client_msg_id"] == cid, f"broadcast client_msg_id: {bc}")
+    check(bc["user_id"] == ws_subject, f"broadcast user_id (sender): {bc}")
+    env = json.loads(bc["body"])
+    check(env["version"] == 1, f"envelope version: {env}")
+    check(env["recipient"] == target_subject, f"envelope recipient: {env}")
+    check(env["sender_device_id"] == device_id, f"envelope device: {env}")
+    check(env["registration_id"] == 4242, f"envelope registration_id: {env}")
+    check(env["identity_key"] == b64(bundle["id_pub"]),
+          "envelope identity_key not canonical")
+    check(env["base_key"] == b64(base_pub), "envelope base_key not canonical")
+    check(env["signed_prekey_id"] == 7, f"envelope signed_prekey_id: {env}")
+    check(env["prekey_id"] == 1, f"envelope prekey_id: {env}")
+    check(env["ciphertext"] == ciphertext_b64, "envelope ciphertext mismatch")
+    print("smoke PASS: e2e:session_init broadcast "
+          "(kind + canonical envelope, keys 32B, version 1)")
+
+    ack = client.wait_event(room, "msg:ack")
+    check(ack["id"] == bc["id"], f"ack id {ack['id']} != broadcast id {bc['id']}")
+    check(ack["client_msg_id"] == cid, f"ack client_msg_id: {ack}")
+    check(ack["deduped"] is False, f"ack deduped: {ack}")
+    check(isinstance(ack["sent_at"], int), f"ack sent_at: {ack}")
+    print("smoke PASS: e2e session_init msg:ack "
+          "(sender-only, id matches broadcast, deduped:false)")
+
+    # 2. Idempotent retry: same client_msg_id → broadcast + ack with
+    #    deduped:true and the ORIGINAL id (a retry never builds a
+    #    second session server-side).
+    client.push(room, "e2e:session_init", payload)
+    bc2 = client.wait_event(room, "e2e:session_init")
+    ack2 = client.wait_event(room, "msg:ack")
+    check(bc2["id"] == bc["id"], f"retry broadcast id {bc2['id']} != {bc['id']}")
+    check(ack2["id"] == bc["id"] and ack2["deduped"] is True,
+          f"retry ack: {ack2}")
+    print("smoke PASS: e2e session_init retry -> deduped:true, original id")
+
+    # 3. Validation negatives: malformed envelope → error reply, and the
+    #    push is never persisted or broadcast.
+    bad = dict(payload)
+    bad["client_msg_id"] = cid + "-badkey"
+    bad["identity_key"] = b64(os.urandom(31))
+    reply = client.push_and_wait_reply(room, "e2e:session_init", bad)
+    check(reply["status"] == "error"
+          and reply["response"].get("reason") == "handshake public key must be 32 bytes",
+          f"31-byte key: expected bad_key_size error, got {reply}")
+    missing = dict(payload)
+    missing["client_msg_id"] = cid + "-missing"
+    del missing["recipient"]
+    reply = client.push_and_wait_reply(room, "e2e:session_init", missing)
+    check(reply["status"] == "error"
+          and reply["response"].get("reason") == "handshake envelope missing a required field",
+          f"missing recipient: expected missing_field error, got {reply}")
+    print("smoke PASS: e2e session_init validation negatives "
+          "(bad key size / missing recipient -> error replies)")
+
+    # 4. Rejoin replay: an offline recipient reconnects and picks the
+    #    init out of history — their first ratchet step derives from
+    #    exactly this message.
+    client.close()
+    client2 = PhoenixClient(chat_host, chat_port, token="smoke-test-token")
+    rejoin = client2.join(room)
+    msgs = rejoin["history"]["messages"]
+    found = [m for m in msgs if m.get("client_msg_id") == cid]
+    check(len(found) == 1, f"init replayed {len(found)} times from history")
+    m = found[0]
+    check(m["kind"] == "e2e_session_init", f"replayed kind: {m}")
+    check(m["id"] == bc["id"], f"replayed id {m['id']} != {bc['id']}")
+    env2 = json.loads(m["body"])
+    check(env2["version"] == 1 and env2["recipient"] == target_subject,
+          f"replayed envelope: {env2}")
+    check(env2["ciphertext"] == ciphertext_b64, "replayed ciphertext mismatch")
+    print("smoke PASS: e2e session_init replayed from history on rejoin "
+          "(offline-recipient path)")
+    client2.close()
 
 
 def api(method, url, token, body=None):
@@ -238,6 +384,16 @@ def main():
         check(reply["status"] == "error" and reply["response"].get("reason") == "invalid_request",
               f"empty payload: expected invalid_request, got {reply}")
         print("smoke PASS: e2e websocket fetch -> not_found / invalid_request")
+
+        # I2: the X3DH session-establishment transport round-trip, while
+        # the device is still registered (uses its real identity key).
+        run_i2_handshake_round_trip(workdir, chat_host, chat_port,
+                                    target_subject, ws_subject,
+                                    device_id, bundle)
+        print("smoke PASS: I2 e2e:session_init transport round-trip "
+              "(broadcast -> ack -> deduped retry -> negatives -> "
+              "history replay)")
+
         client.close()
 
         # 9. Cleanup: delete the device; directory empty; consume 404s.
@@ -259,7 +415,9 @@ def main():
 
     print("smoke PASS: I1 E2E device-key round-trip "
           "(register → 422 bad-sig → directory → REST/WS/REST consume 1-2-3 "
-          "→ dry-queue fallback → negatives → delete)")
+          "→ dry-queue fallback → negatives) + I2 X3DH transport round-trip "
+          "(init broadcast → ack → deduped retry → validation negatives "
+          "→ history replay) → delete")
 
 
 if __name__ == "__main__":
