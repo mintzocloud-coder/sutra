@@ -3236,6 +3236,27 @@ Then report to founder: production-ready backend live on main.
 
 ## Log
 
+- 2026-10-20 ~16:20 IST: **J1 TRIAGE #5 — ROOT CAUSE FOUND (impossible
+  smoke assert, service correct):** Run 39411776562 (triage-#4 push)
+  finished 6/7 green again — Elixir, Go, OpenAPI, SPDX, compose, Python
+  all green; smoke died at "ads: serve response shape wrong". The serve
+  itself succeeded (200, valid impression with campaign/creative ids);
+  the failing assert was
+  `creator_share_paise * 100 // price_paise == 55`. With the reserve
+  floor price=50, the Go code computes integer money math
+  `creatorShare = 50*55/100 = 27` (truncation — the pinned contract in
+  serving_test.go:243, `CreatorSharePaise == 50*55/100`), platform 23.
+  `27*100//50 = 54`, so the assert could NEVER pass at price=50 —
+  exact 55 is impossible under integer paise. The service is correct
+  (split sums to the price, no lost paise). FIX (smoke.sh only, no Go
+  changes): assert the floor contract — creator == price*55//100 and
+  platform == price − creator — with a comment explaining why. Proven
+  the new asserts PASS against the real failed CI response. docs/ads.md
+  Billing section: one sentence documenting the floor rounding.
+  VERIFIED: bash -n clean; new assert block executed against the
+  real response from run 39411776562 line 1089. J1 STAYS OPEN:
+  CI-green confirmation on this push — next run checks all 7 jobs.
+
 - 2026-10-20 ~15:40 IST: **J1 TRIAGE #4 — ROOT CAUSE FOUND (smoke.sh bug,
   service correct): the H3 ads round-trip was never CI-validated before
   (first run ever to reach it).** Run 39400252242 (triage-#3 push)

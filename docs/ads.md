@@ -137,7 +137,10 @@ object whose `present` flips to true and gains fields.
 
 Per won impression: charge the GSP price (`price_paise` ≤ winner's bid,
 ≥ reserve), increment `campaign.spend_paise` atomically, credit 55% to
-the creator's earnings ledger, 45% to the platform. Money movement rails
+the creator's earnings ledger, 45% to the platform. Money is integer
+paise: the creator keeps `price_paise*55//100` (floored — e.g. 27 on a
+50-paise impression), the platform keeps the remainder, so the split
+always sums exactly to the price. Money movement rails
 are the F4 Cashfree seam (fail-closed stub today — billing stays
 ledger-only until post-investors onboarding, documented like the D1 OTP
 adapter).

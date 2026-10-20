@@ -2737,7 +2737,13 @@ assert s["creative_id"] == sys.argv[1], s
 assert s["campaign_id"] == sys.argv[2], s
 assert s["price_paise"] == 50, s          # single bidder → reserve floor
 assert s["creator_share_paise"] + s["platform_share_paise"] == s["price_paise"], s
-assert s["creator_share_paise"] * 100 // s["price_paise"] == 55, s  # 55/45 split
+# Money is integer paise: the creator keeps floor(55%) = price*55//100
+# (50*55//100 = 27), the platform keeps the remainder. An exact
+# creator*100//price == 55 assert is impossible at price=50 under
+# integer money math, so pin the floor contract instead (mirrors the
+# pinned Go unit test: CreatorSharePaise == 50*55/100).
+assert s["creator_share_paise"] == s["price_paise"] * 55 // 100, s
+assert s["platform_share_paise"] == s["price_paise"] - s["creator_share_paise"], s
 assert s["impression_id"], s
 assert s["creative"]["status"] == "active", s
 ' "$cre_id" "$camp_id" <<<"$serve_json" || fail "ads: serve response shape wrong"
