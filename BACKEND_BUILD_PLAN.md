@@ -3236,6 +3236,27 @@ Then report to founder: production-ready backend live on main.
 
 ## Log
 
+- 2026-10-20 ~14:55 IST: **J1 TRIAGE #2 — CI on 2cc311e3: 5/7 green
+  (Go, OpenAPI, SPDX, compose, Python all flipped green). Two remain:**
+  (a) Elixir: compile warning fixed, but 6 test failures surfaced in
+  the E2E suites — root-caused: (i) `user_channel_test.exs` matched
+  `{:ok,_}`/`{:error,_}` directly on `push/3`, but this Phoenix's
+  `push/3` returns a bare `reference()` (proven from the vendored
+  source; the passing B6 chat tests use `assert_reply`) — rewrote the
+  3 prekey_fetch tests to `ref = push(...); assert_reply ref, ...`;
+  (ii) `E2E.mark_conversation_e2e/2` passed a UUID string to a raw
+  `$1::uuid` param → Postgrex EncodeError (same bug class as triage
+  #1's upsert fix) — now `Ecto.UUID.dump/1` before the query.
+  (b) Smoke: Tally 403 persists on the new push DESPITE the
+  resolveSeller fix being in the image — so it is a genuine
+  ErrNoRows, yet the seller row provably exists (WhatsApp 503 on the
+  same token 5s earlier; route proven correct locally incl. fresh-DB
+  + process-restart repros). Root cause NOT in any examined code
+  path. Fix-forward: the Tally 503 assertion is now self-diagnosing
+  (response body + direct users/sellers DB check + api log tail) so
+  the next run captures the truth instead of a bare 403.
+  J1 STAYS OPEN: CI-green confirmation on this push.
+
 - 2026-10-20 ~14:20 IST: **J1 TRIAGE #1 — all 4 CI failures on
   f8c52c77 root-caused and fixed, pushed.** Run 39392382821:
   (1) OpenAPI: the 4 H2 integrations paths $ref

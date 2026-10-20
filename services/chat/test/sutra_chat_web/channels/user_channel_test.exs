@@ -104,33 +104,38 @@ defmodule SutraChatWeb.UserChannelTest do
     SutraChat.DataCase.insert_e2e_device!("bob", "pixel-9", [1, 2])
     {:ok, _, socket} = subscribe_and_join(socket_for("alice"), SutraChatWeb.UserChannel, "user:alice")
 
-    assert {:ok, b1} = push(socket, "e2e:prekey_fetch", %{"user_id" => "bob", "device_id" => "pixel-9"})
-    assert b1["device_id"] == "pixel-9"
-    assert b1["one_time_prekey"]["id"] == 1
-    assert b1["available_prekeys"] == 1
+    # NOTE: Phoenix.ChannelTest.push/3 returns a reference, never the
+    # reply tuple — the reply is asserted with assert_reply (the B6
+    # chat-channel convention). An earlier draft of these tests matched
+    # {:ok, _} directly on push/3 and failed with a bare #Reference.
+    ref1 = push(socket, "e2e:prekey_fetch", %{"user_id" => "bob", "device_id" => "pixel-9"})
+    assert_reply ref1, :ok, %{
+      "device_id" => "pixel-9",
+      "one_time_prekey" => %{"id" => 1},
+      "available_prekeys" => 1
+    }
 
-    assert {:ok, b2} = push(socket, "e2e:prekey_fetch", %{"user_id" => "bob", "device_id" => "pixel-9"})
-    assert b2["one_time_prekey"]["id"] == 2
-    assert b2["available_prekeys"] == 0
+    ref2 = push(socket, "e2e:prekey_fetch", %{"user_id" => "bob", "device_id" => "pixel-9"})
+    assert_reply ref2, :ok, %{"one_time_prekey" => %{"id" => 2}, "available_prekeys" => 0}
 
-    assert {:ok, b3} = push(socket, "e2e:prekey_fetch", %{"user_id" => "bob", "device_id" => "pixel-9"})
-    assert b3["one_time_prekey"] == nil
+    ref3 = push(socket, "e2e:prekey_fetch", %{"user_id" => "bob", "device_id" => "pixel-9"})
+    assert_reply ref3, :ok, %{"one_time_prekey" => nil}
   end
 
   test "e2e:prekey_fetch on an unknown device replies not_found" do
     {:ok, _, socket} = subscribe_and_join(socket_for("alice"), SutraChatWeb.UserChannel, "user:alice")
 
-    assert {:error, %{reason: "not_found"}} =
-             push(socket, "e2e:prekey_fetch", %{"user_id" => "nobody", "device_id" => "x"})
+    ref = push(socket, "e2e:prekey_fetch", %{"user_id" => "nobody", "device_id" => "x"})
+    assert_reply ref, :error, %{reason: "not_found"}
   end
 
   test "e2e:prekey_fetch with a malformed payload replies invalid_request" do
     {:ok, _, socket} = subscribe_and_join(socket_for("alice"), SutraChatWeb.UserChannel, "user:alice")
 
-    assert {:error, %{reason: "invalid_request"}} =
-             push(socket, "e2e:prekey_fetch", %{"user_id" => "bob"})
+    ref1 = push(socket, "e2e:prekey_fetch", %{"user_id" => "bob"})
+    assert_reply ref1, :error, %{reason: "invalid_request"}
 
-    assert {:error, %{reason: "invalid_request"}} =
-             push(socket, "e2e:prekey_fetch", %{"user_id" => "bob", "device_id" => ""})
+    ref2 = push(socket, "e2e:prekey_fetch", %{"user_id" => "bob", "device_id" => ""})
+    assert_reply ref2, :error, %{reason: "invalid_request"}
   end
 end

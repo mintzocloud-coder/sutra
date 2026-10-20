@@ -107,9 +107,14 @@ defmodule SutraChat.E2E do
   def mark_conversation_e2e(room_id, init_message_id)
       when is_binary(room_id) and is_binary(init_message_id) do
     if Regex.match?(@room_id_pattern, room_id) do
-      case Repo.query(@mark_e2e_sql, [room_id, init_message_id]) do
-        {:ok, _} -> :ok
-        {:error, _} -> {:error, :unavailable}
+      # Postgrex's uuid encoder accepts only 16-byte binaries (the same
+      # lesson as Chat.upsert_message/1 in triage #2): dump the canonical
+      # string form before the raw query.
+      with {:ok, uuid_bin} <- Ecto.UUID.dump(init_message_id),
+           {:ok, _} <- Repo.query(@mark_e2e_sql, [room_id, uuid_bin]) do
+        :ok
+      else
+        _ -> {:error, :unavailable}
       end
     else
       {:error, :invalid_room_id}

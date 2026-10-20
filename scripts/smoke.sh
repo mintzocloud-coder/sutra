@@ -1048,7 +1048,22 @@ tally_code="$(curl -s -o "$tally_body" -D "$tally_hdr" -w '%{http_code}' -X POST
   -H "Authorization: Bearer $token_h" -H 'Content-Type: application/json' \
   -d '{"kind":"sales","date":"20261020","reference_no":"SMOKE-TALLY-1","lines":[{"ledger_name":"Cash","amount_paise":129900},{"ledger_name":"Sales","amount_paise":-129900}]}' \
   "$API_URL/v1/integrations/tally/vouchers")"
-[ "$tally_code" = "503" ] || { rm -f "$tally_body" "$tally_hdr"; fail "H2: Tally voucher did not fail closed 503 (got $tally_code)"; }
+if [ "$tally_code" != "503" ]; then
+  # Self-diagnosing failure: the 503 assertion has failed twice in CI
+  # with 403 right after an api container recreate (the seller-scoped
+  # WhatsApp call passes on the same token seconds earlier, and the
+  # route is proven correct against a local stack). Dump everything
+  # the next triage needs: the response body (envelope code), whether
+  # the seller row actually exists for this subject, and the api log
+  # tail — instead of a bare status code.
+  echo "smoke DIAG: tally response body:"; cat "$tally_body"; echo
+  echo "smoke DIAG: users/sellers rows for the H1 subject:"
+  docker compose exec -T postgres psql -U sutra -d sutra -c \
+    "SELECT u.subject, s.id AS seller_id, s.store_slug FROM users u LEFT JOIN sellers s ON s.user_id = u.id WHERE u.subject LIKE 'sutra-smoke-h-%';" 2>&1 | tail -8
+  echo "smoke DIAG: api log tail:"; docker compose logs --tail=30 api 2>&1 | tail -30
+  rm -f "$tally_body" "$tally_hdr"
+  fail "H2: Tally voucher did not fail closed 503 (got $tally_code)"
+fi
 [ "$(python3 -c 'import json; print(json.load(open("'"$tally_body"'"))["error"]["code"])')" = "tally_not_registered" ] \
   || { rm -f "$tally_body" "$tally_hdr"; fail "H2: Tally voucher envelope code is not tally_not_registered"; }
 grep -qi '^Retry-After: [1-9]' "$tally_hdr" \
