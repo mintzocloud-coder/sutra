@@ -2950,7 +2950,7 @@ design doc was held as issue #17 for contributors. This phase implements it
 properly — Signal-grade, never half-done. (Closes #17 on completion; the
 contributor design input gets incorporated, implementation supersedes.)
 
-- [ ] I1: Device key management — X25519 identity key + signed prekey +
+- [x] I1: Device key management — X25519 identity key + signed prekey +
   one-time prekeys per device; device registration API; server stores PUBLIC
   keys only (private keys never leave the device); docs/e2e.md key-lifecycle
   section; Go + Elixir + tests.
@@ -3032,6 +3032,33 @@ contributor design input gets incorporated, implementation supersedes.)
   I1 STAYS OPEN: part 2b chunk 2 = smoke.sh round-trip (openssl-minted
   bundle → Go register → websocket user:<subject> join →
   e2e:prekey_fetch consume assertions) — next run.
+  I1 part 2b chunk 2 DONE 2026-10-20 ~12:05 IST: smoke.sh round-trip
+  shipped, I1 COMPLETE. New `scripts/smoke_e2e.py` (stdlib-only +
+  openssl CLI, same convention as smoke_ws.py/bench_ws.py): mints a
+  full device bundle with openssl (Ed25519 identity, X25519 signed
+  prekey signed by the identity key, 3 one-time prekeys), POST
+  /v1/e2e/devices → 201; a cross-key-signed bundle → 422
+  e2e_invalid_bundle; directory lists the device; REST prekey-bundle
+  consumes id 1; websocket joins `user:<bypass-subject>` (chat boots
+  with AUTH_BYPASS=1) and `e2e:prekey_fetch` consumes id 2 on the
+  chat side; REST consumes id 3; drained-queue fetch → bundle with
+  one_time_prekey null; unknown device → not_found; empty payload →
+  invalid_request; DELETE → 204, directory empty, consume → 404
+  e2e_device_not_found. The REST-1/WS-2/REST-3 ordering proves the
+  Go API and chat share one atomic prekey queue. smoke.sh gains the
+  I1 section (after H4, before the chat ws round-trip) — throwaway
+  Hydra client `sutra-e2e-<ts>` + real-issuer token, bypass stays
+  off; header comment documents the round-trip. smoke_ws.py gains
+  `PhoenixClient.push_and_wait_reply` (backward-compatible).
+  VERIFIED: bash -n + py_compile + AST clean, SPDX checker green;
+  full `python3 scripts/smoke_e2e.py` EXIT 0 against a fake Go-API +
+  fake Phoenix-chat harness (/tmp/fake_e2e_stack.py, not committed)
+  that verifies the Ed25519 signature for REAL via openssl on the
+  fake server side and enforces the shared-queue ordering; two fake-
+  harness bugs found and fixed along the way (server frames must not
+  be masked; push replies echo the push ref, not the join ref).
+  Real-stack run is CI-gated (no docker on this VM) via the smoke
+  job. NEXT: I2 (X3DH + Double Ratchet).
   FIX-FORWARD (pre-existing H4 breakage found by this run's full-suite
   verification — NOT caused by I1): internal/subscriptions had 2 red
   tests (proven on a fresh DB without any e2e changes): (a) fakeProvider
@@ -3058,6 +3085,18 @@ All boxes ticked (A through I), CI green, `scripts/smoke.sh` passes, docs comple
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-20 ~12:05 IST: I1 COMPLETE (part 2b chunk 2 — smoke.sh
+  round-trip): new `scripts/smoke_e2e.py` (openssl-minted bundle →
+  register 201 → cross-key-sig 422 → directory → REST consume id 1 →
+  websocket e2e:prekey_fetch consumes id 2 → REST consumes id 3 →
+  drained-queue null fallback → not_found/invalid_request → delete
+  204) + smoke.sh I1 section (throwaway Hydra client, bypass off,
+  after H4) + `PhoenixClient.push_and_wait_reply` in smoke_ws.py.
+  Verified: bash -n/py_compile/SPDX green; full script EXIT 0
+  against a fake Go-API + fake Phoenix harness with REAL openssl
+  Ed25519 verification server-side (2 harness bugs fixed, both
+  fake-side); real-stack run CI-gated via the smoke job. NEXT: I2.
 
 - 2026-10-20 ~11:30 IST: I1 part 2b chunk 1 done and pushed (Elixir
   chat-side prekey fetch): new `SutraChat.E2E` context

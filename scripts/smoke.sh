@@ -115,6 +115,13 @@
 #     subscriptions + entitlements -> unknown cancel 404, bad id 400 ->
 #     webhook ingress 503 -> deactivate (no hard delete) -> the api
 #     boot log carries the subscriptions fail-closed WARN.
+#   - The I1 E2E device-key round-trip: openssl-minted bundle -> Go
+#     register (201; cross-key-signed bundle 422s e2e_invalid_bundle)
+#     -> directory -> REST consume id 1 -> websocket user:<subject>
+#     join -> e2e:prekey_fetch consumes id 2 (chat side) -> REST
+#     consume id 3 -> drained-queue fetch -> one_time_prekey null
+#     (signed-prekey-only X3DH fallback) -> not_found /
+#     invalid_request negatives -> device deleted.
 # The chat release fails closed at boot without a real SECRET_KEY_BASE, so
 # this script generates an ephemeral one (kept in the environment only,
 # never written to disk or committed).
@@ -2852,6 +2859,32 @@ grep -q "subscriptions: CASHFREE_" "$api_boot_log" \
   && { rm -f "$api_boot_log" "$sub_body" "$sub_hdr"; fail "api boot log claims CASHFREE_* set-but-ignored (creds are unset in smoke)"; }
 pass "api boot log has no set-but-ignored subscription WARN"
 rm -f "$api_boot_log" "$sub_body" "$sub_hdr"
+
+# --- I1 E2E device keys round-trip --------------------------------------------
+# openssl-minted Ed25519 identity + X25519 signed prekey (signature made
+# by the identity key, exactly like a real client) -> Go API register
+# (201; cross-key-signed bundle 422s) -> directory -> REST consume of
+# one-time prekey id 1 -> websocket user:<subject> join ->
+# e2e:prekey_fetch consumes id 2 on the chat side -> REST consume of
+# id 3 -> drained-queue fetch over the websocket returns the bundle
+# with one_time_prekey null (signed-prekey-only X3DH fallback) ->
+# unknown device not_found / empty payload invalid_request ->
+# device deleted (cleanup). The REST-1 / WS-2 / REST-3 ordering proves
+# the Go API and the chat share one atomic prekey queue. Runs against
+# the real-issuer path (bypass stays off, as for all sections above);
+# the chat boots with AUTH_BYPASS=1, so the websocket connects as the
+# bypass subject and joins its own user:<subject> topic.
+echo "smoke: I1 E2E device-key round-trip"
+e2e_client="sutra-e2e-$(date +%s)"
+SMOKE_E2E_SECRET="$(openssl rand -hex 16)"
+create_jwt_client "$e2e_client" "$SMOKE_E2E_SECRET"
+e2e_token="$(hydra_token "$e2e_client" "$SMOKE_E2E_SECRET")" \
+  || fail "e2e: hydra token request for '$e2e_client' failed"
+[ -n "$e2e_token" ] || fail "e2e: hydra token for '$e2e_client' was empty"
+python3 scripts/smoke_e2e.py "$API_URL" "$CHAT_HOST" "$CHAT_PORT" \
+  "$e2e_token" "$e2e_client" "$EXPECTED_SUBJECT" \
+  || fail "I1 E2E device-key round-trip"
+pass "I1: E2E device-key round-trip complete"
 
 # --- Chat websocket round-trip --------------------------------------------
 wait_for 90 "chat websocket listener" \

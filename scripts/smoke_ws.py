@@ -165,6 +165,22 @@ class PhoenixClient:
             json.dumps([self._join_refs[topic], self._next_ref(), topic, event, payload]).encode(),
         )
 
+    def push_and_wait_reply(self, topic, event, payload, timeout=15):
+        """Push an event and wait for its phx_reply; returns the reply
+        payload ({"status": ..., "response": ...})."""
+        ref = self._next_ref()
+        ws_send_frame(
+            self.sock,
+            0x1,
+            json.dumps([self._join_refs[topic], ref, topic, event, payload]).encode(),
+        )
+
+        def is_reply(msg):
+            return msg[2] == topic and msg[3] == "phx_reply" and msg[1] == ref
+
+        reply = self._wait(is_reply, timeout, f"phx_reply to {event} on {topic}")
+        return reply[4]
+
     def wait_event(self, topic, event, timeout=15):
         def is_event(msg):
             return msg[2] == topic and msg[3] == event
