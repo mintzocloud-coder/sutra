@@ -293,6 +293,14 @@ services:
       # registration post-incorporation. Any other value makes the API
       # refuse to boot (fail-closed) — see internal/otp + docs/identity.md.
       OTP_PROVIDER: "stub"
+      # Ads platform (H3, Wave 5): the publisher serving seam
+      # (POST /v1/ads/serve) is fail-closed by default — serving stays
+      # OFF unless explicitly enabled, so a half-wired integration can
+      # never spend advertiser money. scripts/smoke.sh exports
+      # ADS_SERVING_ENABLED=1 to exercise the real serving path;
+      # production must set both deliberately (docs/ads.md).
+      ADS_SERVING_ENABLED: ${ADS_SERVING_ENABLED:-}
+      ADS_RESERVE_PAISE: ${ADS_RESERVE_PAISE:-}
       # Business integrations (H2, Wave 5): WhatsApp Cloud API webhook
       # verify token (the Meta app secret for the hub-challenge handshake
       # and X-Hub-Signature-256 inbound checks). Empty (the default)

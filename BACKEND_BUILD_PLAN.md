@@ -2722,7 +2722,7 @@ with documented contracts until then.
     integrations seam is fully wired (WhatsApp send + inbound webhook,
     Tally per-seller vouchers, Zoho contacts + invoices), all
     fail-closed with honest 503s. Next run starts H3 (ads platform).**
-- [ ] H3: Ads platform — custom Go GSP auction core (bid → rank → price),
+- [x] H3: Ads platform — custom Go GSP auction core (bid → rank → price),
   Promovolve (Apache-2.0) for creative serving, advertiser API
   (campaigns, budgets, targeting), reporting, docs/ads.md, OpenAPI +
   tests + smoke.
@@ -2866,6 +2866,37 @@ with documented contracts until then.
     the Debian config dir (`pg_ctl -D /etc/postgresql/16/main` -- the
     data dir lacks postgresql.conf), integration test + modified
     Create/Update SQL paths now runtime-verified. Pushed.
+  - H3 part 3b chunk 2 DONE 2026-10-20 ~07:35 IST (H3 CLOSED): the
+    publisher serving endpoint. New `internal/ads/serve_handler.go` —
+    `POST /v1/ads/serve` (content-only request: slot, categories,
+    language, country; strict unknown-field bodies; loud 400s on
+    out-of-shape input BEFORE the seam check): 200 = winning creative
+    billed (impression_id, campaign/creative ids, GSP price, 55/45
+    split, creative to render — spend already accrued), 204 = nothing
+    servable (budget races roll back cleanly → 204, "render organic"),
+    503 `serving_disabled` when ADS_SERVING_ENABLED is off (LOUD
+    fail-closed, never silent "no demand"); same RequireAuth as every
+    /v1/ route. Wired in main.go (explicit path, coverage-gate
+    friendly); OpenAPI path + AdServeRequest/AdServedAd schemas —
+    redocly valid, coverage gate green (65 spec paths / 60 code
+    routes). docker-compose.yml: ADS_SERVING_ENABLED /
+    ADS_RESERVE_PAISE passthrough (default off). smoke.sh: export
+    ADS_SERVING_ENABLED=1 + H3 serving round-trip — set bid 5000 →
+    serve 200 (single bidder → reserve floor 50, creator_share +
+    platform_share == price, 55/45 pinned, impression_id present) →
+    report spend_paise == 50 (accrual) → no-demand serve 204 →
+    missing slot 400 → archive → serve 204. docs/ads.md: route table
+    row + Env vars table.
+    VERIFIED: gofmt clean, `go build ./...` + `go vet ./...` green,
+    FULL `go test -count=1 ./...` green (DB integration suites skip
+    cleanly per house convention — no PG/docker on this VM; the Serve
+    DB paths are unchanged from chunk 1's real-PG16 verification);
+    bash -n smoke.sh; check-headers.sh green; redocly + coverage
+    gate green. Live smoke (docker) could NOT run here — docker is not
+    installed on this VM; the new smoke assertions follow the exact
+    verified H3 curl/jget/assert patterns. H3 acceptance criteria ALL
+    MET: auction kernel, advertiser API, creative registry, reporting,
+    serving integration, docs/ads.md, OpenAPI, tests, smoke.
 - [ ] H4: Subscriptions — Cashfree + UPI AutoPay subscription adapter
   (fail-closed stub), plans/entitlements model, creator-membership
   billing wiring (70/30 split), docs/subscriptions.md, OpenAPI + tests +

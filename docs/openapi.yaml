@@ -4741,6 +4741,64 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /v1/ads/serve:
+    post:
+      tags: [ads]
+      summary: Serve one ad slot (publisher)
+      description: |
+        Publisher-facing serving endpoint: turns one slot's CONTENT
+        context into the winning creative, decided through the GSP
+        auction kernel (eligible active campaigns → per-creative
+        contextual quality → rank bid × quality → winner pays the
+        second price). The request carries slot content only — page
+        categories, content language, publisher country — never
+        identity; the contextual > identity rule is enforced by the
+        request shape. On a win the spend is already accrued in the
+        same transaction (the ad_events ledger row carries the 55/45
+        creator/platform split; ledger-only until F4's Cashfree
+        onboarding), so the 200 means BILLED — the creative in the
+        response must be rendered. Full contract: docs/ads.md.
+      operationId: serveAdSlot
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdServeRequest'
+      responses:
+        '200':
+          description: A creative won the slot; the spend is billed. Render the creative.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdServedAd'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '204':
+          description: |
+            Nothing servable (no eligible campaign, no active creative,
+            all bids below reserve, or a budget race at billing time) —
+            render organic content. A normal outcome, not an error.
+        '400':
+          description: Malformed body (`invalid_json`) or out-of-shape slot context (`invalid_serve_request`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: Serving is disabled (`serving_disabled` — ADS_SERVING_ENABLED). Loud fail-closed, never silent "no demand".
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
   /v1/ads/campaigns/{id}/creatives:
     post:
       tags: [ads]
@@ -5586,6 +5644,70 @@ components:
                 False in v1 — delivery analytics (impressions, clicks,
                 CTR) do not exist yet and are not faked. Lands with the
                 serving integration (docs/ads.md).
+    AdServeRequest:
+      type: object
+      required: [slot]
+      properties:
+        slot:
+          type: string
+          maxLength: 64
+          description: |
+            Placement name (e.g. "feed_slot_1"). Required.
+        categories:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+            maxLength: 64
+          description: |
+            Page/content category slugs (real catalog tree) used for
+            contextual matching. Identity fields do not exist on this
+            request — the struct has nowhere to put them.
+        language:
+          type: string
+          maxLength: 5
+          description: Content ISO-639-1 language.
+        country:
+          type: string
+          maxLength: 2
+          description: Publisher ISO-3166-1 country.
+    AdServedAd:
+      type: object
+      required: [impression_id, campaign_id, creative_id, slot, price_paise, creator_share_paise, platform_share_paise, creative]
+      properties:
+        impression_id:
+          type: string
+          format: uuid
+          description: The ad_events ledger row for this impression (replayable for billing disputes).
+        campaign_id:
+          type: string
+          format: uuid
+        creative_id:
+          type: string
+          format: uuid
+        slot:
+          type: string
+        price_paise:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |
+            GSP price actually billed: floored at the reserve, never
+            above the winner's own bid. Already accrued to the
+            campaign's spend_paise in the same transaction.
+        creator_share_paise:
+          type: integer
+          format: int64
+          minimum: 0
+          description: 55% of price_paise (MINTZO CREATOR ECONOMICS) recorded on the ledger row.
+        platform_share_paise:
+          type: integer
+          format: int64
+          minimum: 0
+          description: 45% of price_paise recorded on the ledger row.
+        creative:
+          $ref: '#/components/schemas/AdCreative'
+          description: The winning creative — render it now.
     AdCampaignCreate:
       type: object
       required: [name, budget_paise]

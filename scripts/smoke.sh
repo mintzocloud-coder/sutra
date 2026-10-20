@@ -102,8 +102,11 @@
 #     (invalid_targeting — closed targeting) -> draft report: not
 #     eligible (not_active), full budget remaining, no pacing
 #     projections without spend history, delivery absent -> activate ->
-#     eligible in report -> creative register + activate -> archive ->
-#     report 404s (archived campaigns never leak).
+#     eligible in report -> creative register + activate -> bid set ->
+#     POST /v1/ads/serve: 200 with the winning creative at the reserve
+#     floor, 55/45 split on the ledger row, spend accrued in report ->
+#     no-demand serve 204, missing slot 400 -> archive -> report 404s
+#     (archived campaigns never leak) -> serve 204.
 # The chat release fails closed at boot without a real SECRET_KEY_BASE, so
 # this script generates an ephemeral one (kept in the environment only,
 # never written to disk or committed).
@@ -144,6 +147,11 @@ export CHAT_INTERNAL_TOKEN="${CHAT_INTERNAL_TOKEN:-$(openssl rand -hex 32)}"
 # the ai service refuses to boot without it (fail-closed).
 export AI_SERVICE_TOKEN=$(openssl rand -hex 16)
 export AUTH_BYPASS=1
+# H3: ad serving seam. The publisher endpoint (POST /v1/ads/serve) is
+# fail-closed by default (503 serving_disabled); smoke enables it so
+# the serving round-trip below exercises the real decision path →
+# billing → ad_events ledger.
+export ADS_SERVING_ENABLED=1
 # F2: Meilisearch product search. The meilisearch container and the API's
 # search client share one ephemeral master key per smoke run (environment
 # only, never written or committed); the api enables indexing only when
@@ -2653,6 +2661,50 @@ cact_json="$(curl -sf -X POST -H "Authorization: Bearer $token_c" \
 [ "$(jget "$cact_json" status)" = "active" ] || fail "ads: creative not active after activate"
 pass "ads: creative registered + activated: $cre_id"
 
+# Serving (H3 part 3b): set a bid on the campaign, then fill a slot.
+# The single bidder pays the reserve floor (ADS_RESERVE_PAISE default
+# 50); the ad_events ledger row carries the 55/45 split and the
+# campaign's spend_paise accrues in the same transaction.
+bid_json="$(curl -sf -X PATCH \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"bid_paise":5000}' \
+  "$API_URL/v1/ads/campaigns/$camp_id")" || fail "ads: set bid failed"
+[ "$(jget "$bid_json" bid_paise)" = "5000" ] || fail "ads: bid_paise not set on campaign"
+serve_json="$(curl -sf -X POST \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"slot":"smoke_feed_1","categories":["audio"],"language":"hi","country":"IN"}' \
+  "$API_URL/v1/ads/serve")" || fail "ads: serve failed"
+python3 -c '
+import json, sys
+s = json.load(sys.stdin)
+assert s["creative_id"] == sys.argv[1], s
+assert s["campaign_id"] == sys.argv[2], s
+assert s["price_paise"] == 50, s          # single bidder → reserve floor
+assert s["creator_share_paise"] + s["platform_share_paise"] == s["price_paise"], s
+assert s["creator_share_paise"] * 100 // s["price_paise"] == 55, s  # 55/45 split
+assert s["impression_id"], s
+assert s["creative"]["status"] == "active", s
+' "$cre_id" "$camp_id" <<<"$serve_json" || fail "ads: serve response shape wrong"
+rep_billed="$(curl -sf -H "Authorization: Bearer $token_c" \
+  "$API_URL/v1/ads/campaigns/$camp_id/report")" || fail "ads: report after serve failed"
+[ "$(printf '%s' "$rep_billed" | python3 -c 'import json,sys; print(json.load(sys.stdin)["spend_paise"])')" = "50" ] \
+  || fail "ads: spend did not accrue on report after serve"
+pass "ads: serve → 200, reserve-floor price, 55/45 split, spend accrued"
+
+# Serve a slot that no campaign can fill → 204 (organic fallback),
+# and bad slot shapes → 400 loud.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"slot":"empty_slot","categories":["no-such-category-xyz"]}' \
+  "$API_URL/v1/ads/serve")" = "204" ] \
+  || fail "ads: serve with no matching demand did not 204"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"categories":["audio"]}' \
+  "$API_URL/v1/ads/serve")" = "400" ] \
+  || fail "ads: serve without slot did not 400"
+pass "ads: no-demand serve → 204; missing slot → 400"
+
 # Archive campaign (terminal) → report 404s (archived campaigns never
 # leak); campaign GET 404s too.
 arch_json="$(curl -sf -X DELETE -H "Authorization: Bearer $token_c" \
@@ -2661,8 +2713,13 @@ arch_json="$(curl -sf -X DELETE -H "Authorization: Bearer $token_c" \
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token_c" \
   "$API_URL/v1/ads/campaigns/$camp_id/report")" = "404" ] \
   || fail "ads: report on archived campaign did not 404"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"slot":"smoke_feed_1","categories":["audio"],"language":"hi","country":"IN"}' \
+  "$API_URL/v1/ads/serve")" = "204" ] \
+  || fail "ads: serve after archive did not 204"
 rm -f "$ads_body"
-pass "ads: archive terminal; report on archived → 404 (cleanup)"
+pass "ads: archive terminal; report on archived → 404 (cleanup); serve → 204"
 
 # --- Chat websocket round-trip --------------------------------------------
 wait_for 90 "chat websocket listener" \

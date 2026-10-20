@@ -315,6 +315,16 @@ func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *
 	log.Info("creative routes registered",
 		"routes", "/v1/ads/campaigns/{id}/creatives, /v1/ads/creatives/{id} (+activate)")
 
+	// Publisher serving (H3 part 3b): POST /v1/ads/serve turns a slot's
+	// content context into the winning creative (or 204 when nothing is
+	// servable). Same RequireAuth as every /v1/ route; the seam itself
+	// stays fail-closed via ADS_SERVING_ENABLED (503 serving_disabled).
+	serveHandler := ads.NewServeHandler(pool,
+		ads.ServingDeps{Campaigns: adsSvc, Creatives: creativeSvc},
+		ads.ServingConfigFromEnv(), log)
+	v1.Handle("/v1/ads/serve", methodGuard([]string{http.MethodPost}, serveHandler))
+	log.Info("ads serving route registered", "route", "/v1/ads/serve")
+
 	// Recommendations v1 (E5): the like store feeds the home-feed
 	// ranker. Created ahead of the feed block so the /v1/feed/home
 	// handler can consume it.

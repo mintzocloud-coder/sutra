@@ -73,6 +73,7 @@ never see another's campaigns (404s leak nothing).
 | `/v1/ads/campaigns/{id}/creatives` | POST/GET | register draft creative / list |
 | `/v1/ads/creatives/{id}` | GET/PATCH/DELETE | creative item (archive = terminal) |
 | `/v1/ads/creatives/{id}/activate` | POST | draft → active creative |
+| `/v1/ads/serve` | POST | publisher slot → winning creative (200 billed, render now) / 204 nothing servable / 503 `serving_disabled` when the seam is off |
 
 - **Money**: `budget_paise` > 0 (≤ ₹10cr), `spend_paise` read-only
   (billing owns it), optional `daily_budget_paise` ≤ budget, budget can
@@ -139,9 +140,10 @@ adapter).
 
 ## Env vars
 
-No ads-specific env vars exist yet. The serving integration will add
-`ADS_SERVING_ENABLED` (default off, fail-closed like every other seam)
-and `ADS_RESERVE_PAISE` (default 50).
+| Var | Default | Notes |
+|---|---|---|
+| `ADS_SERVING_ENABLED` | off | fail-closed like every other seam — `POST /v1/ads/serve` answers 503 `serving_disabled` until set (`1`/`true`/`yes`/`on`) |
+| `ADS_RESERVE_PAISE` | 50 | GSP reserve floor per impression slot, in paise |
 
 ## Failure modes
 
