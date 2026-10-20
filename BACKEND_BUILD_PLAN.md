@@ -3141,6 +3141,45 @@ contributor design input gets incorporated, implementation supersedes.)
   (server persists ciphertext only, never plaintext); per-conversation E2E
   flag in the API; client guidance docs; smoke coverage; NEVER claim E2E on
   conversations where it is not enabled. Then Phase I complete.
+  I3 PART 1 DONE 2026-10-20 ~13:25 IST: transport + flag (smoke lands in
+  part 2). ELIXIR: new pure `SutraChat.E2E.Envelope.validate_message/1`
+  (recipient/subject, sender_device_id, 32B ratchet_key, uint32-capped
+  prev_chain_length/message_number, 1B..64KiB ciphertext; canonical
+  base64 re-encoding, protocol version 1 stamped); `ChatChannel` gains
+  the `message:new` + `e2e_data` clause (placed BEFORE the body and
+  catch-all clauses — ordering matters): body+e2e_data mixed pushes are
+  rejected ("a message is either plaintext or E2E, never both"),
+  client_msg_id required/≤128, then validate → persist kind
+  "e2e_message" (ciphertext-only JSON body) → broadcast as `message:new`
+  (recipients switch on `kind`) → sender-only msg:ack (idempotent on
+  (sender, client_msg_id), same as plaintext); new Ecto migration
+  20261020143000 extends the kind CHECK to 'e2e_message' + Message schema
+  gains the kind (96KB body cap). FLAG: chat flips the per-conversation
+  flag when it persists the first non-deduped `e2e:session_init`
+  (`E2E.mark_conversation_e2e/2` — monotonic upsert into the Go-owned
+  `e2e_conversations` table, first init id pinned as the evidence
+  anchor; best-effort vs the send, WARN on failure); join responses now
+  carry `e2e_enabled`; `E2E.conversation_e2e_enabled?/1` fails safe
+  (false on unknown/malformed/unavailable). GO: migration
+  `0022_e2e_conversations.sql` (room_id PK, e2e_enabled monotonic,
+  enabled_at, first_init_message_id, room-id grammar CHECK mirroring
+  the chat's RoomPolicy); `internal/e2e` gains `E2EStatus` (unknown →
+  ErrConversationNotFound) + `ConversationE2EHandler` for
+  `GET /v1/conversations/{room_id}/e2e` (200 / 400 invalid_room_id /
+  404 conversation_not_found — clients must treat unknown as NOT E2E),
+  wired in main.go; OpenAPI path + ConversationE2E schema (redocly
+  valid, coverage gate 77 paths OK). docs/e2e.md: full I3 section
+  (envelope table, transport contract, flag writer/reader contract,
+  5 mandatory client rules incl. the never-claim rule).
+  VERIFIED: gofmt clean, `go build`+`go vet` clean, FULL
+  `go test -count=1 ./...` green (new: grammar matrix always-runs +
+  3 DB-gated suites skip cleanly); 11/11 new envelope unit tests green
+  live on Elixir 1.14; all 8 new/edited Elixir files syntax-clean;
+  redocly 0 warnings; SPDX checker green. `mix test` (channel + flag
+  suites) is CI-gated (Elixir 1.18), same as B1–B6.
+  I3 STAYS OPEN: part 2 = smoke_e2e.py round-trip (push e2e message →
+  broadcast/ack/deduped-retry → negatives → history replay → flag GET
+  200/404 → join e2e_enabled) + CI-green confirmation.
 
 ## Done when
 
@@ -3148,6 +3187,24 @@ All boxes ticked (A through I), CI green, `scripts/smoke.sh` passes, docs comple
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-20 ~13:25 IST: **I3 PART 1 DONE — E2E message envelope
+  transport + per-conversation flag** (smoke lands in part 2).
+  Elixir: `SutraChat.E2E.Envelope` pure validator (11/11 unit tests
+  green live on 1.14), `ChatChannel` `message:new`+`e2e_data` clause
+  (mixed body+e2e_data rejected; kind `e2e_message` persisted as
+  ciphertext-only JSON, broadcast as `message:new`, sender-only ack),
+  migration 20261020143000 (kind CHECK), join `e2e_enabled`,
+  `E2E.mark_conversation_e2e/2` monotonic flag flip on first
+  session-init (best-effort, WARN on failure). Go: migration
+  `0022_e2e_conversations.sql` + `E2EStatus` + `ConversationE2EHandler`
+  (`GET /v1/conversations/{room_id}/e2e`: 200/400/404 — unknown is
+  never E2E) + OpenAPI (redocly valid, coverage 77 paths OK).
+  docs/e2e.md gains the full I3 section (envelope contract + 5
+  mandatory client rules). Verified: gofmt/build/vet clean, full
+  `go test -count=1 ./...` green, Elixir syntax clean, SPDX green;
+  `mix test` CI-gated (1.18). I3 STAYS OPEN: part 2 = smoke round-trip
+  + CI-green confirmation, then Phase I complete.
 
 - 2026-10-20 ~12:55 IST: **I2 COMPLETE — X3DH session-establishment
   transport smoke round-trip.** scripts/smoke_e2e.py gains

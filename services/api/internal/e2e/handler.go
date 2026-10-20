@@ -142,6 +142,10 @@ func e2eError(w http.ResponseWriter, r *http.Request, log *slog.Logger, op strin
 		middleware.WriteJSONError(w, r, http.StatusConflict,
 			"e2e_prekey_id_conflict", err.Error())
 		client = true
+	case errors.Is(err, ErrConversationNotFound):
+		middleware.WriteJSONError(w, r, http.StatusNotFound,
+			"conversation_not_found", "no E2E flag for this conversation — treat it as not E2E")
+		client = true
 	case errors.Is(err, ErrBadSignature), errors.Is(err, ErrInvalidBundle):
 		middleware.WriteJSONError(w, r, http.StatusUnprocessableEntity,
 			"e2e_invalid_bundle", err.Error())

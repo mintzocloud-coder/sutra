@@ -30,6 +30,23 @@ defmodule SutraChat.DataCase do
   end
 
   @doc """
+  Creates a test-local copy of the Go-owned `e2e_conversations` table
+  (migration 0022) with exactly the columns the context queries.
+  """
+  def create_e2e_conversations_table! do
+    SutraChat.Repo.query!("""
+CREATE TABLE IF NOT EXISTS e2e_conversations (
+  room_id text PRIMARY KEY,
+  e2e_enabled boolean NOT NULL DEFAULT false,
+  enabled_at timestamptz,
+  first_init_message_id uuid
+)
+""")
+
+    :ok
+  end
+
+  @doc """
   Checks out a sandbox connection for the calling test. Shared with any
   linked/spawned processes (e.g. channel processes) when the test is not
   async.

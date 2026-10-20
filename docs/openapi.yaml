@@ -1247,6 +1247,66 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /v1/conversations/{room_id}/e2e:
+    get:
+      tags: [e2e]
+      summary: Read the per-conversation E2E flag
+      description: |
+        Returns whether end-to-end encryption has been established in
+        this conversation. The flag is written by the chat service when
+        it persists the first valid `e2e:session_init` for the room and
+        is monotonic — once enabled it never flips back.
+
+        Clients MUST treat an unknown room (`conversation_not_found`)
+        as NOT E2E: never claim E2E on a conversation where the flag is
+        not set. The chat channel also serves the flag as `e2e_enabled`
+        in every room join response.
+      operationId: getConversationE2E
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9_-]{1,64}$'
+          description: The room id (the part after `room:` in the channel topic).
+      responses:
+        '200':
+          description: The per-conversation E2E flag
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationE2E'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Malformed room id (`invalid_room_id`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: No E2E flag row for this room (`conversation_not_found`) — treat as NOT E2E.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /v1/posts:
     post:
       tags: [posts]
@@ -7212,6 +7272,27 @@ components:
           type: integer
           description: Queue depth AFTER this consumption.
           example: 96
+
+    ConversationE2E:
+      type: object
+      required: [room_id, e2e_enabled]
+      description: |
+        The per-conversation E2E flag (I3). Written by the chat service
+        when it persists the first valid `e2e:session_init` in the room;
+        monotonic — once enabled it never flips back. Clients must
+        treat an unknown room as NOT E2E: never claim E2E on a
+        conversation where the flag is not set.
+      properties:
+        room_id:
+          type: string
+          example: ab12-cd34
+        e2e_enabled:
+          type: boolean
+          example: true
+        enabled_at:
+          type: [string, 'null']
+          format: date-time
+          description: When the flag flipped (null when disabled).
 
     Post:
       type: object

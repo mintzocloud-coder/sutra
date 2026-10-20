@@ -12,12 +12,13 @@ and message timing, but not message content. That is the entire point.
 
 > Scope note: this document covers **device key management (I1)** —
 > generation, registration, rotation, and replenishment of key
-> material — and **X3DH session establishment + Double Ratchet (I2)**:
-> the audited-construction profile, the initiator/recipient steps, and
-> the server transport contract. The E2E message envelope (I3) is
-> documented when it lands. Never claim E2E on a conversation where it
-> is not enabled: the API exposes an explicit per-conversation E2E
-> flag, and clients must surface the transport state honestly.
+> material — **X3DH session establishment + Double Ratchet (I2)**: the
+> audited-construction profile, the initiator/recipient steps, and the
+> server transport contract — and the **E2E message envelope (I3)**:
+> ciphertext over `message:new`, the per-conversation E2E flag, and the
+> client rules for honest E2E claims. Never claim E2E on a conversation
+> where it is not enabled: the API exposes an explicit per-conversation
+> E2E flag, and clients must surface the transport state honestly.
 
 ## Key roles
 
@@ -309,8 +310,105 @@ Rules clients MUST implement (Signal's, unchanged):
    MITM-shaped hole.
 
 The server stores none of this state — it is per-device, in secure
-storage, and leaves with the device. The `e2e_data` message envelope
-that carries ratchet messages over `message:new` is I3.
+storage, and leaves with the device.
+
+## E2E message envelope (I3)
+
+After the session is established, every 1:1 message travels as
+ciphertext inside an `e2e_data` envelope pushed with the **same**
+`message:new` channel event as plaintext sends. The server validates
+the envelope shape, persists the canonical envelope as JSON with
+message kind `"e2e_message"` (**ciphertext only, never plaintext**),
+broadcasts it as `message:new` (recipients switch on `kind`), and
+acks the sender exactly like a normal send (idempotent on
+`(sender_subject, client_msg_id)` — a retry never duplicates a
+message).
+
+### Envelope shape
+
+All fields required. `client_msg_id` stays top-level in the push
+(transport-level idempotency); the crypto fields live in `e2e_data`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `recipient` | subject string, ≤ 256 B | The intended recipient, so the right device picks the envelope out of the room broadcast |
+| `sender_device_id` | string, 1–128 B | The sending device label |
+| `ratchet_key` | base64, exactly 32 B | The sender's current Double-Ratchet ephemeral DH public key (X25519). The recipient uses it for the DH ratchet step on direction change |
+| `prev_chain_length` | uint, 0–4294967295 | PN in Signal's header: length of the previous sending chain |
+| `message_number` | uint, 0–4294967295 | N in Signal's header: position in the current sending chain |
+| `ciphertext` | base64, 1 B–64 KiB decoded | The XChaCha20-Poly1305 AEAD ciphertext. Opaque to the server |
+
+The server stamps `"version": 1` and re-encodes key bytes to canonical
+base64 before persisting. Envelope limits: `SutraChat.E2E.Envelope`.
+
+### Server transport contract
+
+- **Validation, fail-closed.** `SutraChat.E2E.Envelope.validate_message/1`
+  (pure, unit-tested): every field present, base64 decodes, ratchet
+  key exactly 32 bytes, counters non-negative integers (uint32-capped),
+  ciphertext 1 byte–64KiB. Malformed envelopes get an error reply and
+  are never persisted, never broadcast.
+- **Plaintext-or-E2E, never both.** A push carrying both `body` and
+  `e2e_data` is rejected with an error reply — a confused client cannot
+  leak plaintext into an E2E conversation through a mixed payload.
+- **Persist before broadcast.** The canonical JSON envelope is stored
+  with `kind = "e2e_message"`. The messages table holds no plaintext
+  for E2E rows (the same invariant as `e2e_session_init`); history
+  replays them to offline recipients, whose ratchet steps derive from
+  exactly these messages.
+- **Idempotent sends.** `(sender_subject, client_msg_id)` dedupe is the
+  same as `message:new`: the sender's retry gets `deduped: true` in the
+  `msg:ack`, never a duplicate row.
+- **Server computes no crypto.** The ratchet runs entirely on the
+  devices; the server could not decrypt even if it wanted to — it holds
+  no private keys.
+
+### The per-conversation E2E flag
+
+The first persisted `e2e:session_init` in a room is the server's
+evidence that X3DH establishment happened there. At that moment the
+chat service flips the per-conversation flag:
+
+- **Writer:** the chat service (it owns rooms in Wave 1 and produces
+  the evidence), into the Go-owned `e2e_conversations` table
+  (migration `0022_e2e_conversations.sql`). The flip is monotonic —
+  once enabled, never back; `first_init_message_id` pins the first
+  init row as the evidence anchor. The write is best-effort relative
+  to the send (the persisted init row is the real evidence), so a
+  write failure is logged, never fatal to the send.
+- **Readers:** the chat channel serves `e2e_enabled` in every room join
+  response; the Go REST API serves `GET /v1/conversations/{room_id}/e2e`
+  (`200 {room_id, e2e_enabled, enabled_at}`; `404
+  conversation_not_found` on unknown rooms; `400 invalid_room_id` on
+  malformed ids). Unknown is never E2E.
+
+The server does **not** reject plaintext `message:new` in a flagged
+room: the flag marks "session establishment observed", and enforcement
+of ciphertext-only sending is a client UX duty (a server-side reject
+could break pre-session UX and multi-device transitions). What the
+server DOES guarantee is that it never mislabels: the flag flips only
+on a real persisted handshake, and E2E rows carry ciphertext only.
+
+### Client rules (mandatory)
+
+1. **Decode on `kind`.** When `kind == "e2e_message"`, decode `body` as
+   JSON and feed the envelope to the local Double-Ratchet session.
+   When `kind == "text"`, render `body` as plaintext.
+2. **Never claim E2E where it is not enabled.** Display E2E UI (lock
+   icons, "end-to-end encrypted" labels) ONLY when the conversation's
+   flag is set (`e2e_enabled` from the join response or the REST
+   endpoint) AND the local device holds a verified session for the
+   peer. A 404 / `false` / missing flag means NOT E2E — surface
+   plaintext transport honestly.
+3. **Verify the peer.** Before sending the first E2E message, verify
+   the signed prekey's Ed25519 signature against the peer's identity
+   key (I2 initiator step 2), and surface identity-key changes with
+   explicit user confirmation (I2 rule 5).
+4. **Handle `deduped: true` as success.** A retry that returns the
+   original id established nothing twice — never rebuild the session.
+5. **Out-of-order and replay discipline** follow the I2 Double Ratchet
+   rules above (skipped-key cap 1000, DH-step cap 5, replayed inits
+   are no-ops).
 
 ## Security properties (what this construction buys)
 

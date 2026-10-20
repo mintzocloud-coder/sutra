@@ -207,6 +207,10 @@ func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *
 			e2e.DirectoryHandler(e2eSvc, log)))
 		v1.Handle("/v1/users/{id}/devices/{device_id}/prekey-bundle", methodGuard([]string{http.MethodGet},
 			e2e.PrekeyHandler(e2eSvc, log)))
+		// I3: per-conversation E2E flag (read-only here — the chat
+		// service writes it when it observes the first session-init).
+		v1.Handle("/v1/conversations/{room_id}/e2e", methodGuard([]string{http.MethodGet},
+			e2e.ConversationE2EHandler(e2eSvc, log)))
 	}
 
 	// Posts (D3): publish, author timeline, author-only delete.

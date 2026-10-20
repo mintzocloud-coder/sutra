@@ -35,11 +35,26 @@ defmodule SutraChatWeb.ChatChannel do
   before broadcast (so offline recipients replay it from history), and
   broadcast as `e2e:session_init`. Clients decode `body` as JSON when
   `kind == "e2e_session_init"`. Full protocol contract: `docs/e2e.md`.
+
+  E2E messages (I3): after the session is established, ratchet messages
+  travel as ciphertext inside an `e2e_data` envelope pushed with the
+  `message:new` event (validated by `SutraChat.E2E.Envelope`, persisted
+  with kind `"e2e_message"` — ciphertext only, never plaintext — then
+  broadcast as `message:new` and acked like a normal send). A send is
+  either plaintext (`body`) or E2E (`e2e_data`), never both. The first
+  persisted `e2e:session_init` in a room flips the per-conversation E2E
+  flag (served on join as `e2e_enabled` and via the Go API's
+  `GET /v1/conversations/{room_id}/e2e`); clients must never claim E2E
+  on a conversation where the flag is not set.
   """
   use SutraChatWeb, :channel
 
+  require Logger
+
   alias SutraChat.Chat
   alias SutraChat.Chat.RoomPolicy
+  alias SutraChat.E2E
+  alias SutraChat.E2E.Envelope
   alias SutraChat.E2E.Handshake
   alias SutraChat.Presence
 
@@ -65,7 +80,15 @@ defmodule SutraChatWeb.ChatChannel do
 
         case Chat.history(room_id, history_limit(params), history_cursor(params)) do
           {:ok, page} ->
-            {:ok, %{room_id: room_id, history: render_page(page)}, socket}
+            {:ok,
+             %{
+               room_id: room_id,
+               history: render_page(page),
+               # I3: evidence-based flag — true only once the server has
+               # persisted an e2e:session_init in this room. Clients must
+               # never display E2E UI when this is false.
+               e2e_enabled: E2E.conversation_e2e_enabled?(room_id)
+             }, socket}
 
           {:error, :invalid_cursor} ->
             {:error, %{reason: "invalid history cursor"}}
@@ -103,6 +126,42 @@ defmodule SutraChatWeb.ChatChannel do
        do: id
 
   defp join_device_id(_params), do: nil
+
+  def handle_in("message:new", %{"e2e_data" => _} = params, socket) do
+    client_msg_id = params["client_msg_id"]
+
+    cond do
+      Map.has_key?(params, "body") ->
+        {:reply, {:error, %{reason: "a message is either plaintext or E2E, never both"}},
+         socket}
+
+      not valid_client_msg_id?(client_msg_id) ->
+        {:reply, {:error, %{reason: "client_msg_id required", max_length: 128}}, socket}
+
+      true ->
+        case Envelope.validate_message(params["e2e_data"]) do
+          {:ok, envelope} ->
+            persist_and_broadcast(socket, Jason.encode!(envelope), client_msg_id, "e2e_message")
+
+          {:error, reason} ->
+            {:reply, {:error, %{reason: envelope_error(reason)}}, socket}
+        end
+    end
+  end
+
+  # client_msg_id is transport-level idempotency: required and capped
+  # exactly like the plaintext path (RoomPolicy.authorize_send's rules).
+  defp valid_client_msg_id?(id),
+    do: is_binary(id) and id != "" and byte_size(id) <= 128
+
+  defp envelope_error(:missing_field), do: "e2e envelope missing a required field"
+  defp envelope_error(:invalid_payload), do: "invalid e2e envelope"
+  defp envelope_error(:field_too_long), do: "e2e envelope field too long"
+  defp envelope_error(:bad_base64), do: "e2e envelope key field is not valid base64"
+  defp envelope_error(:bad_key_size), do: "e2e ratchet key must be 32 bytes"
+  defp envelope_error(:bad_counter), do: "e2e envelope counters must be non-negative integers"
+  defp envelope_error(:ciphertext_empty), do: "e2e ciphertext must not be empty"
+  defp envelope_error(:ciphertext_too_large), do: "e2e ciphertext too large"
 
   @impl true
   def handle_in("message:new", %{"body" => body, "client_msg_id" => client_msg_id}, socket) do
@@ -163,6 +222,18 @@ defmodule SutraChatWeb.ChatChannel do
 
     case Chat.persist_message(attrs) do
       {:ok, message, deduped} ->
+        # I3: the first persisted session-init is the evidence that X3DH
+        # establishment happened in this room — flip the per-conversation
+        # E2E flag (best-effort: the flag is a convenience cache, the
+        # persisted init row is the real evidence, so a write failure is
+        # logged, never fatal to the send).
+        if kind == "e2e_session_init" and not deduped do
+          case E2E.mark_conversation_e2e(socket.assigns.room_id, message.id) do
+            :ok -> :ok
+            {:error, reason} -> Logger.warning("e2e: flag flip failed", room_id: socket.assigns.room_id, reason: inspect(reason))
+          end
+        end
+
         # Broadcast only after the write is durable: what clients see as
         # "sent" always survives a restart. Handshake messages broadcast
         # under their own event name so recipients can pick them out.

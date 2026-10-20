@@ -309,6 +309,152 @@ defmodule SutraChatWeb.ChatChannelTest do
     assert {:ok, %{messages: []}} = Chat.history(room)
   end
 
+  # -- e2e_message (I3: Double-Ratchet message transport) -----------------
+
+  defp e2e_msg_params(recipient, client_msg_id) do
+    %{
+      "e2e_data" => %{
+        "recipient" => recipient,
+        "sender_device_id" => "test-device",
+        "ratchet_key" => Base.encode64(:crypto.strong_rand_bytes(32)),
+        "prev_chain_length" => 2,
+        "message_number" => 5,
+        "ciphertext" => Base.encode64(:crypto.strong_rand_bytes(96))
+      },
+      "client_msg_id" => client_msg_id
+    }
+  end
+
+  test "e2e message persists ciphertext, broadcasts as message:new, and acks", %{socket: socket} do
+    room = "e2e-msg-#{uniq()}"
+    {:ok, _, socket} = subscribe_and_join(socket, SutraChatWeb.ChatChannel, "room:#{room}")
+
+    push(socket, "message:new", e2e_msg_params("peer-#{uniq()}", "e2e-1"))
+
+    # Same event name as plaintext sends (task contract); recipients
+    # switch on `kind`.
+    assert_broadcast "message:new", broadcast
+    assert broadcast.kind == "e2e_message"
+    assert broadcast.client_msg_id == "e2e-1"
+    assert broadcast.user_id == @user
+    assert is_binary(broadcast.id)
+
+    # The stored body is the canonical envelope: ciphertext + ratchet
+    # header, never plaintext.
+    envelope = Jason.decode!(broadcast.body)
+    assert envelope["version"] == 1
+    assert envelope["recipient"] =~ "peer-"
+    assert envelope["prev_chain_length"] == 2
+    assert envelope["message_number"] == 5
+    assert {:ok, <<_::256>>} = Base.decode64(envelope["ratchet_key"])
+    assert {:ok, <<_::binary-size(96)>>} = Base.decode64(envelope["ciphertext"])
+
+    assert_push "msg:ack", ack
+    assert ack.deduped == false
+    assert ack.id == broadcast.id
+
+    assert {:ok, %{messages: [stored]}} = Chat.history(room)
+    assert stored.kind == "e2e_message"
+    assert stored.body == broadcast.body
+  end
+
+  test "retried e2e message with the same client_msg_id is deduped", %{socket: socket} do
+    room = "e2e-msg-dedupe-#{uniq()}"
+    {:ok, _, socket} = subscribe_and_join(socket, SutraChatWeb.ChatChannel, "room:#{room}")
+
+    params = e2e_msg_params("peer-#{uniq()}", "e2e-dup")
+    push(socket, "message:new", params)
+    assert_push "msg:ack", %{deduped: false, id: first_id}
+
+    push(socket, "message:new", params)
+    assert_push "msg:ack", %{deduped: true, id: ^first_id}
+
+    assert {:ok, %{messages: messages}} = Chat.history(room)
+    assert length(messages) == 1
+    assert hd(messages).id == first_id
+    assert hd(messages).kind == "e2e_message"
+  end
+
+  test "offline recipient replays the e2e message from history", %{socket: socket} do
+    room = "e2e-msg-replay-#{uniq()}"
+    {:ok, _, socket} = subscribe_and_join(socket, SutraChatWeb.ChatChannel, "room:#{room}")
+
+    push(socket, "message:new", e2e_msg_params("peer-#{uniq()}", "e2e-replay"))
+    assert_push "msg:ack", %{deduped: false}
+
+    socket2 = socket(SutraChatWeb.UserSocket, "user_socket:#{@user}", %{user_id: @user})
+
+    assert {:ok, %{history: %{messages: [replayed]}}, _} =
+             subscribe_and_join(socket2, SutraChatWeb.ChatChannel, "room:#{room}")
+
+    assert replayed.kind == "e2e_message"
+    assert Jason.decode!(replayed.body)["message_number"] == 5
+  end
+
+  test "mixed plaintext+e2e payload is rejected and never persisted", %{socket: socket} do
+    room = "e2e-msg-mixed-#{uniq()}"
+    {:ok, _, socket} = subscribe_and_join(socket, SutraChatWeb.ChatChannel, "room:#{room}")
+
+    params = Map.put(e2e_msg_params("peer-#{uniq()}", "e2e-mixed"), "body", "oops plaintext")
+    ref = push(socket, "message:new", params)
+    assert_reply ref, :error, %{reason: "a message is either plaintext or E2E, never both"}
+
+    assert {:ok, %{messages: []}} = Chat.history(room)
+  end
+
+  test "malformed e2e envelopes are rejected and never persisted", %{socket: socket} do
+    room = "e2e-msg-bad-#{uniq()}"
+    {:ok, _, socket} = subscribe_and_join(socket, SutraChatWeb.ChatChannel, "room:#{room}")
+
+    base = e2e_msg_params("peer-#{uniq()}", "e2e-bad")
+
+    cases = [
+      {put_in(base, ["e2e_data", "ratchet_key"], "!!!not-base64!!!"),
+       "e2e envelope key field is not valid base64"},
+      {put_in(base, ["e2e_data", "ratchet_key"], Base.encode64(:crypto.strong_rand_bytes(31))),
+       "e2e ratchet key must be 32 bytes"},
+      {update_in(base, ["e2e_data"], &Map.delete(&1, "ciphertext")),
+       "e2e envelope missing a required field"},
+      {put_in(base, ["e2e_data", "message_number"], -1),
+       "e2e envelope counters must be non-negative integers"},
+      {put_in(base, ["e2e_data", "ciphertext"], Base.encode64(:crypto.strong_rand_bytes(65_537))),
+       "e2e ciphertext too large"},
+      {%{"e2e_data" => %{"junk" => true}, "client_msg_id" => "e2e-bad-2"},
+       "e2e envelope missing a required field"},
+      {%{"e2e_data" => e2e_msg_params("peer-#{uniq()}", "x")["e2e_data"]},
+       "client_msg_id required"}
+    ]
+
+    for {params, reason} <- cases do
+      ref = push(socket, "message:new", params)
+      assert_reply ref, :error, %{reason: ^reason}
+    end
+
+    assert {:ok, %{messages: []}} = Chat.history(room)
+  end
+
+  test "join serves the per-conversation E2E flag", %{socket: socket} do
+    SutraChat.DataCase.create_e2e_conversations_table!()
+
+    room = "e2e-flag-#{uniq()}"
+    {:ok, _, socket} = subscribe_and_join(socket, SutraChatWeb.ChatChannel, "room:#{room}")
+
+    # Before any session establishment: not E2E.
+    socket2 = socket(SutraChatWeb.UserSocket, "user_socket:#{@user}", %{user_id: @user})
+
+    assert {:ok, %{e2e_enabled: false}, _} =
+             subscribe_and_join(socket2, SutraChatWeb.ChatChannel, "room:#{room}")
+
+    # The first persisted session_init flips the flag (evidence-based).
+    push(socket, "e2e:session_init", init_params("peer-#{uniq()}", "flag-init"))
+    assert_push "msg:ack", %{deduped: false}
+
+    socket3 = socket(SutraChatWeb.UserSocket, "user_socket:#{@user}", %{user_id: @user})
+
+    assert {:ok, %{e2e_enabled: true}, _} =
+             subscribe_and_join(socket3, SutraChatWeb.ChatChannel, "room:#{room}")
+  end
+
   # -- helpers ------------------------------------------------------------
 
   defp uniq, do: System.unique_integer([:positive])

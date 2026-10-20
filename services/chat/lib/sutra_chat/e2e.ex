@@ -59,6 +59,85 @@ defmodule SutraChat.E2E do
 
   def fetch_prekey_bundle(_, _), do: {:error, :invalid_request}
 
+  # -- per-conversation E2E flag (I3) -------------------------------------
+
+  # The `e2e_conversations` table is OWNED by the Go API (migration
+  # 0022, `schema_migrations` ledger) on the shared database — no Elixir
+  # migration touches it, same convention as the I1 device tables. The
+  # chat service owns rooms in Wave 1 and produces the evidence (it
+  # persists the `e2e:session_init` messages), so it is the writer; the
+  # Go API exposes the flag read-only at
+  # `GET /v1/conversations/{room_id}/e2e`.
+
+  # Room ids travel in the channel topic ("room:<room_id>") — same
+  # grammar as SutraChat.Chat.RoomPolicy (`^[A-Za-z0-9_-]{1,64}$`).
+  @room_id_pattern ~r/\A[A-Za-z0-9_-]{1,64}\z/
+
+  # One transaction: INSERT the room row (or touch nothing when it
+  # exists) and, ONLY when the row is new or still disabled, flip
+  # e2e_enabled and pin first_init_message_id to the FIRST session-init
+  # message id — the evidence anchor. Once enabled the flag never flips
+  # back: E2E establishment is a one-way, monotonic fact.
+  @mark_e2e_sql """
+  INSERT INTO e2e_conversations (room_id, e2e_enabled, enabled_at, first_init_message_id)
+  VALUES ($1, true, now(), $2)
+  ON CONFLICT (room_id) DO UPDATE
+    SET e2e_enabled = true,
+        enabled_at = COALESCE(e2e_conversations.enabled_at, now()),
+        first_init_message_id = COALESCE(e2e_conversations.first_init_message_id, EXCLUDED.first_init_message_id)
+    WHERE e2e_conversations.e2e_enabled = false
+  """
+
+  @flag_sql """
+  SELECT e2e_enabled FROM e2e_conversations WHERE room_id = $1
+  """
+
+  @doc """
+  Records that X3DH session establishment was observed in `room_id`
+  (the chat persisted a valid `e2e:session_init` there).
+
+  Idempotent and monotonic: the first call wins (its `init_message_id`
+  is pinned as the evidence anchor); later calls are no-ops. Returns
+  `:ok` on success, `{:error, :invalid_room_id}` on a malformed room id,
+  `{:error, :unavailable}` when the write fails — the caller treats the
+  flag as a convenience cache (the persisted init message is the real
+  evidence) and logs a warning rather than failing the send.
+  """
+  @spec mark_conversation_e2e(String.t(), String.t()) :: :ok | {:error, atom()}
+  def mark_conversation_e2e(room_id, init_message_id)
+      when is_binary(room_id) and is_binary(init_message_id) do
+    if Regex.match?(@room_id_pattern, room_id) do
+      case Repo.query(@mark_e2e_sql, [room_id, init_message_id]) do
+        {:ok, _} -> :ok
+        {:error, _} -> {:error, :unavailable}
+      end
+    else
+      {:error, :invalid_room_id}
+    end
+  end
+
+  def mark_conversation_e2e(_, _), do: {:error, :invalid_room_id}
+
+  @doc """
+  Reads the per-conversation E2E flag for join responses.
+
+  Returns `true` only when the flag row exists and is enabled; `false`
+  on unknown rooms, malformed ids, or any read failure — a lookup
+  failure must never break a join, and "unknown" is never E2E (clients
+  must not claim E2E on conversations where it is not enabled).
+  """
+  @spec conversation_e2e_enabled?(term()) :: boolean()
+  def conversation_e2e_enabled?(room_id) when is_binary(room_id) do
+    with true <- Regex.match?(@room_id_pattern, room_id),
+         {:ok, %{rows: [[true]]}} <- Repo.query(@flag_sql, [room_id]) do
+      true
+    else
+      _ -> false
+    end
+  end
+
+  def conversation_e2e_enabled?(_), do: false
+
   # -- validation -------------------------------------------------------
 
   defp validate_subject(s) when byte_size(s) in 1..@max_subject_length, do: :ok

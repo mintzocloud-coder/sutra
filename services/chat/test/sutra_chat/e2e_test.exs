@@ -90,4 +90,61 @@ defmodule SutraChat.E2ETest do
     assert {:ok, gb} = E2E.fetch_prekey_bundle("grace", "phone")
     assert fb["identity_key"] != gb["identity_key"]
   end
+
+  # -- per-conversation E2E flag (I3) ------------------------------------
+
+  describe "per-conversation E2E flag" do
+    setup do
+      create_e2e_conversations_table!()
+      :ok
+    end
+
+    test "unknown room is not E2E (never claim E2E where it is not enabled)" do
+      refute E2E.conversation_e2e_enabled?("ghost-room")
+    end
+
+    test "malformed room ids are not E2E and are rejected by the writer" do
+      refute E2E.conversation_e2e_enabled?("bad!!room")
+      refute E2E.conversation_e2e_enabled?(nil)
+      assert {:error, :invalid_room_id} = E2E.mark_conversation_e2e("bad!!room", Ecto.UUID.generate())
+    end
+
+    test "marking flips the flag and pins the first init message id" do
+      first = Ecto.UUID.generate()
+      assert :ok = E2E.mark_conversation_e2e("room-1", first)
+      assert E2E.conversation_e2e_enabled?("room-1")
+
+      %{rows: [[enabled, anchor]]} =
+        SutraChat.Repo.query!(
+          "SELECT e2e_enabled, first_init_message_id FROM e2e_conversations WHERE room_id = $1",
+          ["room-1"]
+        )
+
+      assert enabled == true
+      assert Ecto.UUID.cast!(anchor) == first
+    end
+
+    test "the flag is monotonic: later marks never move it or the anchor" do
+      first = Ecto.UUID.generate()
+      second = Ecto.UUID.generate()
+      assert :ok = E2E.mark_conversation_e2e("room-2", first)
+      # A retry with a different init id is a no-op, not a second session.
+      assert :ok = E2E.mark_conversation_e2e("room-2", second)
+
+      %{rows: [[enabled, anchor]]} =
+        SutraChat.Repo.query!(
+          "SELECT e2e_enabled, first_init_message_id FROM e2e_conversations WHERE room_id = $1",
+          ["room-2"]
+        )
+
+      assert enabled == true
+      assert Ecto.UUID.cast!(anchor) == first
+    end
+
+    test "rooms are independent" do
+      assert :ok = E2E.mark_conversation_e2e("room-a", Ecto.UUID.generate())
+      assert E2E.conversation_e2e_enabled?("room-a")
+      refute E2E.conversation_e2e_enabled?("room-b")
+    end
+  end
 end
