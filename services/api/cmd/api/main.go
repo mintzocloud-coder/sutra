@@ -297,8 +297,23 @@ func newHandler(bg context.Context, cfg config.Config, pool *db.Pool, verifier *
 		adsHandler.TransitionTo(ads.CampaignPaused)))
 	v1.Handle("/v1/ads/campaigns/{id}/resume", methodGuard([]string{http.MethodPost},
 		adsHandler.TransitionTo(ads.CampaignActive)))
+	v1.Handle("/v1/ads/campaigns/{id}/report", methodGuard([]string{http.MethodGet},
+		http.HandlerFunc(adsHandler.Report)))
 	log.Info("ads routes registered",
-		"routes", "/v1/ads/campaigns (+item, activate/pause/resume)")
+		"routes", "/v1/ads/campaigns (+item, activate/pause/resume, report)")
+
+	// Creative registry (H3 part 3a): seller-scoped creative CRUD under
+	// campaigns, plus the explicit activate action route.
+	creativeSvc := ads.NewCreativeService(pool, adsSvc)
+	creativeHandler := ads.NewCreativeHandler(pool, creativeSvc, log)
+	v1.Handle("/v1/ads/campaigns/{id}/creatives", methodGuard([]string{http.MethodPost, http.MethodGet},
+		creativeHandler.CampaignCreativesMux()))
+	v1.Handle("/v1/ads/creatives/{id}", methodGuard([]string{http.MethodGet, http.MethodPatch, http.MethodDelete},
+		creativeHandler.CreativeMux()))
+	v1.Handle("/v1/ads/creatives/{id}/activate", methodGuard([]string{http.MethodPost},
+		creativeHandler.ActivateTo()))
+	log.Info("creative routes registered",
+		"routes", "/v1/ads/campaigns/{id}/creatives, /v1/ads/creatives/{id} (+activate)")
 
 	// Recommendations v1 (E5): the like store feeds the home-feed
 	// ranker. Created ahead of the feed block so the /v1/feed/home

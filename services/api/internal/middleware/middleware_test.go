@@ -224,3 +224,27 @@ func TestChainRunsFirstMiddlewareOutermost(t *testing.T) {
 		t.Fatalf("order = %v, want %v", order, want)
 	}
 }
+
+// --- MethodNotAllowedHandler ---
+
+// TestMethodNotAllowedJoinsAllow pins the multi-method Allow header to a
+// single comma-joined value. A Set+Add sequence emits multiple header
+// lines of which Header.Get (and most clients) see only the first — the
+// creative-routes test caught Allow="POST" where "POST, GET" was due.
+func TestMethodNotAllowedJoinsAllow(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/x", nil)
+	MethodNotAllowedHandler(http.MethodPost, http.MethodGet)(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("code = %d, want 405", rec.Code)
+	}
+	if got := rec.Header().Get("Allow"); got != "POST, GET" {
+		t.Errorf("Allow = %q, want %q", got, "POST, GET")
+	}
+	// Single-method routes keep the plain form.
+	rec2 := httptest.NewRecorder()
+	MethodNotAllowedHandler(http.MethodPatch)(rec2, req)
+	if got := rec2.Header().Get("Allow"); got != "PATCH" {
+		t.Errorf("Allow = %q, want %q", got, "PATCH")
+	}
+}

@@ -97,6 +97,13 @@
 #     suspend -> new install 422s (install_not_allowed) -> archive -> GET
 #     404s -> the api is restored secretless and launch answers 503
 #     launch_unavailable (fail-closed).
+#   - The H3 ads-platform round-trip (reuses the F1 commerce identity):
+#     campaign create (draft) -> unknown targeting key 400s
+#     (invalid_targeting — closed targeting) -> draft report: not
+#     eligible (not_active), full budget remaining, no pacing
+#     projections without spend history, delivery absent -> activate ->
+#     eligible in report -> creative register + activate -> archive ->
+#     report 404s (archived campaigns never leak).
 # The chat release fails closed at boot without a real SECRET_KEY_BASE, so
 # this script generates an ephemeral one (kept in the environment only,
 # never written to disk or committed).
@@ -2574,6 +2581,88 @@ rm -f "$m503_body"
   "$API_URL/v1/mini-apps/$mapp2_id")" = "204" ] \
   || fail "miniapp: cleanup archive of app 2 failed"
 pass "miniapp: secretless launch -> 503 launch_unavailable (fail-closed)"
+
+# --- Ads platform round-trip (H3 part 3) -------------------------------------
+# Reuses the F1 commerce identity (token_c), which already holds a
+# registered seller row: campaign create (draft) → unknown targeting key
+# 400s (closed targeting) → draft report (not eligible, budget intact,
+# no projections, delivery absent) → activate → eligible report →
+# creative register + activate → archive → report 404s (archived
+# campaigns never leak).
+echo "smoke: ads platform round-trip (H3)"
+ads_body="$(mktemp)"
+
+camp_json="$(curl -sf -X POST \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"name":"Smoke Kurta Campaign","budget_paise":5000000,"daily_budget_paise":500000,"targeting":{"countries":["IN"],"languages":["hi","en"],"categories":["audio"],"devices":["mobile"]}}' \
+  "$API_URL/v1/ads/campaigns")" || fail "ads: campaign create failed"
+camp_id="$(jget "$camp_json" id)"
+[ "$(jget "$camp_json" status)" = "draft" ] || fail "ads: new campaign is not draft"
+pass "ads: campaign created as draft: $camp_id"
+
+# Closed targeting: an unknown key fails loudly. A typo'd key silently
+# matching everything would spend real money.
+ads_code="$(curl -s -o "$ads_body" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"name":"Bad Targeting","budget_paise":100000,"targeting":{"planets":["mars"]}}' \
+  "$API_URL/v1/ads/campaigns")"
+[ "$ads_code" = "400" ] || fail "ads: unknown targeting key did not 400 (got $ads_code)"
+[ "$(python3 -c 'import json; print(json.load(open("'"$ads_body"'"))["error"]["code"])')" = "invalid_targeting" ] \
+  || fail "ads: 400 envelope code is not invalid_targeting"
+pass "ads: unknown targeting key → 400 invalid_targeting"
+
+# Draft report: not eligible, full budget remaining, no projections
+# without spend history, delivery explicitly absent (v1 is accounting,
+# not analytics).
+rep_draft="$(curl -sf -H "Authorization: Bearer $token_c" \
+  "$API_URL/v1/ads/campaigns/$camp_id/report")" || fail "ads: draft report failed"
+python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+assert r["eligible_now"] is False, r
+assert r["eligibility_reason"] == "not_active", r
+assert r["budget_paise"] == 5000000 and r["remaining_paise"] == 5000000, r
+assert r["spend_paise"] == 0, r
+assert r.get("spend_per_day_paise") is None and r.get("projected_exhaustion_at") is None, r
+assert r["delivery"]["present"] is False, r
+' <<<"$rep_draft" || fail "ads: draft report shape wrong"
+pass "ads: draft report — ineligible, budget intact, no projections, delivery absent"
+
+# Activate → eligible. Bad campaign id → 400.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token_c" \
+  "$API_URL/v1/ads/campaigns/not-a-uuid/report")" = "400" ] \
+  || fail "ads: report with bad campaign id did not 400"
+act_json="$(curl -sf -X POST -H "Authorization: Bearer $token_c" \
+  "$API_URL/v1/ads/campaigns/$camp_id/activate")" || fail "ads: activate failed"
+[ "$(jget "$act_json" status)" = "active" ] || fail "ads: campaign not active after activate"
+rep_live="$(curl -sf -H "Authorization: Bearer $token_c" \
+  "$API_URL/v1/ads/campaigns/$camp_id/report")" || fail "ads: active report failed"
+[ "$(printf '%s' "$rep_live" | python3 -c 'import json,sys; print(json.load(sys.stdin)["eligible_now"])')" = "True" ] \
+  || fail "ads: active campaign not eligible in report"
+pass "ads: activate → eligible in report; bad id → 400"
+
+# Creative register (native, draft) → activate.
+cre_json="$(curl -sf -X POST \
+  -H "Authorization: Bearer $token_c" -H 'Content-Type: application/json' \
+  -d '{"name":"Smoke Native Creative","kind":"native","format":"native","media_url":"https://smoke.example/img.jpg","landing_url":"https://smoke.example/kurta","headline":"Smoke Kurta","cta":"shop_now"}' \
+  "$API_URL/v1/ads/campaigns/$camp_id/creatives")" || fail "ads: creative create failed"
+cre_id="$(jget "$cre_json" id)"
+[ "$(jget "$cre_json" status)" = "draft" ] || fail "ads: new creative is not draft"
+cact_json="$(curl -sf -X POST -H "Authorization: Bearer $token_c" \
+  "$API_URL/v1/ads/creatives/$cre_id/activate")" || fail "ads: creative activate failed"
+[ "$(jget "$cact_json" status)" = "active" ] || fail "ads: creative not active after activate"
+pass "ads: creative registered + activated: $cre_id"
+
+# Archive campaign (terminal) → report 404s (archived campaigns never
+# leak); campaign GET 404s too.
+arch_json="$(curl -sf -X DELETE -H "Authorization: Bearer $token_c" \
+  "$API_URL/v1/ads/campaigns/$camp_id")" || fail "ads: archive failed"
+[ "$(jget "$arch_json" status)" = "archived" ] || fail "ads: campaign not archived after DELETE"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token_c" \
+  "$API_URL/v1/ads/campaigns/$camp_id/report")" = "404" ] \
+  || fail "ads: report on archived campaign did not 404"
+rm -f "$ads_body"
+pass "ads: archive terminal; report on archived → 404 (cleanup)"
 
 # --- Chat websocket round-trip --------------------------------------------
 wait_for 90 "chat websocket listener" \

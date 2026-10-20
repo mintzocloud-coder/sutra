@@ -10,6 +10,7 @@ package middleware
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 )
 
 // statusCodes maps HTTP statuses to stable machine-readable error codes.
@@ -73,15 +74,13 @@ func NotFoundHandler() http.HandlerFunc {
 
 // MethodNotAllowedHandler answers 405 in the standard envelope and sets
 // the Allow header so clients know which methods the route supports.
+// The methods are comma-joined into a single header value (RFC 7231:
+// Allow = #method) so Header().Get("Allow") returns the full set — a
+// Set+Add sequence emits multiple header lines of which most readers
+// (including Go's Header.Get) see only the first.
 func MethodNotAllowedHandler(allowed ...string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		for i, m := range allowed {
-			if i == 0 {
-				w.Header().Set("Allow", m)
-			} else {
-				w.Header().Add("Allow", m)
-			}
-		}
+		w.Header().Set("Allow", strings.Join(allowed, ", "))
 		WriteStatusError(w, r, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }

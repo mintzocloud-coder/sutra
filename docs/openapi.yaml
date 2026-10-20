@@ -4372,8 +4372,8 @@ paths:
       security:
         - bearerAuth: []
       parameters:
-        - $ref: '#/components/parameters/limit'
-        - $ref: '#/components/parameters/cursor'
+        - $ref: '#/components/parameters/PageLimit'
+        - $ref: '#/components/parameters/PageCursor'
       responses:
         '200':
           description: Campaign page.
@@ -4691,6 +4691,346 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /v1/ads/campaigns/{id}/report:
+    get:
+      tags: [ads]
+      summary: Campaign report v1 (accounting, not analytics)
+      description: |
+        Honest accounting report for one campaign: budget, spend,
+        remaining, auction eligibility now (+ the blocking reason), and
+        a spend-pacing projection derived from real spend history.
+        Delivery numbers (impressions/clicks/CTR) do NOT exist in v1 —
+        the `delivery.present` field says so explicitly; it lands with
+        the serving integration (see docs/ads.md). Pacing projections
+        are nulls, not guesses, when there is no spend history yet.
+      operationId: getAdCampaignReport
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CampaignId'
+      responses:
+        '200':
+          description: The campaign report.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdCampaignReport'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Bad campaign id (`invalid_campaign_id`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not a seller, or not the owner (`not_a_seller`, `not_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Campaign not found (`campaign_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/ads/campaigns/{id}/creatives:
+    post:
+      tags: [ads]
+      summary: Register a draft creative under a campaign
+      description: |
+        Creates a draft creative (never entered serving). kind/format
+        are a closed registry (image/video/native with per-kind formats);
+        media_url and landing_url are http(s) only. The campaign must
+        belong to the caller and must not be archived.
+      operationId: createAdCreative
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CampaignId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdCreativeCreate'
+      responses:
+        '201':
+          description: The draft creative.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdCreative'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Bad input (`invalid_json`, `invalid_field`, `invalid_campaign_id`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not a seller, or not the campaign's owner (`not_a_seller`, `not_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Campaign not found (`campaign_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    get:
+      tags: [ads]
+      summary: List a campaign's creatives
+      description: |
+        The caller's creatives for one campaign, newest first,
+        keyset-paginated on (created_at, id). Archived creatives never
+        appear (registry tombstones).
+      operationId: listAdCreatives
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CampaignId'
+        - $ref: '#/components/parameters/PageLimit'
+        - $ref: '#/components/parameters/PageCursor'
+      responses:
+        '200':
+          description: A page of creatives.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdCreativePage'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Bad campaign id or pagination (`invalid_campaign_id`, `invalid_pagination`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not a seller, or not the campaign's owner (`not_a_seller`, `not_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/ads/creatives/{id}:
+    get:
+      tags: [ads]
+      summary: Read one creative
+      description: Owner-checked through the creative's campaign. Archived creatives 404.
+      operationId: getAdCreative
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CreativeId'
+      responses:
+        '200':
+          description: The creative.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdCreative'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Bad creative id (`invalid_creative_id`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not a seller, or not the owner (`not_a_seller`, `not_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Creative not found (`creative_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags: [ads]
+      summary: Update a creative
+      description: |
+        Presence-flag partial update. status is never patchable (use
+        the activate/archive routes). kind/format may only change on
+        drafts, and must change together — they are immutable once
+        active, since a served placement must never change shape
+        mid-flight.
+      operationId: updateAdCreative
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CreativeId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdCreativePatch'
+      responses:
+        '200':
+          description: The updated creative.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdCreative'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Bad input (`invalid_json`, `invalid_field`, `invalid_creative_id`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not a seller, or not the owner (`not_a_seller`, `not_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Creative not found (`creative_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: kind/format change on a non-draft (`kind_locked`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [ads]
+      summary: Archive a creative
+      description: |
+        Terminal. The 200 carries the archived record so the client can
+        reflect the terminal state without a refetch. Archived
+        creatives 404 everywhere afterwards.
+      operationId: archiveAdCreative
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CreativeId'
+      responses:
+        '200':
+          description: The archived creative.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdCreative'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Bad creative id (`invalid_creative_id`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not a seller, or not the owner (`not_a_seller`, `not_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Creative not found (`creative_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/ads/creatives/{id}/activate:
+    post:
+      tags: [ads]
+      summary: Activate a draft creative
+      description: |
+        Moves draft → active. The creative's campaign must not be
+        archived. Activation does not imply serving — the part-3b
+        serving path only reads active creatives on campaigns where
+        Eligible() holds (active status, open window, remaining
+        budget).
+      operationId: activateAdCreative
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CreativeId'
+      responses:
+        '200':
+          description: The activated creative.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdCreative'
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          description: Bad creative id (`invalid_creative_id`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Not a seller, or not the owner (`not_a_seller`, `not_owner`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Creative or campaign not found (`creative_not_found`, `campaign_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Transition not allowed (`invalid_status_transition`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
 components:
   parameters:
     UserId:
@@ -4771,6 +5111,14 @@ components:
       in: path
       required: true
       description: Campaign UUID.
+      schema:
+        type: string
+        format: uuid
+    CreativeId:
+      name: id
+      in: path
+      required: true
+      description: Creative UUID.
       schema:
         type: string
         format: uuid
@@ -5169,6 +5517,75 @@ components:
         updated_at:
           type: string
           format: date-time
+    AdCampaignReport:
+      type: object
+      required: [campaign_id, name, status, budget_paise, spend_paise, remaining_paise, eligible_now, days_live, delivery]
+      properties:
+        campaign_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        status:
+          type: string
+          enum: [draft, active, paused, archived]
+        budget_paise:
+          type: integer
+          format: int64
+          minimum: 1
+        spend_paise:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |
+            Accumulated billed spend. Read-only — never settable through
+            this API (the billing path owns it). Zero until the serving
+            integration accrues per-impression GSP prices.
+        remaining_paise:
+          type: integer
+          format: int64
+          minimum: 0
+          description: budget_paise − spend_paise, floored at 0. The auction's per-impression price must be ≤ this.
+        daily_budget_paise:
+          type: integer
+          format: int64
+          minimum: 1
+          nullable: true
+        eligible_now:
+          type: boolean
+          description: Whether the campaign may enter auctions right now (status active + window open + budget remaining).
+        eligibility_reason:
+          type: string
+          enum: [not_active, window_not_started, window_closed, budget_exhausted, archived]
+          description: Set only when eligible_now is false — the blocking reason, in machine-stable form.
+        days_live:
+          type: number
+          format: double
+          minimum: 0
+          description: Days since creation. The pacing denominator.
+        spend_per_day_paise:
+          type: number
+          format: double
+          description: |
+            Average daily spend over the campaign's life. Null when there
+            is no spend history to project from (fresh or zero-spend).
+        projected_exhaustion_at:
+          type: string
+          format: date-time
+          description: |
+            Now + remaining_paise / spend_per_day_paise. Null when no
+            projection is possible (no spend history or budget already
+            exhausted).
+        delivery:
+          type: object
+          required: [present]
+          properties:
+            present:
+              type: boolean
+              description: |
+                False in v1 — delivery analytics (impressions, clicks,
+                CTR) do not exist yet and are not faked. Lands with the
+                serving integration (docs/ads.md).
     AdCampaignCreate:
       type: object
       required: [name, budget_paise]
@@ -5234,6 +5651,125 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AdCampaign'
+        next_cursor:
+          type: string
+          description: Opaque keyset cursor; absent on the last page.
+    AdCreative:
+      type: object
+      required: [id, campaign_id, name, kind, format, media_url, landing_url, headline, description, cta, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        campaign_id:
+          type: string
+          format: uuid
+          description: The owning campaign — always the caller's own.
+        name:
+          type: string
+          maxLength: 128
+        kind:
+          type: string
+          enum: [image, video, native]
+        format:
+          type: string
+          enum: [image_1200x628, image_1080x1080, image_1080x1920, video_1920x1080, video_1080x1920, 'native']
+          description: Exact served shape; must match the kind.
+        media_url:
+          type: string
+          format: uri
+          description: "The served asset. http(s) only — javascript:/data: URLs can never enter the registry."
+        landing_url:
+          type: string
+          format: uri
+          description: Click-through target. http(s) only.
+        headline:
+          type: string
+          maxLength: 80
+        description:
+          type: string
+          maxLength: 140
+        cta:
+          type: string
+          enum: ['', shop_now, learn_more, install, sign_up, watch_more]
+        status:
+          type: string
+          enum: [draft, active, archived]
+          description: |
+            draft → active → archived (terminal). Only active
+            creatives on Eligible() campaigns enter serving.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    AdCreativeCreate:
+      type: object
+      required: [name, kind, format, media_url, landing_url]
+      properties:
+        name:
+          type: string
+          maxLength: 128
+        kind:
+          type: string
+          enum: [image, video, native]
+        format:
+          type: string
+          description: Must be a valid format for the kind (e.g. image_1200x628 for image).
+        media_url:
+          type: string
+          format: uri
+        landing_url:
+          type: string
+          format: uri
+        headline:
+          type: string
+          maxLength: 80
+        description:
+          type: string
+          maxLength: 140
+        cta:
+          type: string
+          enum: ['', shop_now, learn_more, install, sign_up, watch_more]
+    AdCreativePatch:
+      type: object
+      description: |
+        Presence-flag partial update. status is never patchable;
+        kind/format may only change on drafts, and must change
+        together.
+      properties:
+        name:
+          type: string
+          maxLength: 128
+        kind:
+          type: string
+          enum: [image, video, native]
+        format:
+          type: string
+        media_url:
+          type: string
+          format: uri
+        landing_url:
+          type: string
+          format: uri
+        headline:
+          type: string
+          maxLength: 80
+        description:
+          type: string
+          maxLength: 140
+        cta:
+          type: string
+          enum: ['', shop_now, learn_more, install, sign_up, watch_more]
+    AdCreativePage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdCreative'
         next_cursor:
           type: string
           description: Opaque keyset cursor; absent on the last page.

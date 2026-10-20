@@ -2796,6 +2796,45 @@ with documented contracts until then.
     after an import edit).
   H3 STAYS OPEN: part 3 = creative serving (Promovolve), reporting,
   docs/ads.md, smoke.sh coverage.
+  - H3 part 3a DONE 2026-10-20 ~06:20 IST: reporting v1 + docs +
+    smoke. New `internal/ads/report.go`: `GET
+    /v1/ads/campaigns/{id}/report` (owner-scoped, same 403/404 mapping
+    as the item route) serving pure `BuildReport` — budget/spend/
+    remaining, `eligible_now` + machine-stable `eligibility_reason`
+    (pinned in lockstep with `Eligible` by test so they can't drift),
+    days-live, spend-per-day + projected exhaustion (nulls, never
+    guesses, when no spend history), `delivery.present: false`
+    (honest: no delivery pipeline exists yet; the ad_events ledger
+    contract is specified in docs/ads.md). Route wired in main.go
+    (explicit path — the coverage gate sees it). OpenAPI:
+    `/v1/ads/campaigns/{id}/report` + `AdCampaignReport` schema —
+    redocly valid, 0 warnings; coverage gate OK (64 spec paths, 59
+    code routes). New `docs/ads.md`: full platform contract — custom
+    Go core + Promovolve (promovolve.org, Apache-2.0) for contextual
+    matching (Revive rejected: GPL-2.0), GSP kernel rules, advertiser
+    API table, creative registry + serving-flow contract, reporting v1,
+    55/45 creator rev-share, billing/ad_events ledger contract, env
+    table, failure modes, out-of-scope. smoke.sh: H3 round-trip —
+    campaign create (draft) → unknown targeting key 400
+    invalid_targeting → draft report asserts (not_active, budget
+    intact, no projections, delivery absent) → activate → eligible in
+    report → creative register + activate → archive → report 404s.
+    BUG FIX (pre-existing, caught by its own test): the creative-routes
+    test `TestCreativeRoutesRejectOtherMethods` was FAILING —
+    `MethodNotAllowedHandler` emitted Allow via Set+Add (multiple
+    header lines), of which `Header().Get` returns only the first
+    ("POST" instead of "POST, GET"). Now emits a single comma-joined
+    Allow (RFC 7231); regression test
+    `TestMethodNotAllowedJoinsAllow` added.
+    VERIFIED: gofmt clean, `go build`+`go vet` green, full
+    `go test -count=1 ./...` green (27 packages, 0 failures) incl. 5
+    new report tests + the Allow regression test; bash -n smoke.sh;
+    redocly + coverage gate green; SPDX checker green.
+  H3 STAYS OPEN: part 3b = the serving integration — the decision path
+  (ActiveCreatives → Eligible → contextual quality → auction kernel →
+  Winner), the ad_events delivery ledger, spend accrual + 55/45 billing
+  (ledger-only until F4's Cashfree onboarding), Promovolve-pattern
+  contextual matching. docs/ads.md already specifies the contract.
 - [ ] H4: Subscriptions — Cashfree + UPI AutoPay subscription adapter
   (fail-closed stub), plans/entitlements model, creator-membership
   billing wiring (70/30 split), docs/subscriptions.md, OpenAPI + tests +
