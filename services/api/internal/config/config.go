@@ -148,6 +148,14 @@ type Config struct {
 	ZohoClientSecret      string // ZOHO_CLIENT_SECRET; never logged, never committed
 	ZohoRefreshToken      string // ZOHO_REFRESH_TOKEN; never logged, never committed
 	ZohoOrgID             string // ZOHO_ORG_ID (INR organization)
+	// Subscriptions (H4): subscription-billing seam. SUBSCRIPTIONS_PROVIDER
+	// is "stub" until the Cashfree Subscriptions + UPI AutoPay onboarding
+	// completes post-investors (see internal/subscriptions,
+	// docs/subscriptions.md); any other value makes the API refuse to boot
+	// (fail-closed). Cashfree credentials are shared with the payments
+	// seam (CASHFREE_*): loaded, never logged, never in repo; the stub
+	// ignores them (and warns loudly if they are set).
+	SubscriptionsProvider string // subscription provider name; "stub" until onboarding
 }
 
 func getEnv(key, fallback string) string {
@@ -328,5 +336,9 @@ func Load() Config {
 		ZohoClientSecret:      getEnv("ZOHO_CLIENT_SECRET", ""),
 		ZohoRefreshToken:      getEnv("ZOHO_REFRESH_TOKEN", ""),
 		ZohoOrgID:             getEnv("ZOHO_ORG_ID", ""),
+		// Subscriptions (H4): subscription-billing seam, fail-closed stub
+		// until the post-investors Cashfree Subscriptions + UPI AutoPay
+		// onboarding.
+		SubscriptionsProvider: getEnv("SUBSCRIPTIONS_PROVIDER", "stub"),
 	}
 }

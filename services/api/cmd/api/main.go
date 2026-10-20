@@ -39,6 +39,7 @@ import (
 	"github.com/mintzocloud-coder/sutra/services/api/internal/realtime"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/search"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/social"
+	"github.com/mintzocloud-coder/sutra/services/api/internal/subscriptions"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/users"
 	"github.com/mintzocloud-coder/sutra/services/api/internal/webhooks"
 )
@@ -701,6 +702,26 @@ func main() {
 	log.Warn("integrations: Zoho Books running with the fail-closed stub — invoice sync is DISABLED until the post-investors Zoho OAuth onboarding (see docs/integrations.md)")
 	if cfg.ZohoClientID != "" || cfg.ZohoRefreshToken != "" {
 		log.Warn("integrations: ZOHO_* credentials are set but no real provider is wired — they are IGNORED; no invoices can be created")
+	}
+
+	// Subscription-billing seam (H4): fail fast on an unknown
+	// SUBSCRIPTIONS_PROVIDER so a misconfigured provider name refuses
+	// to boot instead of silently billing nothing. Until the
+	// post-investors Cashfree Subscriptions + UPI AutoPay onboarding the
+	// only provider is the fail-closed stub (see internal/subscriptions):
+	// every operation — CreateSubscription, CancelSubscription,
+	// VerifyWebhook — is an explicit typed error, never a mandate and
+	// never a charge. The constructed provider is discarded for now and
+	// consumed by the membership routes landing in H4 part 2. Cashfree
+	// credentials are shared with the payments seam (CASHFREE_*):
+	// loaded, never logged, never committed; the stub ignores them.
+	if _, err := subscriptions.NewProvider(cfg.SubscriptionsProvider); err != nil {
+		log.Error("invalid subscriptions config — refusing to start", "err", err)
+		os.Exit(1)
+	}
+	log.Warn("subscriptions: running with the fail-closed stub — recurring billing is DISABLED until the post-investors Cashfree Subscriptions + UPI AutoPay onboarding (see docs/subscriptions.md)")
+	if cfg.CashfreeAppID != "" || cfg.CashfreeSecret != "" {
+		log.Warn("subscriptions: CASHFREE_* credentials are set but no real subscription provider is wired — they are IGNORED; no mandates can be created")
 	}
 
 	// Database: connect (fail fast if unreachable) then apply pending

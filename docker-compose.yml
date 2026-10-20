@@ -370,6 +370,12 @@ services:
       CASHFREE_APP_ID: ${CASHFREE_APP_ID:-}
       CASHFREE_SECRET_KEY: ${CASHFREE_SECRET_KEY:-}
       CASHFREE_ENV: ${CASHFREE_ENV:-}
+      # Subscriptions (H4 part 1): subscription-billing seam. Only "stub"
+      # boots until the Cashfree Subscriptions + UPI AutoPay onboarding
+      # completes post-investors — any other SUBSCRIPTIONS_PROVIDER makes
+      # the API refuse to boot (fail-closed). Cashfree credentials are
+      # shared with the payments seam (CASHFREE_* above).
+      SUBSCRIPTIONS_PROVIDER: "stub"
       # Logistics (F5 part 1): logistics-gateway seam. Only "stub" boots
       # until a logistics partner is onboarded post-investors — any other
       # LOGISTICS_PROVIDER makes the API refuse to boot (fail-closed), and

@@ -2901,6 +2901,34 @@ with documented contracts until then.
   (fail-closed stub), plans/entitlements model, creator-membership
   billing wiring (70/30 split), docs/subscriptions.md, OpenAPI + tests +
   smoke. Then Phase H complete — ALL WAVES DONE.
+  H4 part 1 DONE 2026-10-20 ~07:55 IST: foundation. Migration
+  0020_subscriptions.sql (subscription_plans — creator_id/name/price>0/
+  monthly|yearly/INR-pinned/is_active; subscriptions — pending→active→
+  cancelled + past_due lifecycle, provider_ref NULL=fail-closed, partial
+  unique index blocks double live subs per plan; membership_events
+  append-only 70/30 ledger — creator=floor(70%), platform=remainder,
+  billing_succeeded REQUIRES provider_ref; creator_earnings accrual
+  target) applies cleanly through the real migration runner. New
+  `internal/subscriptions` package: Provider seam (CreateSubscription/
+  CancelSubscription/VerifyWebhook) + StubProvider returning typed
+  *ErrSubscriptionsDisabled + NewProvider (only ""/"stub" boots —
+  "cashfree" refuses pre-onboarding, fail-closed); pure domain logic
+  (ValidatePlanInput rune-counted, SplitShares floor-then-remainder,
+  CanTransition matrix — pending leaves only via verified aggregator
+  event, cancelled terminal — EntitlementsFor "member_of:<creator_id>"
+  grants). config: SUBSCRIPTIONS_PROVIDER (default "stub"); main.go
+  constructs fail-fast + WARN logs (stub active; CASHFREE_* set-but-
+  ignored warning); compose passthrough added. New docs/subscriptions.md
+  (status, data model, seam, entitlement model, billing loop, payouts
+  via payments.Payout, failure modes, post-investors checklist).
+  VERIFIED: gofmt clean, `go build`+`go vet` clean, FULL
+  `go test -count=1 ./...` green on real PG16 (all packages), migration
+  0020 applied via real runner, live SQL constraint checks green
+  (zero-price/weekly rejected, double-live-sub blocked, success-without-
+  ref blocked, bad 70/30 split rejected, 6930/2970 row accepted),
+  SPDX checker green. H4 STAYS OPEN: part 2 = DB service (plans CRUD,
+  subscription lifecycle + webhook promotion txn, billing event +
+  accrual) + HTTP routes + OpenAPI + smoke.
 
 ## Phase I — E2E encryption (Wave 2 scope completion)
 
