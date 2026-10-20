@@ -2954,6 +2954,30 @@ contributor design input gets incorporated, implementation supersedes.)
   one-time prekeys per device; device registration API; server stores PUBLIC
   keys only (private keys never leave the device); docs/e2e.md key-lifecycle
   section; Go + Elixir + tests.
+  I1 part 1 DONE 2026-10-20 ~10:35 IST: foundation. Migration
+  0021_e2e_device_keys.sql (e2e_devices — user-scoped, identity Ed25519
+  pub 32B / signed-prekey X25519 pub 32B / 64B Ed25519 sig over raw
+  signed-prekey bytes / registration_id 1..65535, UNIQUE(user_id,
+  device_id); e2e_one_time_prekeys — per-device queue, UNIQUE(device_id,
+  prekey_id), partial index on unconsumed backing the SKIP LOCKED
+  consume query; byte-length CHECKs everywhere; set_updated_at trigger;
+  table COMMENTs state the public-keys-only invariant). New
+  internal/e2e package: KeyBundle + ValidateBundle (shape/length/id-range/
+  duplicate-id checks + stdlib crypto/ed25519 signature verification of
+  the signed prekey against the identity key — the anti-MITM check, typed
+  ErrBadSignature/ErrInvalidBundle) + SelectAvailablePrekey (lowest
+  unconsumed id; DB locks+consumes in txn) + AvailableCount. Full unit
+  coverage incl. cross-key forgery rejection. docs/e2e.md written
+  (key roles, 5-stage lifecycle for client implementers, server contract,
+  security properties, explicit non-goals incl. no key escrow).
+  VERIFIED: gofmt clean, go build ./... + go vet clean, go test
+  ./internal/e2e/ green. NOT VERIFIED: migration 0021 through the real
+  runner — the VM was recycled mid-run (PG16 + apt toolchain wiped; apt
+  reinstall raced the image provisioner), so live migration application
+  is CI-gated this run; DDL follows the 0020 conventions exactly.
+  I1 STAYS OPEN: part 2 = device registration + prekey fetch/consume
+  HTTP routes (auth, service, handler, OpenAPI) + Elixir chat-side
+  prekey fetch + smoke.sh coverage.
 - [ ] I2: X3DH handshake + Double Ratchet sessions per 1:1 conversation;
   session establishment over the existing chat channel; forward secrecy +
   post-compromise healing properties documented and tested; no custom crypto
@@ -2969,6 +2993,18 @@ All boxes ticked (A through I), CI green, `scripts/smoke.sh` passes, docs comple
 Then report to founder: production-ready backend live on main.
 
 ## Log
+
+- 2026-10-20 ~10:35 IST: I1 part 1 done and verified (foundation push):
+  migration 0021 (e2e_devices + e2e_one_time_prekeys, public-keys-only
+  CHECKs, SKIP LOCKED consume index), internal/e2e domain package
+  (ValidateBundle with Ed25519 signed-prekey verification incl.
+  forgery-rejection tests, SelectAvailablePrekey, AvailableCount),
+  docs/e2e.md (key-lifecycle). gofmt/build/vet/test green on the Go
+  side. Mid-run VM recycle wiped PG16: migration 0021 NOT applied
+  through the real runner this run (CI-gated); DDL mirrors the 0020
+  conventions. I1 STAYS OPEN: part 2 = device registration + prekey
+  fetch/consume HTTP routes + Elixir chat-side prekey fetch + smoke.sh.
+  NEXT: I1 part 2.
 
 - 2026-10-20 ~09:35 IST: **H4 COMPLETE — Phase H complete — ALL WAVES
   DONE.** This run closed the last H4 gaps: (1) fixed the RED
