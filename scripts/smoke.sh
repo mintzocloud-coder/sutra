@@ -1014,7 +1014,7 @@ pass "H2: WhatsApp send — 401 without token, 403 not_a_seller for non-seller"
 # Webhook hub-challenge: recreate the api with the verify token — the
 # handshake must echo the challenge verbatim; a wrong token → 403.
 echo "smoke: recreating api with WHATSAPP_WEBHOOK_VERIFY_TOKEN"
-WHATSAPP_WEBHOOK_VERIFY_TOKEN=smoke-hook-secret docker compose up -d --no-deps api
+WHATSAPP_WEBHOOK_VERIFY_TOKEN=smoke-hook-secret AUTH_BYPASS= docker compose up -d --no-deps api
 wait_for 120 "api /healthz (webhook secret set)" curl -sf "$API_URL/healthz"
 challenge="$(curl -sf "$API_URL/internal/whatsapp/webhook?hub.mode=subscribe&hub.verify_token=smoke-hook-secret&hub.challenge=ch123")" \
   || fail "H2: webhook handshake failed with the correct verify token"
@@ -1034,7 +1034,9 @@ pass "H2: webhook POST with forged X-Hub-Signature-256 → 401"
 
 # Restore the default (secretless) api configuration for the rest of the
 # run — the secretless recreate re-proves the fail-closed contract.
-docker compose up -d --no-deps api
+# (triage #18 invariant: explicit AUTH_BYPASS= so the exported
+# AUTH_BYPASS=1 cannot leak into the recreated container.)
+AUTH_BYPASS= docker compose up -d --no-deps api
 wait_for 120 "api /healthz (webhook secret unset, restored)" curl -sf "$API_URL/healthz"
 [ "$(curl -s -o /dev/null -w '%{http_code}' \
   "$API_URL/internal/whatsapp/webhook?hub.mode=subscribe&hub.verify_token=anything&hub.challenge=abc")" = "401" ] \
@@ -1060,6 +1062,8 @@ if [ "$tally_code" != "503" ]; then
   echo "smoke DIAG: users/sellers rows for the H1 subject:"
   docker compose exec -T postgres psql -U sutra -d sutra -c \
     "SELECT u.subject, s.id AS seller_id, s.store_slug FROM users u LEFT JOIN sellers s ON s.user_id = u.id WHERE u.subject LIKE 'sutra-smoke-h-%';" 2>&1 | tail -8
+  echo "smoke DIAG: api AUTH_BYPASS env (empty = real JWT verification; '1' means the bypass leaked and every request ran as dev-user):"
+  docker compose exec -T api sh -c 'echo "AUTH_BYPASS=[$AUTH_BYPASS]"' 2>&1 | tail -2 || true
   echo "smoke DIAG: api log tail:"; docker compose logs --tail=30 api 2>&1 | tail -30
   rm -f "$tally_body" "$tally_hdr"
   fail "H2: Tally voucher did not fail closed 503 (got $tally_code)"

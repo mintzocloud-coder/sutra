@@ -3236,6 +3236,26 @@ Then report to founder: production-ready backend live on main.
 
 ## Log
 
+- 2026-10-20 ~15:10 IST: **J1 TRIAGE #3 — ROOT CAUSE FOUND (deterministic,
+  not a race): the phantom Tally 403 was an AUTH_BYPASS leak in smoke.sh.**
+  The two H2 api recreates (line 1017 `WHATSAPP_WEBHOOK_VERIFY_TOKEN=
+  smoke-hook-secret docker compose up -d --no-deps api` and line 1037's
+  secretless restore) were the ONLY `up -d --no-deps api` invocations
+  missing the triage-#18 `AUTH_BYPASS=` prefix. With `export AUTH_BYPASS=1`
+  at the top of the script, compose interpolated `AUTH_BYPASS: ${AUTH_BYPASS:-}`
+  to `1`, so both recreated api containers booted WITH the dev bypass on.
+  Bypass stamps every request as subject `dev-user` (JWT ignored) → Tally's
+  resolveSeller provisioned `dev-user` → genuine ErrNoRows → 403
+  not_a_seller, while the DIAG's H1-subject seller check was a red herring
+  (the request never ran as the H1 subject). This explains all three
+  consecutive phantom 403s ("2s after an api container recreate") and why
+  the WhatsApp 503 passed 5s earlier (pre-recreate container, bypass off)
+  and the HMAC webhook checks passed (no JWT involved). FIX: both lines now
+  carry the explicit `AUTH_BYPASS=` prefix; the Tally DIAG block also dumps
+  the api container's AUTH_BYPASS value so any future leak is instantly
+  visible. Verified: `bash -n` clean; zero remaining `up -d --no-deps api`
+  without the prefix. J1 STAYS OPEN: CI-green confirmation on this push.
+
 - 2026-10-20 ~14:55 IST: **J1 TRIAGE #2 — CI on 2cc311e3: 5/7 green
   (Go, OpenAPI, SPDX, compose, Python all flipped green). Two remain:**
   (a) Elixir: compile warning fixed, but 6 test failures surfaced in
